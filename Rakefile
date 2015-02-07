@@ -9,6 +9,7 @@ ssh_port       = "22"
 ## logs: /srv/www/vhosts/pvk.ca/logs/
 document_root  = "/srv/www/vhosts/pvk.ca/htdocs/"
 rsync_delete   = true
+rsync_args     = ""
 deploy_default = "rsync"
 
 # This will be configured for you when you run config_deploy
