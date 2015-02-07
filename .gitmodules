@@ -1,0 +1,3 @@
+[submodule ".themes/Koenigspress"]
+	path = .themes/Koenigspress
+	url = https://github.com/TheChymera/Koenigspress.git
