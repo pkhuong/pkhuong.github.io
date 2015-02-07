@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>String-case (bis) - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Sun, 30 Sep 2007</h2>
+<div class="entry">
+  <a id="string_case_bis" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>String-case (bis)</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>I already wrote a relatively long document on the topic (available at
+<a href="http://www.discontinuity.info/~pkhuong/string-case.lisp">http://www.discontinuity.info/~pkhuong/string-case.lisp</a>), but the
+format (pdf or source file) might not be ideal for everyone. I think
+writing pattern matchers is a surprisingly frequent task, so I'll go
+over the main points again here.</p>
+
+<p>The usual approach used to implement <code>string-case</code> is to intern the
+strings in a hash table (e.g. via symbols), and then use a normal
+<code>eql</code> case. This seems lossy for at least two reasons: a hash lookup
+must traverse the string at least twice (once to compute the hash
+value, and some more to find the right key) and the <code>eql</code> case (usually)
+adds a pass over all the cases. A specialised pattern matcher can do
+much less work: each test's branches eliminate at least 1 candidate,
+and once a single candidate is left, a single pass over the parts of
+the input string that haven't been examined is needed. A string-case
+based on perfect hashing would also be an option. However, finding
+such a hash function can take some time, and pessimises behaviour on
+mismatches.</p>
+
+<p>Obviously, a pattern matcher should, at each step, split the candidate
+patterns as close to 50/50 as possible, with only half of the
+candidates left in the 'true' branch, and the other half in the
+'false' branch. This can be a problem when some candidates are
+applicable in both branches (code explosion or backtracking, more
+complex metric, ...). Fortunately, this is not the case here, since we
+only have constant values as patterns. In this case, first
+discriminating on the length of the input seems like a good idea; it
+may not give an even distribution between all the candidates, but it
+simplifies the rest of the code (no need for bounds checking). For the
+rest of the matching process, the function <code>find-best-split</code> simply
+iterates over all the possible tests to find the one that leads to the
+most even split. Note that an interesting property of strings is that
+random access takes constant time, so, faced with similar cases
+(e.g. &quot;foobaR&quot; and &quot;foobaZ&quot;), it is obviously a good idea to
+discriminate on indices that actually differ (the last one here),
+instead of fixing an arbitrary order ahead of time.</p>
+
+<p>Once a single candidate is left, a last series of tests is still
+needed to make sure the candidate does match the input. It would be
+simple to simply keep track of the indices that haven't been used to
+discriminate yet and emit the corresponding checks. This would however
+lead to some code duplication for similar patterns, since most of the
+indices (those for which the patterns are identical) would not have
+been tested. It is only slightly more complex to emit the tests as
+soon as all the candidates are identical on some indices, which will
+lead to much less repetition.</p>
+
+<p>While it's not very apparent in this case (since the patterns are
+simply constant values), there's a certain tension between not doing
+work twice (by fully specialising code) and controlling code size (by
+executing common code as early as possible or by not fully
+specialising code, thus making it common). On modern computers,
+there's also the issue of branch prediction. Completely balanced
+pattern matching code is practically the worst case possible: most
+branches are taken exactly 50% of the time (there is no 'right' way to
+predict them).</p>
+
+<p>One way to alleviate this problem is to coalesce tests together and
+only branch at the very end. This reduces the number of branches, and
+thus the number of mispredictions. However, it also pessimises the
+amount of computation needed, since there is no branch to abort
+early. Again, there is a balance to be found to reduce the number of
+branches without overly increasing the amount of work. In the
+<code>string-case</code> macro, it is achieved by coalescing equality tests by
+chunks of up to 4 indices (via <code>or</code> of multiple <code>xor</code> before branching).</p>
+
+<p>Another way to attack the problem is to use the probability of each
+case (if they're not uniform) to produce an unbalanced search tree
+that gives a better <em>expected</em> runtime than a balanced one. This can be
+pretty complex to achieve, though.</p>
+
+<p>Pattern matchers are like the code-generation equivalent of
+dictionaries (as in map, hash table, etc). Dictionaries are obviously
+extremely important data structures in programming; I feel that the
+usefulness of pattern matchers is often underestimated, especially by
+users of languages that don't offer such functionalities built-in
+(they instead end up writing simplistic code by hand). Another point
+that is easily overlooked, even by people who already use pattern
+matching, is that, just like there are many ways to implement
+dictionaries (e.g. trie VS hash table), each with their strengths and
+weaknesses, it is possible to implement pattern matching to take
+advantage of properties of the problem (a typical pattern matcher for
+algebraic data types would not use random access to variable-length
+inputs). This might be why I end up writing special-purpose pattern
+matchers much more often than most other programmers, and (yet) still
+haven't found a way to write a satisfying generic pattern matcher.</p>
+
+<p>Pattern matching is your friend, use it!</p>
+
+<p>P.S. Here are some URLs that might be useful to someone who want to
+implement a pattern matcher:</p>
+
+<ol>
+<li><a href="http://discontinuity.info/~pkhuong/xt-pattern.lisp">http://discontinuity.info/~pkhuong/xt-pattern.lisp</a> is my extensible
+pattern matcher. It's 'generic', so probably decent for many
+things, but wouldn't easily allow us to express the strategy
+used in <code>string-case</code>. Still useful if you don't feel like writing your
+own from scratch, or would like some inspiration for the general
+architecture.</li>
+<li><a href="http://citeseer.ist.psu.edu/lefessant01optimizing.html">F. Le Fessant and L. Maranget. Optimizing Pattern Matching. In International Conference on Functional Programming. ACM press, 2001.</a>
+is a paper describing the authors' experience while improving OCaml's pattern
+matching, which is based in backtracking (which tightly controls
+output code size but may do redundant work).</li>
+<li><a href="http://repository.readscheme.org/ftp/papers/dagstuhl-pe96/14.pdf">P. Sestoft. ML Pattern Match Compilation and Partial Evaluation. In Dagstuhl Seminar on Partial Evaluation. Springer-Verlag, 1996. Lecture Notes in Computer Science 1110.</a>
+describes a pattern matcher for ML ADTs (again), but this time from a
+program specialisation perspective. By fully specialising the pattern
+matching code on known data, redundant work is completely eliminated,
+but code size is not controlled anymore. Note that avoiding redundant
+work is far from enough to ensure 'optimal' code: as evidenced by
+<code>string-case</code>, deciding what to test for in what order (even with ADTs,
+there is random access to members and temporaries) is crucial. In
+fact, it would not be surprising to see a backtracking-based pattern
+matcher outperform a fully specialising one, simply by choosing the
+order in which to perform tests better.</li>
+</ol>
+
+    </div>
+<p>
+  posted at: 22:38 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/string_case_bis.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

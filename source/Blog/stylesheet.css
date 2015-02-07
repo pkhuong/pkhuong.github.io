@@ -1,0 +1,101 @@
+/* a:link { */
+/* 	color: #657b83; */
+/* } */
+
+a img {
+	border: none;
+}
+
+/* a:visited { */
+/* 	color: #93a1a1; */
+/* } */
+
+acronym, abbr {
+	border-bottom: 1px dashed #333;
+}
+
+acronym, abbr, span.caps {
+	cursor: help;
+}
+
+blockquote, .entry-qotd {
+	border: 2px dashed #9999FF;
+	margin-left: 1.5em;
+	padding-left: 0.5em;
+        padding-right: 0.5em;
+}
+
+body {
+	background: #93a1a1;
+	/* color: #657b83; */
+	font-family: 'Lucida Grande', 'Lucida Sans Unicode', Verdana, sans-serif;
+	margin: 0;
+	padding: 0;
+        text-align: center; /*thanks you MSIE!*/
+}
+
+cite {
+	font-style: normal;
+}
+
+h2 {
+	border-bottom: 1px dotted #6666CC;
+	font: 120% "Times New Roman", Times, serif;
+	margin: 15px 0 2px 0;
+	padding-bottom: 2px;
+}
+
+.entry-title h3 {
+	border-bottom: dotted 1px #9999FF;
+	font: 120% "Times New Roman", Times, serif;
+	margin-top: 0;
+}
+
+.entry-text h3, .entry-text h4, .entry-text h5, .entry-text h6 {
+        font: 110% "Times New Roman", Times, serif;
+	margin: 15px 0 2px 0;
+	padding-bottom: 2px;    
+}
+
+.entry-text h3 {
+	border-bottom: 1px dotted #6666CC;
+	font-size: 110%;
+}
+
+.entry-text h4 {
+	font-size: 105%;
+}
+
+.entry-text h5, .entry-text h6 {
+        font-size: 105%;
+}
+
+p, li {
+        margin-top: 1%;
+	font: 100%/175% 'Lucida Grande', 'Lucida Sans Unicode', Verdana, sans-serif;
+	letter-spacing: -1px;
+}
+
+p.verse { margin-left: 3% }
+
+.content {
+        text-align: justify;
+	margin: 4em 0em 0em 6em;
+        padding-top: 10px;
+        padding-bottom: 10px;
+	padding-right: 3em;
+	padding-left: 3em;
+	background: #fdf6e3;
+        width: 37em; /*used to be 32: 42-6-3-3 em*/
+}
+
+.entry-head {
+	margin: 0;
+}
+
+.entry-body {
+        width: 37em;
+/*        overflow: hidden;*/
+}
+
+.example { margin-left: 3% }

@@ -1,0 +1,270 @@
+---
+layout: post
+title: "The weaknesses of SBCL's type propagation"
+date: 2013-11-22 17:57
+comments: true
+categories: 
+---
+
+_I'll be defending on Friday, December 13th; that will likely
+mark the end of my copious free time. I hope to write a couple more
+braindumps on SBCLy topics in the near future, before I forget
+everything._
+
+SBCL is known for its flow-sensitive type propagation pass… or,
+rather, for its effects. That is probably why it can be so shocking
+when SBCL fails to infer obvious invariants. I feel like I can now
+describe the root causes of these surprising weaknesses and propose a
+series of fixes. Coding that up would likely take months, but the
+result should be more precise type propagation with improved
+asymptotic efficiency, and even a tunable knob between precision and
+compile times.
+
+The compiler in SBCL, Python, doesn't work on an IR in SSA form, nor
+does it convert internally to CPS à la Rabbit/Orbit. However, a clever
+-- I don't recall seeing it described anywhere else -- design decision
+achieves similar effects. Operations receive their arguments as linear
+vars (LVARs) and write their results to an LVAR. Each LVAR has exactly
+one destination (one reader node), and, on any execution path, can only be
+used (written to) by one node. LVARs may nevertheless have multiple
+uses: these correspond to the value of conditionals and of conditional
+non-local exits. Assignment and access to lexical variables are
+represented as SET and REF nodes that receive and produce values
+through LVARs. This means that nearly everything can work in terms of
+LVARs when manipulating code and reasoning about dataflow. The
+conversion of read-once lexical variables to LVARs further simplifies
+a lot of mostly functional code.
+
+Python takes this split to the extreme: only the constraint (type)
+propagation pass really handles full-blown lexical
+variables. Everything else depends on the flow-sensitive type
+information summarised in CFG nodes and joined in LVARs. Want to check
+whether a given argument is always positive? Simply test for subtyping
+on the LVAR's derived type to implicitly leverage flow-sensitive type
+information. Want to insert some computation (e.g. a type assertion or
+an explicit modulo for overflowing arithmetic) between a value and its
+destination? Insert a new node in the CFG and substitute around
+nothing but opaque LVARs.  These operations are so natural in Python
+that I only recently realised the design decision that makes them so
+easy.
+
+However, I believe that Python went too far in relegating lexical
+variables to only the constraint pass. That pass *only* handles
+lexical variables (LAMBDA-VARs) and flow-sensitive information about
+them, and only propagates three kinds of constraints (derived
+information):
+
+1. lexical variable V is (is not) of type T at this program point
+(because of a type test or assertion);
+2. lexical variable V is (is not) < or > than a value of type T at
+this program point (because of a comparison);
+3. lexical variable V is (is not) EQL to an LVAR, to another lexical
+variable U, or to a constant at this program point (because of an
+assignment/reference to a variable or a comparison).
+
+The importance of EQL constraints is subtle. These constraints
+represent the way that, e.g., information about a lexical variable is
+also true of the result of a lookup for that variable's value (and
+vice versa), even if that information is learned after the variable is
+accessed. Similarly, when two lexical variables are EQL, information
+about one is true of the other. Finally, equality with a constant is
+always useful for constant propagation.
+
+All three constraint types are centered on lexical variables. The
+reason is that no flow-sensitive information needs to be computed for
+LVARs: they are only used once. For example, if a type test is
+performed on an LVAR, that is the LVAR's only appearance and there is
+no information to propagate… unless that information is also true
+of some lexical variable.
+
+There's some more clever engineering and the analysis is simplified by
+disregarding variables that may be assigned from closures, but that's
+the gist of it. A vanilla dataflow analysis worklist loop propagates
+information around, and constraints sets for each basic block shrink
+until the least (in terms of types, greatest when measuring
+information) fixed point is reached.
+
+The first weakness is caused by the aforementioned cleverness:
+knowledge about the state of the world as each basic block is entered
+and exited is represented with sets of constraints (bitsets indexed
+with consecutive indices assigned to constraints on demand). In the
+interest of speed, join and meet are implemented as (bit-)set
+union/intersection. The problem with this approach is that it
+completely discards information about a lexical variable when it is
+not identically present in both sets. For example, when one
+predecessor says that V is a positive integer and another that V is an
+integer, their successor discards all information about the type of V.
+
+In practice, this is a lesser problem than it first appears to be:
+LVARs merge information about their multiple uses (writes) without any
+loss. The kind of code that suffers is code that does things like:
+    (lambda (x)
+      (ecase x
+        (1 ...)
+        (2 ...))
+      [work on X, knowing that it is either 1 or 2]) 
+The two branches of the ecase that eventually continue execution
+respectively derive that X is EQL to 1 and to 2. However, their shared
+successor combines that information by forgetting about both equalities
+rather than weakening/downgrading the two constraints into "X is of
+type (INTEGER 1 2)."
+
+Another interesting case is
+    (lambda (x)
+      (let ((y nil)) ; IF expression translated to an effectful IR
+        (if x
+            (setf y 1)
+            (setf y 2))
+        y)) 
+for which Python derives that the result is either 1, 2, or NIL (the
+union of all the values ever assigned to Y). The equivalent code
+`(lambda (x) (if x 1 2))` compiles everything to LVARs and the result is
+known to be either 1 or 2 even before constraint propagation.
+
+This can be addressed with a redundant representation that adds, to
+each constraint set, a dictionary from lexical variables to the
+(downgradable) information known about them: their types and the types
+they're known to be < or > than. When intersecting constraint sets,
+these dictionaries make it easy to weaken information and insert the
+corresponding constraints.
+
+The second weakness is deeply embedded in the structure of the
+compiler: the constraint propagation pass only pushes around
+pre-computed flow-insensitive information. That information is valid
+because the flow-insensitive pass (that computes things like the type
+of the values produced by each CFG node) works from an older (over)
+approximation of the flow-sensitive information. Once a fixed point is
+reached in the constraint propagation pass, the flow-insensitive pass
+is re-executed and information refined. In the end, there is a
+back-and-forth between the simple flow-sensitive constraint
+propagation pass and the flow-insensitive "optimization" pass that
+leverages a huge knowledge base about Common Lisp operators and
+functions.
+
+That exchange of information not only takes many (hefty) iterations to
+converge, but is also lossy: the constraint propagation pass is
+flow-sensitive, but manipulates types based on an earlier pass or on
+type declarations. In effect, constraint propagation computes the
+least fixed point of a function that is defined by an earlier coarse
+upper approximation… a process that ends up preserving a lot of the
+initial weakness. This strange choice presents an interesting
+characteristic: every iteration the outer communication loop between
+flow -sensitive and -insensitive analysis produces valid (but overly
+conservative) information. So convergence is slow, but at least
+intermediate results can guide rewrites safely.
+
+The obvious fix is to derive node types within the constraint
+propagation pass, even as the final result of the flow-sensitive pass
+is approximated from below. For example, upon assignment to a lexical
+variable, the current pass adds a new constraint: the type of that
+variable is that of the LVAR for the assignment's value, and the
+LVAR's type is computed based on the information from the previous
+constraint propagation pass. Instead, it should be based on the
+current (overly agressive) flow-sensitive information. That would
+eventually converge to a smaller fixed point. This alternative design
+would also obviate the need for a questionable hack that improves
+precision for some lucky iteration variables.
+
+A weaker form of this change would be to use preliminary (perhaps
+overly aggressive) information only to tentatively detect impossible
+conditional branches. This would enable Python to derive that the
+return value of
+    (lambda ()
+      (loop with x = 0
+            while (foo)
+            do (case x
+                 (1 (setf x 2))
+                 (2 (setf x 1)))
+            finally (return x)))
+is always 0 (and never 1 or 2), or that the expression `(if (eql x y) (eql x y) t)` is always true.
+
+With suitable handling of calls to local functions, useful types might
+even be derived for recursive functions. The current type propagation
+pass derives insanely stupid types for recursive functions and for
+assignment to variables in loops (unless the iteration variable hack
+suffices). For example
+    (lambda ()
+      (labels ((foo (x)
+                 (if (bar)
+                     (foo (1+ x))
+                     x)))
+        (foo 42))) 
+is derived to return an arbitrary NUMBER. Instead, the return type of
+local functions can be initialised to the empty type (in which case
+propagation must be stopped for the caller block) and extended as
+argument types grow and as recursion triggers more propagation.
+
+The problem is that this more precise flow-sensitive pass loses the
+finite chain condition: there is no guarantee that the least fixed
+point will always be reached in finite time. The current constraint
+propagation pass operates on a finite lattice: only variables and
+types that exist in the input IR1 graph can appear in constraints, so
+the fixpointed function is defined over the powerset of this finite
+set of constraints for each basic block. In contrast, the full CL type
+universe is most definitely not finite (type tests aren't even
+decidable in general).
+
+There is a simple solution to this problem: before extending the
+constraint universe, widen types to satisfy the finite chain
+condition, i.e., make sure that types eventually stop growing. For
+example, when taking a non-trivial union or intersection of types, the
+result could be quantised to a coarse set of types (singleton types,
+named class types, a few key numeric ranges, etc.). Appropriate
+widening can also accelerate finite but slow convergence; the
+resulting fixed point isn't guaranteed to be minimal, but is always
+valid. In fact, widening is likely to be necessary for the first
+improvement (with redundant dictionaries) as well.
+
+Another issue in the constraint propagation pass is an instance of the
+phase ordering problem. Some source-to-source transforms help type
+propagation (e.g., turning complicated functions into simpler ones for
+which type propagation is feasible), and others hinder it (e.g.,
+converting integer division by a constant to multiply and shift or
+MAPCAR to an inline loop). Worse, there's a dependency cycle as
+transforms rely on type propagation to determine whether they are
+applicable. There's been some academic work that exposes multiple
+equivalent code sequences to analyses, and it seems possible to do
+something similar in Python as well: source-to-source transforms
+generate functions, so we'd "only" have to analyse the function
+without splicing it in. However, that's likely to be impractically slow
+(even termination is non-obvious)… perhaps it will be doable for
+select transforms that expand into pure expressions.
+
+The only suggestion to accelerate constraint propagation so far is to
+widen types, and that mostly compensates for slowdowns (or infinite
+convergence) introduced by other changes. There's a classic trick that
+ought to accelerate even the current pass: guide the order in which
+basic blocks are analysed by partitioning them in strongly connected
+components. Python exploits a simple ordering technique, a depth-first
+ordering that minimises backward edges in reducible control-flow
+graphs. Basic blocks could instead be partitioned into strongly
+connected components: contracting each strongly connected component
+into a single vertex leaves a directed acyclic graph. It then suffices
+to fixpoint on each strong component and traverse the condensed DAG so
+that each component is only visited after all its predecessors. Python
+already computes loop nests, so that's an easy change; it's likely
+even better to look at nested loops and recursively order analysis
+within each component. A few other passes perform some form of
+dataflow analysis and would benefit from that improved ordering…
+perhaps compile times can be really improved (Amdahl says that's
+unlikely until splicing in source-to-source transformations is a lot
+quicker).
+
+Recap :
+
+1. Add a dictionary for TYPEP and \</\> constraints on LAMBDA-VARs in
+   consets; use it to merge and weaken information in consets.
+2. Derive flow-insensitive types within the flow-sensitive pass, for
+   quicker final convergence to a tighter solution.
+3. Simplify conditional branches with flow-sensitive information,
+   even when that information is still optimistic.
+4. Widen types for quicker/finite convergence.
+5. See what source-to-source transformations are applicable with the
+   current information, and use that to derive stronger types.
+6. Analyse basic blocks based on loop nests: fixpoint a loop nest
+   before visiting its successors, and wait until all predecessors
+   have reached a fixed point before analysing a loop's blocks.
+
+In terms of implementation difficulty, these changes probably go
+1-6-3-4-2-5.  This also happens to be the order in which I'd try to
+implement them.

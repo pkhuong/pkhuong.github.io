@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Fast and simple sparse vectors - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Fri, 25 Jan 2008</h2>
+<div class="entry">
+  <a id="sparse_array" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Fast and simple sparse vectors</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>For my serialisation package (more on that later; the goals are to
+maintain sharing/circularity, minimise the number of copies for
+unboxed data and to support closures), I needed a way to quickly map
+from objects to some bookkeeping information. At first, that was
+a hash table. Unfortunately, there is considerable space overhead
+(SBCL uses chained buckets, so there's the array, the chain, and the
+key), which can easily destroy runtime on large enough data sets.</p>
+
+<p>Finally, I found a rather hacky way to pin the serialised objects
+in place, which makes it possible to use raw addresses. For numbers,
+I stuck to the hash table. For everything else, however, I was looking
+for a relatively fast and reasonably space-efficient way to map from
+integers to objects. Cuckoo hash tables spend too much time rehashing
+on grows. Similarly, sparse vectors as a combination of a bitmask and
+a dense vector take too much time copying data into larger
+containers.</p>
+
+<p>To avoid the problem of expensive grows, using some sort of tree
+structure seemed like a nice solution: each node contains much less
+data than the complete tree. Unfortunately, trees often have a low
+branching factor, so a query ends up reading from many locations. As
+soon as the tree becomes larger than cache, things get pretty ugly. I
+wanted something with fat nodes, like B-trees. However, finding the
+right child in a B-tree node isn't particularly cache-friendly either:
+a binary search is horrible for locality.  A correct solution would be
+to use a cache-aware (ideally cache-oblivious, since I don't like
+fiddling with magic constants) layout, like van Emde Boas trees, or
+Bender, Demaine and Farach-Colton's cache-oblivious B-tree.</p>
+
+<p>A lazier solution is to take advantage of the fact that we're dealing
+with bits, and not just some abstract set of totally-ordered values,
+and treat our keys (addresses) like strings of bits <em>of constant length</em>
+(modulo leading zeros). Tries are then natural... But they too tend to
+have low branching factors. With an arbitrary length of 40 bits
+(that's 1 TB's worth of addresses, or, rather, since I shift the 4
+least significant bits out first, <em>16</em> TB), something like using the 20
+MSB in the first level, then 10 and 10 in the second and third level
+seemed natural: an array of 1 million elements isn't that large, as
+long as there aren't thousands of them, and 1024 elements really isn't
+that bad either. Moreover, restricting the trie to 3 levels reduces
+the number of cache misses.</p>
+
+<p>Obviously, it wouldn't be feasible to have a dense array of 1024 or 1M
+elements for each trie node, when most node will have only a few
+children, if any. We need another sparse array, but this time
+with different goals: space efficiency and fast growth aren't such
+issues anymore, but read and write speeds are.</p>
+
+<p>I borrowed the concept of 'critical bit' from PATRICIA tries, and
+pluralized it to get a class of rather cheap hash functions that
+should, on typical workloads, do fine. The idea is to identify bit
+positions that are identical across all keys, and form an index from
+the other positions by concatenating them together. In the best case,
+it takes <code>lg n</code> bits to index from <code>n</code> keys (multiples of a power of 2),
+and, in the worst case, <code>n</code> bits for <code>2</code> keys (no common bit). Fortunately,
+we'd expect addresses to be closer to the former than the latter.</p>
+
+<p>A lookup then consists of making sure the searched key corresponds to the
+identical bits (mask and compare), and then concatenating the variable
+bits together. By looping over each byte and using look-up tables for
+the popcount and partial concatenating, that operation takes on the
+order of 30-100 cycle on my 2.16 GHz Core 2.</p>
+
+<p>Insertion, is, as always, a bit hairier. The simple case is when the
+common bits fit (again, mask and compare). If so, all that is needed
+is to concatenate the new key to find its index and write in the dense
+array. Otherwise, a new mask must be computed, and elements from the
+old dense vector reinserted in the new (at least twice larger) one
+with the correct indices. Computing a new mask is surprisingly simple:
+<code>(logandc1 (logxor new-value common-value) common-mask)</code>.</p>
+
+<p>I haven't managed to find a simpler way to do reinsertion than to
+recurse over the non-common bit positions to generate all the values
+that fit with the common bit positions (and their values). At least,
+that way it's possible to compute the old concatenated index on the fly
+(I haven't found how to do that for the <em>new</em> concatenated index yet,
+unfortunately).  It obviously pays off to add a special case when
+there is only one key, and store it directly, instead of using a
+vector of length 1. What was surprisingly also important to
+performance was to explicitly reuse the vectors that are freed on
+reinsertions.</p>
+
+<p>By glueing these two pieces together, we get an implementation of
+sparse vectors that should be able to take advantage of locality in
+keys (empty or nearly empty spans take very little space), and of
+(some) patterns in contiguous keys to save space. It's also reasonably
+performant, since it's expected to incur very few (a half dozen)
+misses for random access. Interestingly, it also makes
+predecessor/successor queries efficient, since the concatenating
+operation preserves ordering (bits are concatenated in order). In
+comparison with SBCL's hash tables (which aren't the best in the west,
+but not completely horrible either):</p>
+
+<ul>
+<li>Inserting all the integers in <code>[0, 2^20)</code>
+
+<ul>
+<li>takes 0.12s (VS 0.83s),</li>
+<li>conses 8.5 MB (VS 167 MB);</li>
+</ul></li>
+<li>Inserting 2^20 random integers in <code>[0, 2^20)</code>
+
+<ul>
+<li>takes 0.18s (VS 0.81)</li>
+<li>conses 8.5 MB (vs 83 MB)</li>
+</ul></li>
+<li>Inserting all the multiples of 5 in <code>[0, 5*2^20)</code>
+
+<ul>
+<li>takes 0.40s (VS 0.9s)</li>
+<li>conses 42 MB (VS 167 MB);</li>
+</ul></li>
+<li>Inserting all the multiples of 16 in <code>[0, 16*2^20)</code>
+
+<ul>
+<li>takes 0.14s (VS 0.82 s)</li>
+<li>conses 9.6 MB (VS 167 MB);</li>
+</ul></li>
+<li>Inserting 2^20 random multiples of 256 in <code>[0, 256*2^20)</code>
+
+<ul>
+<li>takes 0.72s (VS 1.1s)</li>
+<li>conses 25 MB (VS 83 MB);</li>
+</ul></li>
+<li>Inserting 2^20 random multiples of 256 in <code>[0, 256*2^22)</code>
+
+<ul>
+<li>takes 0.86s (VS 0.85s)</li>
+<li>conses 49 MB (VS 83 MB);</li>
+</ul></li>
+<li>Inserting 2^20 random integers in <code>[0, 2^30)</code>
+
+<ul>
+<li>takes 11s, 8.7 of which in GC, (VS 0.69s)</li>
+<li>conses 364 MB (VS 83 MB).</li>
+</ul></li>
+</ul>
+
+<p>For truly random keys, a hash table is better. For my needs, however,
+the sparse trie is preferable: addresses usually won't be scattered
+all over the heap, so I can expect less space usage, less consing and
+faster execution times. Moreover, objects close together will often be
+traversed together, and the sparse trie can exploit that locality,
+unlike hash tables. I only compared insertions because it seems to be
+much slower (often by a factor of 2 or more) than look-ups.</p>
+
+    </div>
+<p>
+  posted at: 20:30 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/sparse_array.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

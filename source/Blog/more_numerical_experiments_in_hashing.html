@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>More numerical experiments in hashing: a conclusion - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Wed, 11 May 2011</h2>
+<div class="entry">
+  <a id="more_numerical_experiments_in_hashing" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>More numerical experiments in hashing: a conclusion</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 12--><p style="text-indent:0em">This is a follow-up to an <a href="http://www.pvk.ca/Blog/numerical_experiments_in_hashing.html">earlier post from April 2009</a> that has been mostly ready for
+almost one year now, so some of the details in the numerical results may be a bit
+foggy.
+</p><!--l. 18--><p style="text-indent:1.5em">   As I wrote back back in January, <a href="http://www.cs.uwaterloo.ca/research/tr/1986/CS-86-14.pdf">Robin Hood hashing [pdf]</a> is a small tweak on
+open-addressing hashing that greatly improves the worst-case performance, without
+overly affecting the average and common cases. In fact, the theoretical worst-case
+bounds become comparable to that attained by multiple-choice hashing (e.g. <a href="http://www.eecs.harvard.edu/~michaelm/postscripts/handbook2001.pdf">d-left
+[pdf]</a> or <a href="http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.104.9191&amp;rank=1">cuckoo</a> hashing). Sadly, most of these <a href="http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.130.6339">theoretical results</a> assume
+random probing or an approximation like double hashing, and that&#8217;s not
+particularly cache friendly. Yet, it seems like most of the usefulness of Robin Hood
+hashing remains, even when combined with <a href="http://en.wikipedia.org/wiki/Linear_probing">linear probing with an increment of
+1</a>.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>Robin Hood linear probing</h3>
+<!--l. 38--><p style="text-indent:0em">Robin Hood hashing allows insertions to bump existing entries in one specific case:
+when the currently-inserted entry is farther away from the position it started the
+search (in terms of probe counts) than the existing entry. When applied to linear
+probing, it simply means that the slot to which the new entry hashes is lower than
+that of the existing entry. In other words, the (non-empty) entries in the hash table
+are sorted by hash value.
+</p><!--l. 46--><p style="text-indent:1.5em">   Implementation-wise, insertions look like:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left"> hash = hash_value(key) 
+ loc = hash*(1.0*table_size/max_hash) -- only looks expensive 
+ for (i = loc; i &lt; table_size; i++) 
+   if (table[i] == empty) 
+     insert entry at i and return 
+   else if (table[i].key == key) 
+     update entry at i and return 
+   else if (table[i].hash &gt; hash) 
+     j = find_next_empty_entry(table, i) -- or fail 
+     shift entries in table in [i, j) to [i+1, j+1) 
+     insert entry at i and return 
+ fail.</pre>
+<!--l. 60--><p style="text-indent:0em">
+</p><!--l. 62--><p style="text-indent:1.5em">   The cost of inserts is made up of two parts: the number of probes until the new
+entry&#8217;s location is found, and the number of entries to shift if any.
+</p><!--l. 66--><p style="text-indent:1.5em">   Note that the way hash values are mapped to a location is a bit arbitrary, but I
+like the one shown above because it&#8217;s cheap (scaling by that constant is easy to
+optimize, especially if <code style="font-family:monospace">max</code><code style="font-family:monospace">_hash </code>is a power of two), maps to the locations uniformly,
+and preserves the order between hash values (so that we can compare hash values
+instead of locations). Also, in order to preserve the order, it&#8217;s necessary to plan a
+small overflow area at the end of the table (so, really, we&#8217;re scaling by a bit less than
+<code style="font-family:monospace">table</code><code style="font-family:monospace">_size/max</code><code style="font-family:monospace">_hash</code>).
+</p><!--l. 75--><p style="text-indent:1.5em">   As we will see, the first part is kept much smaller than regular linear probing. The
+second part, the entry shift in the <code style="font-family:monospace">table[i].hash &gt; loc </code>case, is more worrying, but
+it usually only has to copy a small number of entries.
+</p><!--l. 80--><p style="text-indent:1.5em">   Lookups are even simpler:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left"> hash = hash_value(key) 
+ loc = hash*(table_size/max_hash) 
+ for (i = loc; i &lt; table_size; i++) 
+   if (table[i] == empty) or (table[i].hash &gt; hash) 
+     return not_found 
+   else if (table[i].key == key) 
+     return entry table[i] 
+ return not_found</pre>
+<!--l. 90--><p style="text-indent:0em">
+</p><!--l. 92--><p style="text-indent:1.5em">   Note that, unlike other linear probing schemes, we do not scan clusters
+completely: entries are ordered by hash value. Here, the cost of lookups
+(even when the key is absent) are simply made up of the number of probes
+until the entry&#8217;s location (or where it would be if the key were present) is
+found.
+</p><!--l. 98--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>Theoretical performance</h3>
+<!--l. 99--><p style="text-indent:0em">I tried to derive some bounds mathematically but frankly, this is a hard problem.
+Alfredo Viola has published a <a href="http://www.dmtcs.org/dmtcs-ojs/index.php/proceedings/article/viewArticle/dmAD0127">couple</a> <a href="http://www.dmtcs.org/dmtcs-ojs/index.php/dmtcs/article/viewArticle/1359">papers</a> in which he derives such bounds; from
+what I understand they agree with the findings below.
+</p><!--l. 106--><p style="text-indent:1.5em">   When my math fails, I turn to brute force and numerical experiments. In this
+case, I wrote code to fill a hash table with random values (up to a fixed load factor),
+and then computed the empirical distribution for the cost of all insertions and
+lookups in that table. Finally, for each hash table size, this was repeated a couple
+hundred times.
+</p><!--l. 112--><p style="text-indent:1.5em">   The table&#8217;s layout is independent of the insertion order. It suffices to generate
+enough random hash values, sort them, and scatter them in the hash table so as to
+preserve the ordering, while ensuring that entries are never at a lower index than
+<code style="font-family:monospace">hash*(table</code><code style="font-family:monospace">_size/max</code><code style="font-family:monospace">_hash)</code>.
+</p><!--l. 118--><p style="text-indent:1.5em">   Then, assuming that the hash values are uniformly distributed, the distribution of
+two cost metrics are computed: the number of probes for lookups (successful
+or not, it&#8217;s the same) or insertions, and the number of entries to shift for
+insertions.
+</p><!--l. 123--><p style="text-indent:1.5em">   The graphs below present the results for tables with a load (occupancy rate) of
+50%, but the general shape seems to be the same for all load values (as long it&#8217;s less
+than 100%).
+</p><!--l. 127--><p style="text-indent:1.5em">   For the number of probes (since at least one probe is always needed, we
+actually subtract that compulsory probe from the statistic), we can see that
+                                                                  
+
+                                                                  
+not only the average probe count, but also the 99th percentile, seem to be
+constant, regardless of the table&#8217;s size. Finally, the worst case seems to grow
+logarithmically with the table&#8217;s size. That doesn&#8217;t mean that we have a
+hash table with a logarithmic worst-case cost on lookups; rather, it means
+that, for a random hash table with a load of 50%, we can expect that all
+the possible lookups in that particular hash table will have to go through
+at most a number of probes proportional to the logarithm of the table&#8217;s
+size.
+</p><!--l. 138--><p style="text-indent:1.5em">   <img src="http://www.pvk.ca/Blog/resources/probe-50.png" alt="PIC"></img></p><!--l. 140--><p style="text-indent:1.5em">   <img src="http://www.pvk.ca/Blog/resources/probe-50-99.png" alt="PIC"></img></p><!--l. 142--><p style="text-indent:1.5em">   <img src="http://www.pvk.ca/Blog/resources/max-probe-50.png" alt="PIC"></img></p><!--l. 144--><p style="text-indent:1.5em">   This tells us that lookups, both successful and failed, will have a constant cost on
+average, and even in the 99th percentile, and will usually be at worst logarithmic.
+Our (probabilistic) worst case is thus equivalent to the average case for search trees...
+except that our probes are linear, and will result in much nicer performance than a
+tree traversal!
+</p><!--l. 151--><p style="text-indent:1.5em">   That covers the cost of lookups, but inserts incur an additional cost: shifting
+entries to make place for the newly-inserted one. We see that the average number of
+entries to shift is consistently less than 1 &#8211; I don&#8217;t know what&#8217;s going on with the
+last two data points; it might be related to the overflow area &#8211;, and that
+the 99th percentile looks pretty stable, while the worst case seems, again,
+logarithmic.
+</p><!--l. 158--><p style="text-indent:1.5em">   <img src="http://www.pvk.ca/Blog/resources/shift-50.png" alt="PIC"></img></p><!--l. 160--><p style="text-indent:1.5em">   <img src="http://www.pvk.ca/Blog/resources/shift-50-99.png" alt="PIC"></img></p><!--l. 162--><p style="text-indent:1.5em">   <img src="http://www.pvk.ca/Blog/resources/max-shift-50.png" alt="PIC"></img></p><!--l. 164--><p style="text-indent:1.5em">   So, on average, inserts in a table at a 50% load have a constant cost; better, even
+the 99th percentile of insertions is still constant. Finally, the very worst
+case is expected to be logarithmic, but shifting contiguous entries in an
+array is much more efficiently executed than updating the nodes in a search
+tree.
+</p><!--l. 170--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-30003"></a>Microbenchmarks</h3>
+<!--l. 171--><p style="text-indent:0em">It looks like Robin Hood hashing with linear probing has interesting theoretical
+properties, but, in the end, practical performance is what matters. So, I designed a
+very simple microbenchmark: insert consecutive 64 bit integers in a hash table, then
+recover them (again, consecutively). The hash function multiplies by a randomly
+chosen 64 bit integer, (almost) modulo 2<sup><span style="font-size:70%">64</span></sup><span>- </span>1. Keys and values are 64 bit integers,
+and there are 30 <span>&#8901; </span>2<sup><span style="font-size:70%">17</span></sup> such entries (the hash tables are preallocated to fit that many
+entries with the target load factor). Finally, this was executed on my 2.8 GHz
+X5660.
+</p><!--l. 181--><p style="text-indent:1.5em">   Tons of things are wrong with this setup, but I really wanted to isolate the cost of
+insertions and lookups, without polluting the accesses. In particular, I&#8217;m relying on
+                                                                  
+
+                                                                  
+the hash function to scatter the accesses around.
+</p><!--l. 186--><p style="text-indent:1.5em">   I&#8217;ve been using <a href="http://goog-sparsehash.sourceforge.net/doc/dense_hash_map.html">Google&#8217;s <code style="font-family:monospace">dense</code><code style="font-family:monospace">_hash</code><code style="font-family:monospace">_map</code></a> as my go-to hash table for a while, so I
+tried and compare it with Robin Hood linear probing. <code style="font-family:monospace">dense</code><code style="font-family:monospace">_hash</code><code style="font-family:monospace">_map </code>is an open
+addressing table with quadratic probing and a (default) target load factor of 50%. On
+the microbenchmark, inserts and lookups show a strongly bimodal distribution, with
+32 cycles for <span>&#8776; </span>24% of inserts, and 36 c for the rest (and a bit less than 1% of
+outliers). Lookups, on the other hand, are evenly split between 24 c and 28
+c.
+</p><!--l. 197--><p style="text-indent:1.5em">   My implementation of Robin Hood hashing stores the hash values alongside the
+keys and values. Since <code style="font-family:monospace">dense</code><code style="font-family:monospace">_hash</code><code style="font-family:monospace">_map </code>uses a load factor of 50% by default, I went
+with 75% in order to have comparable space overhead. On the microbenchmark, I
+found that inserts also show a strong bimodal distribution, with 24 cycles
+<span>&#8776; </span>74% of the time, 28 c <span>&#8776; </span>25% of the time, and around 1.5 % for the rest
+(including <span>&#8776; </span>0<em style="font-style:italic">.</em>3% for 32 c and 36 c). Finally, almost 100% of lookups took 24
+c.
+</p><!--l. 206--><p style="text-indent:1.5em">   Overall, it seems that both insertions and lookups in Robin Hood linear probing
+can be consistently faster than with quadratic probing.
+</p><!--l. 209--><p style="text-indent:0em">
+</p>
+   <h3><span>4   </span> <a id="x1-40004"></a>Conclusion</h3>
+<!--l. 210--><p style="text-indent:0em">I started looking at better hash tables some time ago (more than two years), and,
+finally, I think there&#8217;s something that&#8217;s simple and elegant, while providing exciting
+performance guarantees. Robin Hood linear probing preserves the nice access
+patterns of linear probing, on both lookups and insertions, but also avoids clustering
+issues; in fact, it seems to offer constant time lookups and inserts with a good
+probability, with logarithmic (probabilistic) worst case, even with a load factor of
+75%. Also, interestingly, the layout of the table is completely independent of the
+order in which entries were inserted.
+</p><!--l. 220--><p style="text-indent:1.5em">   The theoretical performance isn&#8217;t as good as that of 2-left or cuckoo
+hashing. However, these two hashing schemes do not fare very well on modern
+commercial processors: two uncorrelated accesses can be more expensive than a
+surprisingly long linear search. In the end, even the worst case for Robin Hood
+linear probing is pretty good (logarithmic) and comparable to that of useful
+dictionaries like balanced search trees... and practical performance advantages
+like sequential access patterns look like they more than compensate the
+difference.
+</p><!--l. 230--><p style="text-indent:1.5em">   There&#8217;s one thing that I would like to see fixed with Robin Hood linear probing: it
+seems much harder to allow lock-free concurrent writes to it than with regular
+&#8220;First-come, first-served&#8221; linear probing.
+</p><!--l. 235--><p style="text-indent:1.5em">   Finally, there&#8217;s only one very stupid microbenchmark in this post. If you try to
+implement Robin Hood linear probing (after all, it&#8217;s only a couple lines of code added
+to a regular linear probing), I&#8217;d love to see follow-ups or even just short emails on its
+practical performance. </p> 
+
+
+    </div>
+<p>
+  posted at: 20:56 | <a href="http://www.pvk.ca/Blog/" title="path">/</a> | <a href="http://www.pvk.ca/Blog/more_numerical_experiments_in_hashing.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

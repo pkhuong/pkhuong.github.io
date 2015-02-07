@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Generating webpages with Common Cold - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 25 Jun 2007</h2>
+<div class="entry">
+  <a id="generating_webpages_with_common_cold" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Generating webpages with Common Cold</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>Common Cold doesn't actually offer any special way to generate
+webpages. Functions simply have to return strings; how the strings are
+generated is irrelevant. What CC does offer is a way to encode
+continuations in URLs and a Hunchentoot handler to decode and invoke
+them.</p>
+
+<p><code>call-with-continuation-url</code> is a low-level function that takes an input
+function, captures the continuation and encodes it in an URL, sets up
+a <em>copy</em> of the dynamic bindings in the continuation, and passes its
+argument that URL. The function should return a string, the contents
+of the webpage. For example,</p>
+
+<pre class="example">
+(defun counter ()
+  (labels
+      ((inner (count)
+         (mprogn
+          (call-with-continuation-url
+           (lambda (k)
+             (with-html-output-to-string
+                 (*standard-output*)
+               (:html
+                (:head (:title &quot;Counter&quot;))
+                (:body (fmt &quot;Count: ~A~%&quot; count)
+                       (:a :href k &quot;Next&quot;))))))
+          (inner (1+ count)))))
+    (inner 0)))
+</pre>
+uses cl-who to implement a simple page that counts the number of times
+the user has clicked on &quot;Next&quot;. Continuation capture prunes redundant
+frames, so tail recursion is safe and will not lead to ever-growing
+URLs.
+
+<p><code>send/suspend</code> is a simple macro that wraps <code>call-with-continuation-url</code>
+in some syntactic sugar. It should be used as <code>(send/suspend (k)
+body...)</code>, where <code>k</code> is the variable to which the continuation's URL will
+be bound, and <code>body</code> an implicit <code>progn</code> (not <code>mprogn</code>) that should evaluate
+to a string. The example above can be rewritten as:</p>
+
+<pre class="example">
+(defun counter ()
+  (labels
+      ((inner (count)
+         (mprogn
+          (send/suspend (k)
+            (with-html-output-to-string
+                (*standard-output*)
+              (:html
+               (:head (:title &quot;Counter&quot;))
+               (:body (fmt &quot;Count: ~A~%&quot; count)
+                      (:a :href k &quot;Next&quot;)))))
+          (inner (1+ count)))))
+    (inner 0)))
+</pre>
+
+<p>Note that neither version uses CGI parameters. However, the count
+could clearly be one. Common Cold treats special variables as CGI
+parameters, exposing them in the URL as such, and updating their
+values according to the parameters list when possible. The counter
+could thus be rewritten as:</p>
+
+<pre class="example">
+(defun counter ()
+  (labels
+      ((inner (count)
+         (mdlet ((count count))
+          (send/suspend (k)
+            (with-html-output-to-string
+                (*standard-output*)
+              (:html
+               (:head (:title &quot;Counter&quot;))
+               (:body (fmt &quot;Count: ~A~%&quot; count)
+                      (:a :href k &quot;Next&quot;)))))
+          (inner (1+ count)))))
+    (inner 0)))
+</pre>
+
+<p>The URL will look like <code>[base64-data]?COUNTER:COUNT=0&amp;</code>
+(the colon is actually URI-encoded), and, if the value is overridden
+in any way (by replacing it, or by appending a binding to
+<code>COUNTER:COUNT</code> in the query), it will replace the current one. If,
+however, no value is provided as a parameter, the actual value when
+the continuation was capture will be used as a default. Hunchentoot's
+parameter handling functions can of course also be used.</p>
+
+<p>To register our <code>counter</code> function as a webpage, <code>make-continuation-handler</code>
+must be used to create a handler closure, which we can then pass to
+Hunchentoot's dispatcher creating functions. For example,</p>
+
+<pre class="example">
+(push (hunchentoot:create-prefix-dispatcher
+       &quot;/counter/&quot;
+       (make-continuation-handler 'counter
+                                  &quot;/counter/&quot;
+                                  ))
+      hunchentoot:*dispatch-table*)
+</pre>
+will call <code>counter</code> whenever a request is made for &quot;/counter/&quot;. It will
+also treat any other URL beginning with &quot;/counter/&quot; as a continuation
+URL by clipping out the prefix. A predicate (that returns a true value
+when its argument corresponds to a request to <code>'counter</code>) can also be
+passed instead of a string as the second argument to
+<code>make-continuation-handler</code>.
+
+<p>Continuations are, by default, simply gziped and base64-encoded. While
+we are passing closure descriptors instead of actual code, it can
+still be dangerous, and probably constitutes an information
+leak. <code>register-key</code> should be used to register a private key that will
+be used to encrypt and decrypt (symmetrically) the
+continuations.</p>
+
+    </div>
+<p>
+  posted at: 00:00 | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold" title="path">/Lisp/CommonCold</a> | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold/generating_webpages_with_common_cold.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

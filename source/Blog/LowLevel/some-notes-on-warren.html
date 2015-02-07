@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Some notes on Warren - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Sat, 26 Dec 2009</h2>
+<div class="entry">
+  <a id="some-notes-on-warren" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Some notes on Warren</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">N.B. A <a href="http://www.pvk.ca/Blog/resources/some-notes-on-warren.pdf">pdf version</a> is also available.
+</p><!--l. 13--><p style="text-indent:1.5em">   My girlfriend gave me Warren&#8217;s <a href="http://www.hackersdelight.org">Hacker&#8217;s Delight</a> for Christmas. It&#8217;s really a nice
+compendium of tricks that are usually available on the web, but strewn across a
+dozen websites.
+</p><!--l. 18--><p style="text-indent:1.5em">   I only started reading it this morning, and I figured I&#8217;d put some of my notes here
+instead of leaving them in the margins. The page numbers refer to the ninth
+printing.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>2-5: Sign Extension (p. 18)</h3>
+<!--l. 23--><p style="text-indent:0em">For sign extension (i.e. replicate the <em style="font-style:italic">k</em><sup><em style="font-size:70%; font-style:italic">th</em></sup> bit to the left), Warren suggests (for sign
+extension of a byte into a word):
+     </p><ol style="list-style-type:decimal"><li id="x1-1002x1">((<em style="font-style:italic">x </em>+ <code style="font-family:monospace">0x00000080</code>)<em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em><code style="font-family:monospace">0x000000FF</code>) <span>-</span><code style="font-family:monospace">0x00000080</code>
+     </li>
+     <li id="x1-1004x2">((<em style="font-style:italic">x</em><em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em><code style="font-family:monospace">0x000000FF</code>) <span>&#8853;</span><code style="font-family:monospace">0x00000080</code>) <span>-</span><code style="font-family:monospace">0x00000080</code></li></ol><!--l. 30--><p style="text-indent:1.5em">   When one knows that the higher bits of <em style="font-style:italic">x </em>are all zero, the second variant becomes
+(<em style="font-style:italic">x </em><span>&#8853;</span><code style="font-family:monospace">0x00000080</code>) <span>-</span><code style="font-family:monospace">0x00000080</code>. A similar variant is <em style="font-style:italic">x</em><span>|- </span>(<em style="font-style:italic">x</em><em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em><code style="font-family:monospace">0x00000080</code>).
+</p><!--l. 34--><p style="text-indent:1.5em">   Warren&#8217;s variant doesn&#8217;t require any temporary register, but needs a
+single constant twice. Mine only requires that constant once, but needs a
+temporary register. On <code style="font-family:monospace">x86</code>, with its good support for constant operands,
+Warren&#8217;s is probably preferable. With a RISCier ISA, the other version could be
+useful.
+</p><!--l. 40--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>2-9: Decoding a &#8220;Zero Means <code style="font-family:monospace">2**n</code>&#8221; Field (p. 20)</h3>
+<!--l. 41--><p style="text-indent:0em">The idea here is that we have a field which will never take a value of 0; it could
+however, take any value from 1 to 2<sup><em style="font-size:70%; font-style:italic">n</em></sup>. We obviously want to pack this into exactly <em style="font-style:italic">n</em>
+bits. A simple encoding would simply map 0 to 1, 1 to 2, etc. For various reasons,
+we&#8217;re sometimes stuck with an encoding where everything except 0 maps to itself,
+and 0 to 2<sup><em style="font-size:70%; font-style:italic">n</em></sup>.
+</p><!--l. 48--><p style="text-indent:1.5em">   Notice that 0 <span>&#8801; </span>2<sup><em style="font-size:70%; font-style:italic">n</em></sup>  mod 2<sup><em style="font-size:70%; font-style:italic">n</em></sup>. What we want to do is perform an identity modulo
+2<sup><em style="font-size:70%; font-style:italic">n</em></sup>, but skip the modulo on the final result. Obvious candidates are <em style="font-style:italic">x </em><span>- </span>1 + 1,
+<em style="font-style:italic">x </em>+ 1 <span>- </span>1 and 0 <span>--</span><em style="font-style:italic">x </em>(and since we&#8217;re working modulo 2<sup><em style="font-size:70%; font-style:italic">n</em></sup>, <span>-</span>1 <span>&#8801; </span>2<sup><em style="font-size:70%; font-style:italic">n</em></sup><span>- </span>1 and
+0 <span>&#8801; </span>2<sup><em style="font-size:70%; font-style:italic">n</em></sup>).
+</p><!--l. 53--><p style="text-indent:1.5em">   From Warren&#8217;s list of eight &#8220;identities&#8221; (for 2<sup><em style="font-size:70%; font-style:italic">n</em></sup> = 8), three clearly fall from the
+above:
+                                                                  
+
+                                                                  
+     </p><ol style="list-style-type:decimal"><li id="x1-2002x1">((<em style="font-style:italic">x </em><span>- </span>1)<em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em>7) + 1
+     </li>
+     <li id="x1-2004x2">8 <span>- </span>(<span>-</span><em style="font-style:italic">x</em><em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em>7)
+     </li>
+     <li id="x1-2006x3">((<em style="font-style:italic">x </em>+ 7)<em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em>7) + 1</li></ol><!--l. 61--><p style="text-indent:1.5em">   Interestingly, those involving <em style="font-style:italic">&#160;</em><span>|</span><em style="font-style:italic">&#160; </em><span>- </span>8 also do! <em style="font-style:italic">x</em><em style="font-style:italic">&#160;</em><span>|</span><em style="font-style:italic">&#160; </em><span>- </span>8 computes (<em style="font-style:italic">x</em><em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em>7) <span>- </span>8:
+it&#8217;s sending <em style="font-style:italic">x </em>to a representative from its equivalence class modulo 8, but
+to the smallest negative value, instead of the smallest positive value. The
+intuition is that, like masking with 7, all but the three low bits are discarded;
+however, instead of filling the rest with 0s, like &amp;<em style="font-style:italic">&#160;</em>7, <span>|</span><em style="font-style:italic">&#160; </em><span>- </span>8 fills them with
+1s.
+</p><!--l. 69--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-30003"></a>Extra! Extra!</h3>
+<!--l. 70--><p style="text-indent:0em">This entry is more markup-heavy than usual. That would be because I&#8217;m
+actually typing this in <span>L<span style="position:relative; top:-0.5ex; font-size:85%; left:-0.4em">A</span><span style="position:relative; letter-spacing:-0.125em; left:-0.4em">T<span style="position:relative; top:0.5ex; left:-0.0417em">E</span>X</span></span>, while a Lisp script drives the conversion
+(via <a href="http://www.cse.ohio-state.edu/~gurari/TeX4ht">tex4ht</a>) into XHTML for pyblosxom. You can find the script at
+<a href="http://discontinuity.info/\~pkhuong/tex2blosxom.lisp"><code style="font-family:monospace">http://discontinuity.info/\</code><code style="font-family:monospace">~</code><code style="font-family:monospace">pkhuong/tex2blosxom.lisp</code></a>. It&#8217;s a hack, but it
+works! </p> 
+
+
+    </div>
+<p>
+  posted at: 15:18 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/some-notes-on-warren.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

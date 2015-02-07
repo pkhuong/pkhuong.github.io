@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Two variations on old themes - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Sat, 01 Jan 2011</h2>
+<div class="entry">
+  <a id="two-neat-tricks" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Two variations on old themes</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">I&#8217;ve been reading some code, and going through some old notes today and I think the
+following two tricks are too neat not to share.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>Ticket &#8220;spinaphores&#8221;</h3>
+<!--l. 15--><p style="text-indent:0em">I stumbled upon those in the ia64 section of Linux (<code style="font-family:monospace">arch/ia64/mm/tlb.c</code>); they
+adjust ticket spinlocks to allow multiple processes in the critical section.
+</p><!--l. 19--><p style="text-indent:0em">
+</p>
+   <h4><span>1.1   </span> <a id="x1-20001.1"></a>Ticket spinlocks</h4>
+<!--l. 20--><p style="text-indent:0em">LWN has a very good description of Linux&#8217;s implementation of ticket spinlocks at
+<a href="http://lwn.net/Articles/267968/">http://lwn.net/Articles/267968/</a>.
+</p><!--l. 24--><p style="text-indent:1.5em">   The basic idea is to have two counters, a ticket counter, and a &#8220;now serving&#8221;
+(serve) counter. Both are initialised to 0, and monotonically incremented (with
+wraparound). Each process that wants to hold the spinlock goes through three steps:
+acquiring a ticket, waiting for its turn, and releasing the spinlock.
+</p><!--l. 30--><p style="text-indent:1.5em">   Acquiring a ticket is a fetch-and-add (atomically increment the ticket counter,
+and return the previous value).
+</p><!--l. 33--><p style="text-indent:1.5em">   Once a process has a ticket number, it spins on the serve counter until its value is
+equal to the process&#8217;s ticket; the process then holds the spinlock.
+</p><!--l. 37--><p style="text-indent:1.5em">   Finally, to release the spinlock, a process increments the serve counter, signaling
+to the next process in line that it&#8217;s now its turn.
+</p><!--l. 40--><p style="text-indent:1.5em">   x86oids have a fairly strong memory model, and Linux exploits that to simplify
+its ticket locks: both counters are packed in a single word, so that acquiring a ticket
+and reading the serve counter is a single instruction, and the serve counter is
+incremented with a half-word instruction (cache coherence and the barrier in
+fetch-and-add are enough to avoid reordering).
+</p><!--l. 47--><p style="text-indent:0em">
+</p>
+   <h4><span>1.2   </span> <a id="x1-30001.2"></a>From locks to counting semaphores</h4>
+<!--l. 48--><p style="text-indent:0em">&#8220;spinaphores&#8221; generalize the serve counter. Instead of serving only the one process
+whose ticket is equal to the serve counter, they instead serve all the processes whose
+tickets are inferior to the serve counter. To allow <em style="font-style:italic">k </em>processes to hold a spinaphore
+concurrently, the serve counter is simply initialised to <em style="font-style:italic">k</em>: the serve counter is only
+incremented when a process releases the spinaphore, so all but the last <em style="font-style:italic">k </em>processes
+with low enough tickets have already released the spinaphore. The only other
+difference with ticket spinlocks is that incrementing the serve counter must also be
+atomic.
+                                                                  
+
+                                                                  
+</p><!--l. 58--><p style="text-indent:1.5em">   There are some wraparound issues with the definition of &#8220;inferior&#8221;, but the
+distance between the ticket and serve counters is bounded by the number of
+concurrent waiters, which can&#8217;t be too large. One can thus define &#8220;inferior&#8221; as being
+in [<code style="font-family:monospace">serve</code><span>-</span><em style="font-style:italic">M,</em><code style="font-family:monospace">serve</code>] (with wraparound), where <em style="font-style:italic">M </em>is an arbitrary large value (e.g.
+2<sup><span style="font-size:70%">31</span></sup>). On a computer, that&#8217;s pretty much equivalent to subtracting the ticket and the
+serve counter and looking at the sign bit.
+</p><!--l. 67--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-40002"></a>Robin hood hashing</h3>
+<!--l. 68--><p style="text-indent:0em">I have been looking for a hash table scheme that work well with modern hardware for
+a couple years now; <a href="http://www.pvk.ca/Blog/numerical_experiments_in_hashing.html">Numerical experiments in hashing</a> and <a href="http://www.pvk.ca/Blog/LowLevel/more_to_locality_than_cache.html">There&#8217;s more to locality
+than caches</a> are related to this effort. It seems that most of the good worst-case
+bounds come from choosing between multiple buckets during insertion (e.g. d-left and
+cuckoo hashing).
+</p><!--l. 77--><p style="text-indent:1.5em">   In his Phd thesis &#8220;<a href="http://www.cs.uwaterloo.ca/research/tr/1986/CS-86-14.pdf">Robin Hood Hashing</a>&#8221;, Pedro Celis describes a simple variant
+of open addressing hashing that also achieves very good worst-case bounds. In fact,
+in &#8220;<a href="http://cg.scs.carleton.ca/~luc/robinhood.pdf">On worst-case Robin Hood hashing</a>&#8221;, Devroye, Morin &amp; Viola find that, for load
+factors inferior to 1, the worst-case performance of Robin Hood hash tables is pretty
+much identical to that of multiple-choice hashing schemes (<span><img src="http://www.pvk.ca/Blog/resources/cmsy10-4f.png" alt="O"></img></span>(lg log <em style="font-style:italic">n</em>), with high
+probability).
+</p><!--l. 87--><p style="text-indent:1.5em">   When inserting in regular open addressing tables, the first entry to probe a given
+cell is allocated to it; the allocation is first-come, first-served. Robin Hood hashing
+instead bump entries to make sure that lookups don&#8217;t have to probe too long: if a
+new entry hashes to an occupied cell <em style="font-style:italic">n </em>probes after its initial hash location, while the
+occupant is only <em style="font-style:italic">m &lt; n </em>probes away from its own initial location, the current
+occupant is bumped out and iteratively re-inserted in the table. Intuitively, this
+policy isn&#8217;t useful to improve the average probe length (in fact, it may even worsen
+it), but rather to reduce the variance of probe lengths, and thus the worst
+case.
+</p><!--l. 98--><p style="text-indent:1.5em">   The theoretical results assume independent random probing sequences for each
+key. In his simulations and numerical experiments, Celis approximated that ideal
+with double hashing, and found that this small tweak to the usual collision handling
+scheme results in an exponential improvement in the worst case performance of open
+addressing hash tables! In fact, some simulations on my end make me believe that the
+performance might be almost as excellent with linear probing instead of
+double hashing, which is extremely interesting for cache-friendly hash tables (:
+</p> 
+
+
+    </div>
+<p>
+  posted at: 22:32 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/two-neat-tricks.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

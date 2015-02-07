@@ -1,0 +1,499 @@
+---
+layout: post
+title: "Fitting polynomials by generating linear constraints"
+date: 2012-05-24 17:35
+comments: true
+categories: 
+---
+
+<small>(There were some slight edits since the original publication.
+The only major change is that the time to solve each linear program
+probably grows cubically, not linearly, with the number of
+points.)</small>
+
+This should be the first part in a series of post exploring the
+generation of efficient and precise polynomial approximations.  Yes,
+there is Lisp code hidden in the math (: See
+[rational-simplex](https://github.com/pkhuong/rational-simplex) and
+[vanilla-fit](https://github.com/pkhuong/rational-simplex/tree/master/demo/vanilla-fit).
+
+Here's the context: we want to approximate some non-trivial function,
+like \\(\log\\), \\(\exp\\) or \\(\sin\\) on a computer, in floating
+point arithmetic.  The textbook way to do this is to use a truncated
+Taylor series: evaluating polynomials is pretty quick on computers.
+[Sam Hocevar](http://lol.zoy.org/blog/2011/12/21/better-function-approximations)'s
+post on the topic does a very good job of illustrating how
+wrong-headed the approach is in most cases.  We should instead try to
+find an approximation that minimises the maximal error over a range
+(e.g. \\([-\pi,\pi]\\) for \\(\sin\\)).  He even has
+[LolRemez](http://lol.zoy.org/wiki/oss/lolremez) to automatically
+compute such approximations for given functions.  (While we're kind of
+on the topic, the very neat
+[Chebfun](http://www2.maths.ox.ac.uk/chebfun/) applies closely-related
+ideas to try and be to continuous functions what floating point
+numbers are to reals.)
+
+The LolRemez docs point out two clever tricks to get more efficient
+approximations:
+[forcing odd or even polynomials](http://lol.zoy.org/wiki/doc/maths/remez/tutorial-changing-variables),
+and
+[fixing parameters to simple values](http://lol.zoy.org/wiki/doc/maths/remez/tutorial-fixing-parameters).
+Could we automate this process?
+
+The goal of this series is to show that we can, by applying Operations
+Research (["The Science of Better"](http://www.scienceofbetter.org/))
+to this micro-optimisation challenge.  OR is what I do during the day,
+as a PhD student, and I believe that there's a lot of missed
+opportunities in nifty program optimisation or analysis.  (I also
+think that language design has a lot to offer to OR people who cope
+with modeling languages that have only changed incrementally since the
+seventies. :)
+
+Problem statement
+-----------------
+
+For now, let's try and solve the original problem: find, in a family
+of functions \\(F\\) (e.g. polynomials of degree 4), an approximation
+\\(\tilde{f}\\) of a function \\(f\\) over some bounded range
+\\(B\subset R\\) such that \\(\tilde{f}\\) minimises the maximal error
+over that range:
+
+<div markdown="0">
+$$\tilde{f} = \mathop{\arg\min}_{g \in F}\max_{x\in B} |g(x)-f(x)|.$$
+</div>
+
+\\(B\\) is a dense set, with infinitely, if not uncountably, many
+elements, so it's far from obvious that we can solve this, even up to
+negligible errors.
+
+The Remez algorithm
+-------------------
+
+The
+[Remez exchange algorithm](http://en.wikipedia.org/wiki/Remez_algorithm)
+shows one way to solve the minimax approximation problem, from the realm
+of mathematical analysis.
+
+Let's pretend we do not know \\(\tilde{f}\\), but do know the points
+where its error from \\(f\\) is maximised.  In fact, if we are looking
+for polynomials of degree \\(n\\), we only need \\(n+2\\) such points.
+Let's further impose that the errors alternate in sign: i.e., if the
+points are ordered (\\(x_0 < \ldots < x_i < \ldots < x_{n+1}\\)), then
+\\(\tilde{f}(x_0) < f(x_0)\\), \\(\tilde{f}(x_1) > f(x_1)\\), etc., or
+vice versa.  Nifty analysis results tell us that these points exist,
+and that they exhibit the same absolute error \\(|\epsilon|\\).  We
+can now find the coefficients \\(a_0,a_1,\ldots,a_n\\) of
+\\(\tilde{f}\\) by solving a small linear system:
+
+<div markdown="0">
+$$\sum_{j=0}^n a_j x_0^j = f(x_0) + \epsilon$$
+$$\sum_{j=0}^n a_j x_1^j = f(x_1) - \epsilon$$
+<p><center>etc. for each \\(x_i\\).</center></p>
+</div>
+
+There are \\(n+2\\) variables (the \\(n+1\\) coefficients \\(a_j\\)
+and \\(\epsilon\\)), and \\(n+2\\) constraints (one for each
+extremum), so it's a straight linear solve.
+
+Of course, we don't actually know these extremal error points
+\\(x_i\\).  The Remez algorithm works because we can initialise them
+with an educated guess, find the corresponding coefficients, construct
+a new approximation from these coefficients, and update (some) of the
+extremal points from the new approximation.  In theory this process
+converges (infinitely) toward the optimal coefficients.  In practice,
+numerical issues abound: solving a linear system is usually reasonably
+stable, but finding exact function extrema is quite another issue.
+The upside is that smart people like
+[Sam](http://lol.zoy.org/wiki/oss/lolremez) and the
+[boost::math team](http://www.boost.org/doc/libs/1_36_0/libs/math/doc/sf_and_dist/html/math_toolkit/toolkit/internals2/minimax.html)
+have already done the hard work for us.
+
+A linear minimax formulation
+----------------------------
+
+The minimax objective can be reformulated as an optimisation problem
+over reals (or rationals, really) with linear constraints and
+objective, a
+[linear program](http://en.wikipedia.org/wiki/Linear_programming):
+<div markdown="0"> $$\min_{e\in\mathbb{R}, a\in\mathbb{R}^{n+1}} e$$
+subject to $$\sum_{i=0}^n a_ix^i \leq f(x) + e\qquad\forall x\in B$$
+$$\sum_{i=0}^n a_ix^i \geq f(x) - e\qquad\forall x\in B$$ </div>
+
+In words, we're trying to find an error value \\(e\\) and \\(n+1\\)
+coefficients, such that the error \\(|\tilde{f}(x)-f(x)|\quad\forall x\in
+B\\) is at most \\(e\\): \\(-e \leq \tilde{f}(x)-f(x)\leq e\\).  The
+goal is to minimise that error value \\(e\\).
+
+We're still left with the issue that \\(B\\) is very large: infinite,
+or even uncountable.  It doesn't make sense to have two constraints
+for each \\(x\in B\\)!  Our goal is to find approximations in floating
+point arithmetic, which helps a bit: there's actually a finite number
+of floating point (single, double or otherwise) values in any range.
+That number, albeit finite, still tends to be impractically large.
+We'll have to be clever and find a good-enough subset of constraints.
+Note that, unlike the Remez algorithm, we can have as many constraints
+as we want; we never have to remove constraints, so the quality of the
+approximation can only improve.
+
+This method is an interesting alternative to the Remez algorithm
+because it always converges, finitely, even with (or rather, due to)
+floating-point arithmetic.  It will also makes our future work on a
+branch-and-cut method marginally easier.
+
+Rational simplex for exact solutions to linear programs
+-------------------------------------------------------
+
+We've reformulated our problem as a finite linear program, assuming
+that we know for which point \\(x\in B\\) we should generate
+constraints.  How can we find solutions?
+
+LPs are usually solved with variants of the
+[simplex algorithm](http://en.wikipedia.org/wiki/Simplex_algorithm), a
+*combinatorial* algorithm.  This is the key part: while most of the
+algorithm is concerned with numerical computations (solving linear
+systems, etc.), these are fed to predicates that compare values, and
+the results of the comparisons drive each iteration of the algorithm.
+The key insight in the simplex algorithm is that there exists at least
+one optimal solution in which all but a small set of variables (the
+basis) are set to zero, and the value of the basic variables can then
+be deduced from the constraints.  Better: every suboptimal (but
+feasible) basis can be improved by only substituting one variable in
+the basis.  Thus, each iteration of the algorithm moves from one basis
+to a similar, but better, one, and numerical operations only determine
+whether a basis is feasible and is an improvement.  Very little
+information has to persist across iterations: only the set of basic
+variables.  This means that there is no inherent accumulation of
+round-off errors, and that we can borrow tricks from the computational
+geometry crowd.
+
+[Daniel Espinoza](http://www.dii.uchile.cl/~daespino) implemented
+that, and much more, for his PhD thesis on exact linear and integer
+program solvers.
+[QSopt-Exact](http://www.dii.uchile.cl/~daespino/ESolver_doc/main.html)
+is a GPL fork of a fairly sophisticated simplex and branch and cut
+program.  It exploits the fact that the simplex algorithm is
+combinatorial to switch precision on the fly, using hardware floats
+(single, double and long), software quad floats, multiprecision
+floats, and rational arithmetic.  Unfortunately, the full solver
+segfaults when reporting solution values on my linux/x86-64 machine.
+Still, the individual simplex solvers (with double floats, quad
+floats, multiprecision floats and rationals) work fine.  What I
+decided to do was to sidestep the issue and call the solvers in
+increasing order of precision, while saving the basis between calls.
+The double float implementation is executed first, and when it has
+converged (within epsilon), a more precise solver is called, starting
+from the basis on which the previous solver converged, etc.  The final
+rational solver is exact, but very slow.  Hopefully, previous solvers,
+while inexact, will have converged to very nearly-optimal bases,
+leaving only a couple iterations for the exact solver.
+
+[Rational-simplex](https://github.com/pkhuong/rational-simplex) is a
+one-file CL system that wraps QSopt-Exact and offers a trivial
+modeling language.  We'll use it a lot in the sequel.
+
+Solving the minimax LP with rational-simplex
+--------------------------------------------
+
+[linf-fit.lisp](https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/linf-fit.lisp)
+implements a minimax linear fit in 60 LOC (plus a couple kLOC in QSopt
+:).
+
+Each
+[point](https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/linf-fit.lisp#L20)
+is defined by `loc`, the original value for `x`, a sequence of
+parameters (in this case, powers of `x` as we're building
+polynomials), and the `value` to approximate, \\(f(x)\\).
+
+[solve-fit](https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/linf-fit.lisp#L41)
+takes a sequence of such points, and solves the corresponding LP with
+QSopt-Exact:
+
+    (defun solve-fit (points)
+      (lp:with-model (:name "linf fit" :sense :minimize)
+        (let ((diff  (lp:var :name "diff" :obj 1))
+              (coefs (loop for i below *dimension* collect
+                           (lp:var :name (format nil "coef ~A" i)
+                                   :lower nil))))
+          (map nil (lambda (point)
+                     (let ((lhs (linexpr-dot coefs
+                                             (point-parameters point)))
+                           (rhs (point-value point)))
+                       (lp:post<= lhs (lp:+ rhs diff))
+                       (lp:post>= lhs (lp:- rhs diff))))
+               points)
+          (multiple-value-bind (status obj values)
+              (lp:solve)
+            (assert (eql status :optimal))
+            (values obj (map 'simple-vector
+                             (lambda (var)
+                               (gethash var values 0))
+                             coefs))))))
+
+With a fresh model in scope in which the goal is to minimise the
+objective function, a variable, `diff`, is created to represent the
+error term \\(e\\), and one variable for each coefficient in the
+polynomial (`coefs`) list; each coefficient is unbounded both from
+below and above.
+
+Then, for each point, the two corresponding constraints are added to
+the current model.
+
+Finally, the model is solved, and a vector of optimal coefficients is
+extracted from the `values` hash table.
+
+We can easily use `solve-fit` to *exactly* solve minimax instances
+with a couple thousands of points in seconds:
+
+    CL-USER> (let ((*dimension* 5) ; degree = 4
+                   (*loc-value* (lambda (x)
+                                  (rational (exp (float x 1d0))))))
+               ;; function to fit: EXP. Converting the argument to
+               ;; a double-float avoid the implicit conversion to
+               ;; single, and we translate the result into a rational
+               ;; to avoid round-off
+               (solve-fit (loop for x from -1 upto 1 by 1/2048
+                           ;; create a point for x in 
+                           ;; -1 ... -1/2048,0,1/2048, ... 1
+                                collect (make-point x))))
+    dbl_solver: 0.510 sec 0.0 (optimal)      ; solve with doubles
+    ldbl_solver: 0.260 sec 0.0 (optimal)     ;   with long doubles
+    float128_solver: 0.160 sec 0.0 (optimal) ;   with 128 bit quads
+    mpf_solver: 1.110 sec 0.0 (optimal)      ;   with multi-precision floats
+    mpq_solver: 0.570 sec 0.0 (optimal)      ;   with rationals
+    3192106304786396545997180544707814405/5839213465929014357942937289929760178176
+    #(151103246476511404268507157826110201499879/151089648430913246511773502376932544610304
+      28253082057367857587607065964265169406677/28329309080796233720957531695674852114432
+      13800443618507633486386515045130833755/27665340899215071993122589546557472768
+      9582651302802548702442907342912775/54033868943779437486567557708120064
+      2329973989305264632365349185439/52767450140409606920476130574336)
+
+Or, as more readable float values:
+
+    CL-USER> (values (float * 1d0) (map 'simple-vector (lambda (x)
+                                                         (float x 1d0))
+                                         (second /)))
+    5.466671707434376d-4 ; (estimated) error bound
+    #(1.0000899998493569d0 0.997309252293765d0 0.49883511895923116d0
+      0.177345274179293d0 0.04415551600665573d0) ; coefficients
+
+So, we have an approximation that's very close to what
+[LolRemez](http://lol.zoy.org/wiki/doc/maths/remez/tutorial-exponential)
+finds for \\(\exp\\) and degree 4.  However, we're reporting a maximal
+error of 5.466672e-4, while LolRemez finds 5.466676e-4.  Who's wrong?
+
+Tightening the model
+--------------------
+
+As is usually the case, we're (slightly) wrong! The complete LP
+formulation has constraints for each possible argument \\(x\in B\\).
+We only considered 4k equidistant such values in the example above.
+The model we solved is missing constraints: it is a
+[relaxation](http://en.wikipedia.org/wiki/Relaxation_%28approximation%29).
+We're solving that relaxation exactly, so the objective value it
+reports is a lower bound on the real error, and on the real optimal
+error.  At least, we don't have any design constraint, and the
+coefficients are usable directly.
+
+We shall not settle for an approximate solution.  We must simply add
+constraints to the model to make it closer to the real problem.
+
+Obviously, adding constraints that are already satisfied by the
+optimal solution to the current relaxation won't change anything.
+Adding constraints can only remove feasible solutions, and the current
+optimal solution remains feasible; since it was optimal before
+removing some candidates, it still is after.
+
+So, we're looking for constraints that are violated to add them to our
+current model.  In the optimisation lingo, we're doing constraint (or
+row, or cut) generation.  In our problem, this means that we're
+looking for points such that the error from the current approximation
+is greater than the estimate reported as our solution value.  We'll
+take a cue from the Remez algorithm and look for extremal violation
+points.
+
+Extrema of differentiable functions are found where the first
+derivative is zero.  Our approximation function is a polynomial and is
+trivially differentiated.  We'll assume that the user provides the
+derivative of the function to approximate.  The (signed) error term is
+a difference of differentiable functions \\(\tilde{f}-f\\), and its
+first derivative is simply the difference of the derivatives.
+
+Assuming that the derivative is continuous, we can use the
+[intermediate value theorem](http://en.wikipedia.org/wiki/Intermediate_value_theorem)
+to find its roots: for each root, there is a (non-empty, open)
+neighbourhood such that the derivative is negative to the left of the
+root and positive to the right, or inversely.
+
+This is what
+[find-extrema.lisp](https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/find-extrema.lisp)
+implements.  In optimisation-speak, that's our separation algorithm:
+we use it to find (maximally-) violated constraints that we ought to
+add to our relaxation.
+
+[find-root](https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/find-extrema.lisp#L71)
+takes a function, a lower bound, and an upper bound on the root, and
+first performs a
+[bisection search](http://en.wikipedia.org/wiki/Bisection_method)
+until the range is down to 256 distinct double values.  Then, the 256
+values in the range are scanned linearly to find the minimal absolute
+value.  I first tried to use
+[Newton's method](http://en.wikipedia.org/wiki/Newton's_method), but
+it doesn't play very well with rationals: although convergence is
+quick, denominators grow even more quickly.  There are also potential
+issues with even slightly inexact derivatives.  This is why the final
+step is a linear search.  The method will work as long as we have
+correctly identified a tiny interval around the extremum; the interval
+can be explored exhaustively without involving the derivative.
+
+[%approximation-error-extrema](https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/find-extrema.lisp#L90)
+finds candidate ranges.  The sign of the derivative at each pair of
+consecutive points currently considered in the model is examined; when
+they differ, the range is passed to `find-root`.  If we find a new
+extremum, it is pushed on a list.  Once all the pairs have been
+examined, the maximal error is returned, along with the list of new
+extrema, and the maximal distance between new extrema and the
+corresponding bounds.  As the method converges, extrema should be
+enclosed more and more tightly by points already considered in our
+constraints.
+
+There are frequent calls to
+[round-to-double](https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/utility.lisp#L18):
+this function is used to take an arbitrary real, convert it to the
+closest double value, and convert that value back in a rational.  The
+reason we do that is that we don't want to generate constraints that
+correspond to values that cannot be represented as double floats: not
+only are they superfluous, but they also tend to have large
+denominators, and those really slow down the exact solver.
+
+Finally, the two pieces are put together in
+[driver.lisp](https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/driver.lisp).
+The constraints are initialised from 4096 equidistant points in the
+range over which we optimise.  Then, for each iteration, the
+relaxation is solved, new extrema are found and added to the
+relaxation, until convergence.  Convergence is easy to determine: when
+the error reported by the LP (the relaxation) over the constraint
+subset is the same as the actual error, we are done.
+
+    CL-USER> (time
+              (let ((*trace-output* (make-broadcast-stream)))
+                ;; muffle the simplex solver log
+                (find-approximation 4 -1 1
+                                    (lambda (x)
+                                      (rational (exp (float x 1d0))))
+                                    (lambda (x)
+                                      (rational (exp (float x 1d0)))))))
+              ;  predicted error  actual       difference           log distance of new points
+    Iteration    1: 5.4666716e-4 5.466678e-4 [6.5808034e-10] (4 new extrema, delta 40.42 bit)
+    Iteration    2: 5.4666746e-4 5.4666775e-4 [3.25096e-10] (4 new extrema, delta 41.15 bit)
+    Iteration    3: 5.466676e-4 5.466677e-4 [9.041601e-11] (4 new extrema, delta 40.89 bit)
+    Iteration    4: 5.4666764e-4 5.4666764e-4 [2.4131829e-11] (4 new extrema, delta 38.30 bit)
+    Iteration    5: 5.4666764e-4 5.4666764e-4 [5.3669834e-12] (4 new extrema, delta 39.04 bit)
+    Iteration    6: 5.4666764e-4 5.4666764e-4 [2.1303722e-12] (4 new extrema, delta 36.46 bit)
+    Iteration    7: 5.4666764e-4 5.4666764e-4 [8.5113746e-13] (4 new extrema, delta 37.19 bit)
+    Iteration    8: 5.4666764e-4 5.4666764e-4 [5.92861e-14] (4 new extrema, delta 36.93 bit)
+    Iteration    9: 5.4666764e-4 5.4666764e-4 [8.7291163e-14] (4 new extrema, delta 34.34 bit)
+    Iteration   10: 5.4666764e-4 5.4666764e-4 [2.7814624e-14] (4 new extrema, delta 35.08 bit)
+    Iteration   11: 5.4666764e-4 5.4666764e-4 [1.22935355e-14] (4 new extrema, delta 33.82 bit)
+    Iteration   12: 5.4666764e-4 5.4666764e-4 [6.363092e-15] (4 new extrema, delta 34.56 bit)
+    Iteration   13: 5.4666764e-4 5.4666764e-4 [2.6976767e-15] (4 new extrema, delta 31.97 bit)
+    Iteration   14: 5.4666764e-4 5.4666764e-4 [6.2273127e-16] (4 new extrema, delta 31.71 bit)
+    Iteration   15: 5.4666764e-4 5.4666764e-4 [3.1716093e-16] (4 new extrema, delta 32.44 bit)
+    Iteration   16: 5.4666764e-4 5.4666764e-4 [8.9307225e-17] (4 new extrema, delta 29.86 bit)
+    Iteration   17: 5.4666764e-4 5.4666764e-4 [2.986885e-17] (4 new extrema, delta 29.60 bit)
+    Iteration   18: 5.4666764e-4 5.4666764e-4 [8.047477e-17] (4 new extrema, delta 30.33 bit)
+    Iteration   19: 5.4666764e-4 5.4666764e-4 [0.0e+0] (4 new extrema, delta 27.75 bit)
+    Evaluation took:
+      153.919 seconds of real time    ; includes time spent in the LP solvers
+      43.669636 seconds of total run time (39.078488 user, 4.591148 system)
+      [ Run times consist of 2.248 seconds GC time, and 41.422 seconds non-GC time. ]
+      28.37% CPU
+      245,610,372,128 processor cycles
+      4,561,238,704 bytes consed
+  
+    4046879766238553594956027226378928284211150354828640757733860080712233114910799/7402816194767429570294393430906636383377554724586974324818463099198772886301048832
+    #(925435306122623901577988826638313570454904960173764226165130358296546098660735739/925352024345928696286799178863329547922194340573371790602307887399846610787631104
+      6557329860867414742326673804552068829044003331586895788335382835917/6575021589199030076761681434499916661609079970484769650357093605918
+      1639925832159462899796569909691517124754835951733786891469617405863/3287510794599515038380840717249958330804539985242384825178546802959
+      583024503858777554811473359621837746265838166280012537010086877260/3287510794599515038380840717249958330804539985242384825178546802959
+      145161740826348143502214435074903924097159484388538508594721873208/3287510794599515038380840717249958330804539985242384825178546802959)
+
+Note that we found new extrema in the last iteration.  However, the
+error for those extrema wasn't actually larger than for the points we
+were already considering, so the solution was still feasible and
+optimal.
+
+The fractions will be more readable in floats:
+    CL-USER> (values (float * 1d0) (map 'simple-vector
+                                        (lambda (x) (float x 1d0))
+                                        (second /)))
+    5.466676005138464d-4
+    #(1.0000900001021278d0 0.9973092516744465d0 0.4988351170902357d0
+      0.177345274368841d0 0.044155517622880315d0)
+
+Now, we have nearly exactly (up to a couple bits) the same values as
+[LolRemez's example](http://lol.zoy.org/wiki/doc/maths/remez/tutorial-exponential).
+Each iteration takes less than 10 seconds to execute; we could easily
+initialise the relaxation with even more than 4096 points.  We should
+expect the impact on the solution time to be cubic: most of the
+simplex iterations take place in the floating point solvers, and the
+number of iterations is usually linear in the number of variables and
+constraints, but the constraint matrix is dense so the complexity of
+each iteration should grow almost quadratically.  What really slows
+down the rational solver isn't the number of variables or constraints,
+but the size of the fractions.  On the other hand, we see that some of
+the points considered by our constraints differ by \\(\approx 30\\)
+bit in their double representation: we would need a very fine grid
+(and very many points) to hit that.
+
+In addition to being more easily generalised than the Remez algorithm,
+the LP minimax has no convergence issue: we will always observe
+monotone progress in the quality of the approximation and, except for
+potential issues with the separation algorithm, we could use the
+approach on any function.  There is however (in theory, at least) a
+gaping hole in the program: however improbable, all the extrema could
+be sandwiched between two points for which the derivative has the same
+sign.  In that case, the program will finish (there are no constraint
+to adjoin), but report the issue.  A finer initial grid would be one
+workaround.  A better solution would be to use a more robust
+root-finding algorithm.
+
+What's next?
+------------
+
+The minimax polynomial fitting code is on github, as a
+[demo](https://github.com/pkhuong/rational-simplex/tree/master/demo/vanilla-fit)
+for the
+[rational-simplex](https://github.com/pkhuong/rational-simplex)
+system.  The code can easily be adapted to any other basis (e.g. the
+Fourier basis), as long as the coefficients are used linearly.
+
+In the next instalment, I plan to use the cut (constraint) generation
+algorithm we developed here in a
+[branch-and-cut](http://en.wikipedia.org/wiki/Branch_and_cut)
+algorithm.  The new algorithm will let us handle side-constraints on
+the coefficients: e.g., fix as many as possible to zero, 1, -1 or
+other easy multipliers.
+
+If you found the diversion in Linear programming and cut generation
+interesting, that makes be very happy!  One of my great hopes is to
+see programmers, particularly compiler writers, better exploit the
+work we do in mathematical optimisation.  Sure, "good enough" is nice,
+but wouldn't it be better to have solutions that are provably optimal
+or within a few percent of optimal?
+
+If you want more of that stuff, I find that Chvatal's book
+[Linear Programming](http://books.google.com/books?id=DN20_tW_BV0C) is
+a very nice presentation of linear programming from both the usage and
+implementation points of view; in particular, it avoids the trap of
+simplex tableaux, and directly exposes the meaning of the operations
+(its presentation also happens to be closer to the way real solvers
+work).  Works like Wolsey's
+[Integer Programming](http://books.google.com/books?id=x7RvQgAACAAJ)
+build on the foundation of straight linear programs to tackle more
+complex problems, and introduce techniques we will use (or have used)
+here, like branch-and-bound or cut generation.  The classic
+undergraduate-level text on operations research seems to be Hillier
+and Lieberman's
+[Introduction to operations research](http://books.google.com/books?id=SrfgAAAAMAAJ)
+(I used it, and so did my father nearly 40 years ago)... I'm not sure
+that I'm a fan though.

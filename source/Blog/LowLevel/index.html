@@ -1,0 +1,1572 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Wed, 04 Jan 2012</h2>
+<div class="entry">
+  <a id="napa-fft2-implementation-notes" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Napa-FFT(2) implementation notes</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 12--><p style="text-indent:0em">TL;DR: program-generated Common Lisp for a memory-bound task (FFT) can reach
+runtime performance identical to solid C code (djbfft), and close to the state of the
+art (FFTW).
+</p><!--l. 16--><p style="text-indent:1.5em">   Discrete fourier transforms are an interesting case study in high-performance
+computing: they&#8217;re extremely regular recursive computations, completely free of
+control dependencies, and memory-bound. The recursiveness and regularity means
+they can be expressed or generated with relatively little code, freedom of control
+dependency makes them easier to benchmark, and memory-boundedness
+ensures that low-level instruction-selection issues can mostly be ignored.
+Basically, they&#8217;re perfect for specialised compilers that generate Common Lisp
+code. With SBCL, we have decent control over how things are laid out in
+memory and reasonable compilation of high-level constructs like function
+calls or complex float multiplication; its simple colouring register allocator
+and na&#239;ve code generation sometimes yield nasty assembly, but the net
+effect is virtually noise compared to the memory latency inherent to the
+algorithms.
+</p><!--l. 31--><p style="text-indent:1.5em">   I pushed <a href="https://github.com/pkhuong/Napa-FFT">Napa-FFT</a> on github last week. It&#8217;s an implementation of <a href="http://crd-legacy.lbl.gov/~dhbailey/dhbpapers/fftq.pdf">Bailey&#8217;s 6-step
+FFT [PDF]</a> algorithm, which breaks DFTs of size <em style="font-style:italic">n </em>into 2<img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes0x.png" alt="&#8730;n-"></img> DFTs of size <img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes1x.png" alt="&#8730;n--"></img> (with
+appropriate rounding up/down when <em style="font-style:italic">n </em>isn&#8217;t a perfect square). I found the 6-step
+algorithm interesting because it seems perfect to exploit caches. Reducing
+computation size by a factor of <span>&#8776;</span><img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes2x.png" alt="&#8730;n-"></img> is huge: 1M complex doubles, which usually
+overflows L2 or even L3 caches, becomes 1K, and that fits comfortably in most <em style="font-style:italic">L1</em>
+caches. This huge reduction also means that the algorithm has a very shallow
+recursion depth. For example, three recursion steps suffice to re-express a
+DFT of 16 M complex doubles as a (large) number of 8-point DFT base
+cases.
+</p><!--l. 45--><p style="text-indent:1.5em">   I completely failed to realize the latter characteristic, and I feel the approach
+taken in Napa-FFT is overly complex. This is where <a href="https://github.com/pkhuong/Napa-FFT2">Napa-FFT2</a> comes in. It&#8217;s a
+complete rewrite of the same general idea, but explicitly structured to exploit the
+shallow recursion depth. This suffices to yield routines that perform comparably to
+<a href="http://cr.yp.to/djbfft.html">djbfft</a> on small or medium inputs, and only 25-50% slower than <a href="http://www.fftw.org/">FFTW</a> on large
+inputs.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>Napa-FFT2</h3>
+<!--l. 56--><p style="text-indent:0em">Napa-FFT2 features a small number of routine generators, each geared toward
+different input sizes. A first FFT generator handles small inputs and base cases for
+other routines; this family of routines is not expected to fare well on even
+medium inputs. A second generator is dedicated to slightly larger inputs and
+reduces medium FFTs to small ones, and a final generator builds upon the
+small and medium FFT generators to process even the largest inputs. Thus,
+there are at most two levels of recursion before specialised base cases are
+executed.
+                                                                  
+
+                                                                  
+</p><!--l. 66--><p style="text-indent:0em">
+</p>
+   <h4><span>1.1   </span> <a id="x1-20001.1"></a>Radix-2 routine generator</h4>
+<!--l. 67--><p style="text-indent:0em">The <a href="https://github.com/pkhuong/Napa-FFT2/blob/master/small-fft.lisp">small FFT</a> generator implements the same radix-2 approach as <a href="https://github.com/ahefner/bordeaux-fft/">Bordeaux-FFT</a>:
+tiny DFTs on indices in bit-reversed order, followed by lg <em style="font-style:italic">n </em>steps of contiguous
+additions or subtractions (butterflies) and multiplications by twiddle factors. Overall,
+it&#8217;s a very good algorithm: only the leaf DFTs aren&#8217;t on contiguous addresses, and
+the number of arithmetic operations is close to the best upper bounds known to date.
+The generator in Napa-FFT2 improves on Bordeaux-FFT by implementing larger
+base cases (up to <em style="font-style:italic">n </em>= 8), constant-folding most of the address computations and
+recognizing that no temporary vector is needed.
+</p><!--l. 80--><p style="text-indent:1.5em">   The only issue is that the access pattern needed to exploit the structure of the
+DFT matrix is awful on all but the smallest sizes. An L2 cache of 2 MB can only hold
+128K complex doubles; for a lot of programs, temporal locality ensures most accesses
+hit cache even if the working set exceeds cache size. Unfortunately, the opposite
+happens with bit-reversed ordered accesses. The closest two indices are (e.g. they
+only differ in the least significant bit), the farther apart they are accessed, time-wise
+(see figure <a href="#x1-20011">1<!--tex4ht:ref: fig:bit-reverse --></a>).
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-20011"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 90--><p style="text-indent:0em">
+
+</p><!--l. 91--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/bit-reversal-resized.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;1: </span><span>Bit-reversed addressing pattern for 8 elements</span></div><!--tex4ht:label?: x1-20011 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 96--><p style="text-indent:1.5em">   This explains the strong performance degradation in figure <a href="#x1-20022">2<!--tex4ht:ref: fig:radix-2 --></a>. The graph reports
+cycle counts on my 2.8 GHz X5660, which has (per core) 32 KB of L1D, 256
+KB of L2, and 12 MB of L3 cache per socket. For tiny inputs, the constant
+overhead (function calls, the cpuid/rdtsc sequence, etc.) dominates, but,
+afterwards, we observe a fairly constant slope until 2<sup><span style="font-size:70%">12</span></sup>, and then from 2<sup><span style="font-size:70%">13</span></sup> to
+2<sup><span style="font-size:70%">17</span></sup>; finally from 2<sup><span style="font-size:70%">18</span></sup> onward, performance degrades significantly. This fits
+well with the cache sizes. If we take into account the input, output and
+twiddle factor vectors, the jump from 2<sup><span style="font-size:70%">12</span></sup> to 2<sup><span style="font-size:70%">13</span></sup> overflows L2, and 2<sup><span style="font-size:70%">17</span></sup> to 2<sup><span style="font-size:70%">18</span></sup>
+L3.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-20022"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 108--><p style="text-indent:0em">
+
+</p><!--l. 109--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/radix-2.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;2: </span><span>Runtimes of generated functions for the radix-2 algorithm for forward
+complex-double DFT</span></div><!--tex4ht:label?: x1-20022 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><h4><span>1.2   </span> <a id="x1-30001.2"></a>2/4/6-step FFT algorithms</h4>
+<!--l. 116--><p style="text-indent:0em">This is the effect that the 6-step algorithm attempts to alleviate. Each recursive
+FFT is significantly smaller: transforms of size 2<sup><span style="font-size:70%">18</span></sup>, which overflows L3, are
+executed as transforms of size 2<sup><span style="font-size:70%">9</span></sup>, which fits in L1. The total algorithmic
+complexity of the transform isn&#8217;t improved, but the locality of memory accesses
+is.
+</p><!--l. 123--><p style="text-indent:1.5em">   <a href="http://www.computer.org/portal/web/csdl/doi/10.1109/AFIPS.1966.83">Gentleman and Sande</a> describe how the DFT on a vector can be re-expressed as
+multiple DFTs on columns of row-major matrices, plus a transposition and an
+element-wise multiplication by a close cousin of the DFT matrix (figure <a href="#x1-30013">3<!--tex4ht:ref: fig:4-step --></a>). The
+transposition is nearly free of arithmetic, while the element-wise multiplication
+only involves streaming memory accesses, so fusing them makes a lot of
+sense.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-30013"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 131--><p style="text-indent:0em">
+
+</p><!--l. 132--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/4-step-resized.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;3: </span><span>Sketch of the 4-step FFT algorithm</span></div><!--tex4ht:label?: x1-30013 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 137--><p style="text-indent:1.5em">   The <a href="https://github.com/pkhuong/Napa-FFT2/blob/master/large-fft.lisp">6-step algorithm</a> adds two transposition steps, before and after the four
+steps. This way, each sub-FFT operates on adjacent addresses (figure <a href="#x1-30024">4<!--tex4ht:ref: fig:6-step --></a>), and the
+output is in the correct order.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-30024"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 144--><p style="text-indent:0em">
+
+</p><!--l. 145--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/6-step-resized.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;4: </span><span>Sketch of the 6-step FFT algorithm</span></div><!--tex4ht:label?: x1-30024 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 150--><p style="text-indent:1.5em">   Finally, the 2-step algorithm (also found in <a href="http://crd-legacy.lbl.gov/~dhbailey/dhbpapers/fftq.pdf">Bailey&#8217;s paper [PDF]</a>) is
+a hybrid of the 4 and 6 -step algorithms (figure <a href="#x1-30035">5<!--tex4ht:ref: fig:2-step --></a>). Rather than inserting
+transposition steps, columns are copied to temporary vectors before FFTing
+them and copying them back. Of course, the intermediate transposition and
+element-wise multiplication can be fused with the copy from temporary
+vectors.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-30035"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 159--><p style="text-indent:0em">
+
+</p><!--l. 160--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/2-step-resized.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;5: </span><span>Sketch of the 2-step FFT algorithm</span></div><!--tex4ht:label?: x1-30035 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><h4><span>1.3   </span> <a id="x1-40001.3"></a>Recursively transposing matrices</h4>
+<!--l. 166--><p style="text-indent:0em">Transpositions represent a significant portion of the runtime for both 6-step
+algorithms. This isn&#8217;t surprising: good FFTs are memory-bound, and the only steps
+that aren&#8217;t cache-friendly are the three transpositions. Napa-FFT2 generates
+the initial and final transpositions separately from the middle 4 steps of
+the 6-step algorithms. This makes it easier to exploit out-of-order input or
+output.
+</p><!--l. 174--><p style="text-indent:1.5em">   It also enables us to estimate the time elapsed during each transposition step
+compared to the rest of the computation (for the range of sizes considered, from 2<sup><span style="font-size:70%">6</span></sup> to
+2<sup><span style="font-size:70%">25</span></sup> points). Depending on the size of the input (odd or even powers of two), each
+transposition (initial or final) adds 5-20% of the runtime of the middle steps. With
+some algebra we find that, for a full DFT with in-order input and output, the three
+transposition steps (initial, middle and final) represent 13-40% of the total
+runtime!
+</p><!--l. 183--><p style="text-indent:0em">
+</p>
+   <h5><span>1.3.1   </span> <a id="x1-50001.3.1"></a>Transposing square matrices</h5>
+<!--l. 184--><p style="text-indent:0em">Transposition steps are faster for input sizes that are even powers of two (<em style="font-style:italic">n </em>= 2<sup><span style="font-size:70%">2</span><em style="font-size:70%; font-style:italic">k</em></sup>).
+The reason is that the corresponding transposition operates on square matrices of
+size 2<sup><em style="font-size:70%; font-style:italic">k</em></sup><span>&#215; </span>2<sup><em style="font-size:70%; font-style:italic">k</em></sup>. These are easily implemented recursively, by decomposing each matrix
+in four blocks until the base size is reached.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-50016"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 191--><p style="text-indent:0em">
+</p>
+<center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes3x.png" alt="[      |    ]         [      &#8242;|    &#8242; ]&#10;   A   |B                 A   | C&#10;  -----|-----  - &#8594;       -----|------&#10;   C   |D                 B  &#8242;|D   &#8242;&#10;       |                      |&#10;" style="text-align:center" align="center"></img></center>
+<!--l. 202--><p style="text-indent:0em">
+</p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;6: </span><span>Square in-place transposition</span></div><!--tex4ht:label?: x1-50016 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 208--><p style="text-indent:1.5em">   As figure <a href="#x1-50016">6<!--tex4ht:ref: fig:square-transp --></a> shows, a matrix of size 2<sup><em style="font-size:70%; font-style:italic">k</em></sup><span>&#215; </span>2<sup><em style="font-size:70%; font-style:italic">k</em></sup> can be transposed in-place by
+transposing each quadrant in-place, and swapping the top-right and bottom-left
+quadrants. Napa-FFT2 instead transposes the top-left and bottom-right quadrants
+in-place, and simultaneously transposes and swaps the two other. The in-place
+transpositions are simply decomposed recursively. Transpose-and-swap operations are
+similarly recursively decomposed into four smaller transpose-and-swaps. This
+recursive decomposition ensures that, for each level of the memory hierarchy (e.g.
+L1D cache, L2, TLB, L3), some recursion depth is well-suited to that level&#8217;s
+size.
+</p><!--l. 219--><p style="text-indent:1.5em">   The iterative base case for in-place transposition is not quite a trivial loop nest,
+so it&#8217;s just two nested for loops. Thankfully, it&#8217;s only used for blocks directly on the
+diagonal; it probably doesn&#8217;t matter much. Transpose-and-swap is simpler, and
+represents the vast majority of the computation. The loop nest is manually
+unrolled-and-jammed to improve spatial locality of the routine, and fully (or nearly)
+use the data brought in by each cache miss: the outer loop is partially unrolled,
+and the duplicated inner loops fused (everyone keeps referring to Allen and
+Cocke&#8217;s &#8220;A catalogue of optimizing transformations,&#8221; but I can&#8217;t find any
+relevant link, sorry). In figure <a href="#x1-50027">7<!--tex4ht:ref: fig:unroll-and-jam --></a>, assuming that matrices A and B are in
+row-major order, accesses to A are naturally in streaming order; the short
+inner-most loop helps maximise the reuse of (non-consecutive) cache lines in
+B.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-50027"></a>
+                                                                  
+
+                                                                  
+<pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">for i below n by 4 
+  for j below m 
+    for ii from i below i+4 
+      operate on A(ii, j), B(j, ii), etc.</pre>
+<!--l. 240--><p style="text-indent:0em">
+<br></br></p><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;7: </span><span>Unrolled-and-jammed loop nest</span></div><!--tex4ht:label?: x1-50027 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><h5><span>1.3.2   </span> <a id="x1-60001.3.2"></a>Transposing rectangular matrices</h5>
+<!--l. 245--><p style="text-indent:0em">Transposing general rectangular matrices is much more difficult than for square,
+power-of-two&#8211;sized, matrices. However, the 6-step algorithms only need to transpose
+matrices of size 2<sup><em style="font-size:70%; font-style:italic">k</em></sup><span>&#215; </span>2<sup><em style="font-size:70%; font-style:italic">k</em><span style="font-size:70%">+1</span></sup> or 2<sup><em style="font-size:70%; font-style:italic">k</em><span style="font-size:70%">+1</span></sup><span>&#215; </span>2<sup><em style="font-size:70%; font-style:italic">k</em></sup>. For these shapes, it&#8217;s possible to split the
+input in two square block submatrices, transpose them in-place, and interleave or
+de-interleave the rows (figure <a href="#x1-60018">8<!--tex4ht:ref: fig:rectangular-in-place --></a>).
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-60018"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 254--><p style="text-indent:0em">
+</p>
+<center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes4x.png" alt="                  &#8970;   a&#8242;  &#8971;         &#8970;   &#8242; |  &#8242; &#8971;&#10;[      ]          |   a0&#8242;  |            a0 |b 0&#10;   A              ||   a1&#8242;  ||         |  a&#8242; |b &#8242; |&#10;  ------  -  &#8594;    ||---b2&#8242;--||  - &#8594;    |&#8968;   1&#8242; |  1&#8242; |&#8969;&#10;   B              |&#8968;   b0&#8242;  |&#8969;            a2 |b 2&#10;                      b1&#8242;                  |&#10;                       2&#10;" style="text-align:center" align="center"></img></center>
+<!--l. 275--><p style="text-indent:0em">
+</p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;8: </span><span>Rectangular in-place transposition</span></div><!--tex4ht:label?: x1-60018 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 281--><p style="text-indent:1.5em">   For now, though, I found it simpler to implement that by transposing the
+submatrices out-of-place, moving the result to temporary storage (figure <a href="#x1-60029">9<!--tex4ht:ref: fig:rectangular-copy --></a>). The
+data, implicitly (de-)interleaved, is then copied back.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-60029"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 287--><p style="text-indent:0em">
+</p>
+<center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes5x.png" alt="[      ]&#10;   A              [      |     ]&#10;  ------  -  &#8594;      A  &#8242; |B  &#8242;&#10;   B                     |&#10;" style="text-align:center" align="center"></img></center>
+<!--l. 298--><p style="text-indent:0em">
+</p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;9: </span><span>Rectangular copying transposition</span></div><!--tex4ht:label?: x1-60029 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 304--><p style="text-indent:1.5em">   This simplistic implementation explains a lot of the slowdown on odd powers of
+two sizes. However, even the in-place algorithm would probably be somewhat slower
+than a square in-place transpose of comparable size: copying rows and tracking
+whether they have already been swapped into place would still use a lot of
+cycles.
+</p><!--l. 310--><p style="text-indent:1.5em">   I believe the block copies could be simplified by going through the MMU.
+Matrices of 128K complex doubles or more will go through block copies (or swap) of
+at least 4 KB&#8230;the usual page size on x86oids. If the vectors are correctly aligned, we
+can instead remap pages in the right order. This is far from free, but it may well be
+faster than actually copying the data. We&#8217;re constantly paying for address translation
+but rarely do anything but <code style="font-family:monospace">mmap </code>address space in; why not try and exploit the
+hardware better?
+</p>
+   <h4><span>1.4   </span> <a id="x1-70001.4"></a>Choosing algorithms</h4>
+<!--l. 320--><p style="text-indent:0em">The <a href="https://github.com/pkhuong/Napa-FFT2/blob/master/medium-fft.lisp">medium FFT generator</a> produces code for the 2-step algorithm, with smaller
+FFTs computed by specialised radix-2 code. The copy/FFT/copy loops are manually
+unroll-and-jammed here too.
+</p><!--l. 326--><p style="text-indent:1.5em">   The <a href="https://github.com/pkhuong/Napa-FFT2/blob/master/medium-fft.lisp">large FFT generator</a> produces code for the 6-step algorithm (without the
+initial and final transpositions), with smaller FFTs computed either by the
+radix-2 or 2-step algorithms; the <a href="https://github.com/pkhuong/Napa-FFT2/blob/master/transpose.lisp">transposition generator</a> is exposed separately.
+I assume that out-of-order output is acceptable, and only transpose the
+input, in place. A final transposition would be necessary to obtain in-order
+output.
+</p><!--l. 336--><p style="text-indent:1.5em">   Figure <a href="#x1-700110">10<!--tex4ht:ref: fig:napa-tune --></a> lets us compare the performance of the 4 methods (radix-2, 2-step,
+6-step/radix-2 and 6-step/2-step).
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-700110"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 340--><p style="text-indent:0em">
+
+</p><!--l. 341--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/Napa-tune.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;10: </span><span>Respective performance of Napa-FFT2&#8217;s four methods for forward
+complex-double DFT</span></div><!--tex4ht:label?: x1-700110 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 347--><p style="text-indent:1.5em">   Again, radix-2 shows a severe performance degradation as soon as the working set
+exceeds L3 size. Both 6-step algorithms show spikes in runtimes on odd powers of
+two: the transposition code isn&#8217;t in-place for these vector sizes. On smaller inputs
+(below <span>&#8776; </span>2<sup><span style="font-size:70%">10</span></sup>), 6-step/2-step seems dominated by constant overhead, while the spikes
+are on even powers of two for 6-step/radix-2. I&#8217;m not sure why this is the case for
+6-step/radix-2, but the reverse for 2-step.
+</p><!--l. 355--><p style="text-indent:1.5em">   Table <a href="#x1-70021">1<!--tex4ht:ref: tab:napa-tune --></a> shows the same data, but scaled by the lowest cycle count for each input
+size; I don&#8217;t have confidence intervals, but the spread was extremely low, on the order
+of 1%.
+</p>
+   <div>
+                                                                  
+
+                                                                  
+<!--l. 359--><p style="text-indent:1.5em">   <a id="x1-70021"></a></p><hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 360--><p style="text-indent:0em">
+</p>
+<div style="margin-top:0.5em; margin-bottom:0.5em; text-align:center" align="left"> <table id="TBL-1" cellspacing="0" cellpadding="0" rules="groups" style="margin-right:auto; border-right:solid black 0.4pt; margin-left:auto; border-left:solid black 0.4pt"><colgroup id="TBL-1-1g"><col id="TBL-1-1"></col></colgroup><colgroup id="TBL-1-2g"><col id="TBL-1-2"></col><col id="TBL-1-3"></col><col id="TBL-1-4"></col><col id="TBL-1-5"></col></colgroup><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-1-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-1-1" align="right">lg <em style="font-style:italic">n</em></td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-2" align="center">Radix-2</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-3" align="center">2-step</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-4" align="center">6-step/radix-2</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-5" align="center">6-step/2-step</td>
+</tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-2-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-2-1" align="right">   2</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-3" align="center">     </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-4" align="center">            </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-5" align="center">           </td></tr><tr style="vertical-align:baseline;" id="TBL-1-3-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-3-1" align="right"> 3</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-3" align="center"> </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-4" align="center"> </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-5" align="center"></td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-4-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-4-1" align="right">   4</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-3" align="center">     </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-4" align="center">            </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-5" align="center">           </td></tr><tr style="vertical-align:baseline;" id="TBL-1-5-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-5-1" align="right"> 5</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-3" align="center"> </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-4" align="center"> </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-5" align="center"></td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-6-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-6-1" align="right">   6</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-6-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-6-3" align="center"> 1.28 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-6-4" align="center">    1.17       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-6-5" align="center">           </td></tr><tr style="vertical-align:baseline;" id="TBL-1-7-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-7-1" align="right"> 7</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-7-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-7-3" align="center"> 1.34 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-7-4" align="center"> 1.01 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-7-5" align="center"></td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-8-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-8-1" align="right">   8</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-8-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-8-3" align="center"> 1.17 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-8-4" align="center">    1.12       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-8-5" align="center">    2.04      </td></tr><tr style="vertical-align:baseline;" id="TBL-1-9-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-9-1" align="right"> 9</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-9-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-9-3" align="center"> 1.24 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-9-4" align="center"> 1.02 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-9-5" align="center"> 1.68</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-10-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-10-1" align="right">  10</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-10-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-10-3" align="center"> 1.17 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-10-4" align="center">    1.05       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-10-5" align="center">    1.51      </td></tr><tr style="vertical-align:baseline;" id="TBL-1-11-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-11-1" align="right"> 11</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-11-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-11-3" align="center"> 1.23 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-11-4" align="center"> 1.13 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-11-5" align="center"> 1.45</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-12-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-12-1" align="right">  12</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-12-2" align="center">  1.01  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-12-3" align="center"> 1.14 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-12-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-12-5" align="center">    1.36      </td></tr><tr style="vertical-align:baseline;" id="TBL-1-13-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-13-1" align="right"> 13</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-13-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-13-3" align="center"> 1.12 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-13-4" align="center"> 1.11 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-13-5" align="center"> 1.27</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-14-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-14-1" align="right">  14</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-14-2" align="center">  1.04  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-14-3" align="center"> 1.08 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-14-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-14-5" align="center">    1.16      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-15-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-15-1" align="right">  15</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-15-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-15-3" align="center"> 1.07 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-15-4" align="center">    1.08       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-15-5" align="center">    1.20      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-16-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-16-1" align="right">  16</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-16-2" align="center">  1.06  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-16-3" align="center"> 1.08 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-16-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-16-5" align="center">    1.13      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-17-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-17-1" align="right">  17</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-17-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-17-3" align="center"> 1.03 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-17-4" align="center">    1.03       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-17-5" align="center">    1.11      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-18-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-18-1" align="right">  18</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-18-2" align="center">  1.38  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-18-3" align="center"> 1.16 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-18-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-18-5" align="center">    1.15      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-19-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-19-1" align="right">  19</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-19-2" align="center">  1.30  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-19-3" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-19-4" align="center">    1.15       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-19-5" align="center">    1.21      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-20-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-20-1" align="right">  20</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-20-2" align="center">  1.41  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-20-3" align="center"> 1.04 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-20-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-20-5" align="center">    1.04      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-21-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-21-1" align="right">  21</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-21-2" align="center">       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-21-3" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-21-4" align="center">    1.04       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-21-5" align="center">    1.08      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-22-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-22-1" align="right">  22</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-22-2" align="center">       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-22-3" align="center"> 1.08 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-22-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-22-5" align="center">    1.07      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-23-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-23-1" align="right">  23</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-23-2" align="center">       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-23-3" align="center"> 1.03 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-23-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-23-5" align="center">    1.03      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-24-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-24-1" align="right">  24</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-24-2" align="center">       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-24-3" align="center"> 1.04 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-24-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-24-5" align="center">    1.03      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-25-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-25-1" align="right">  25</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-25-2" align="center">       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-25-3" align="center"> 1.02 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-25-4" align="center">    1.01       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-25-5" align="center">    1.00      </td>
+</tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-26-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-26-1" align="right">    </td></tr></table></div></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Table&#160;1:  </span><span>Relative  performance  of  Napa-FFT2&#8217;s  four  methods  for  forward
+complex-double DFT</span></div><!--tex4ht:label?: x1-70021 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr></div>
+<!--l. 396--><p style="text-indent:1.5em">   Radix-2 provides the best performance until <em style="font-style:italic">n </em>= 2<sup><span style="font-size:70%">12</span></sup>, at which point
+6-step/radix-2 is better for even powers of two. As input size grows, the gap between
+radix-2 and 2-step narrows, until <em style="font-style:italic">n </em>= 2<sup><span style="font-size:70%">19</span></sup>, at which point 2-step becomes faster than
+radix-2. Finally, from <em style="font-style:italic">n </em>= 2<sup><span style="font-size:70%">22</span></sup> onward, 6-step/radix-2 is faster than both radix-2 and
+2-step.
+</p><!--l. 402--><p style="text-indent:1.5em">   On ridiculously large inputs (2<sup><span style="font-size:70%">25</span></sup> points or more) 6-step/2-step seems to becomes
+slightly faster than 6-step/radix-2, reflecting the narrowing gap between radix-2 and
+2-step at sizes around 2<sup><span style="font-size:70%">13</span></sup> and greater. At first sight, it seems interesting to
+implement 6-step/6-step/radix-2, but this table is for out-of-order results; the 6-step
+algorithms depend on in-order results from the sub-FFTs, and, for those, 2-step
+consistently performs better.
+</p>
+   <h3><span>2   </span> <a id="x1-80002"></a>Napa-FFT2, Bordeaux-FFT, djbfft and FFTW</h3>
+<!--l. 411--><p style="text-indent:0em">Choosing the fastest method for each input size, from 2<sup><span style="font-size:70%">2</span></sup> to 2<sup><span style="font-size:70%">25</span></sup>, yields the full
+implementation of Napa-FFT2. The graph in figure <a href="#x1-800111">11<!--tex4ht:ref: fig:overall --></a> illustrates the performance of
+Bordeaux-FFT, Napa-FFT2 without the final transpose for 6-step, djbfft (which
+lacks transforms past 2<sup><span style="font-size:70%">13</span></sup>) with out-of-order output, and FFTW (the fastest of
+in-place and out-of-place for each size, at default planning settings). Napa-FFT2&#8217;s,
+or, rather, radix-2&#8217;s, performance curve is pretty much the same as djbfft&#8217;s until
+djbfft&#8217;s maximum size is reached. It&#8217;s interesting to note that djbfft is written in
+hand-tuned C, while Napa-FFT2 is machine-generated (SB)CL, without any low-level
+annotation except type declarations and the elimination of runtime safety
+checks.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-800111"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 425--><p style="text-indent:0em">
+
+</p><!--l. 426--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/Overall.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;11: </span><span>Comparison of runtimes for Bordeaux-FFT, Napa-FFT, djbfft and
+FFTW for forward complex-double DFT</span></div><!--tex4ht:label?: x1-800111 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 432--><p style="text-indent:1.5em">   Table <a href="#x1-80022">2<!--tex4ht:ref: tab:overall --></a> presents the same data, scaled by the lowest cycle count. FFTW
+consistently has the lowest cycle counts. Napa-FFT2 and djbfft are both around
+twice as slow on small and medium inputs, and, on larger inputs, Napa-FFT2
+becomes only 25% to 50% slower than FFTW. Bordeaux-FFT, however, is always
+around 3 times (or more) as slow as FFTW, and more than 50% slower than
+Napa-FFT2.
+</p>
+   <div>
+                                                                  
+
+                                                                  
+<!--l. 439--><p style="text-indent:1.5em">   <a id="x1-80022"></a></p><hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 440--><p style="text-indent:0em">
+</p>
+<div style="margin-top:0.5em; margin-bottom:0.5em; text-align:center" align="left"> <table id="TBL-2" cellspacing="0" cellpadding="0" rules="groups" style="margin-right:auto; border-right:solid black 0.4pt; margin-left:auto; border-left:solid black 0.4pt"><colgroup id="TBL-2-1g"><col id="TBL-2-1"></col></colgroup><colgroup id="TBL-2-2g"><col id="TBL-2-2"></col><col id="TBL-2-3"></col><col id="TBL-2-4"></col><col id="TBL-2-5"></col></colgroup><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-2-1-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-1-1" align="right">lg <em style="font-style:italic">n</em></td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-1-2" align="center">Bordeaux</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-1-3" align="center">Napa</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-1-4" align="center"> djb </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-1-5" align="center">FFTW</td>
+</tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-2-2-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-2-1" align="right">   2</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-2-2" align="center">  7.26    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-2-3" align="center"> 1.71 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-2-4" align="center">1.00</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-2-5" align="center"> 1.21  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-3-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-3-1" align="right"> 3</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-3-2" align="center"> 7.04 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-3-3" align="center"> 1.35 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-3-4" align="center">1.00</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-3-5" align="center"> 1.11</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-4-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-4-1" align="right">   4</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-4-2" align="center">  6.83    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-4-3" align="center"> 1.57 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-4-4" align="center">1.39</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-4-5" align="center"> 1.00  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-5-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-5-1" align="right"> 5</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-5-2" align="center"> 6.46 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-5-3" align="center"> 2.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-5-4" align="center">2.06</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-5-5" align="center"> 1.00</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-6-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-6-1" align="right">   6</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-6-2" align="center">  6.10    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-6-3" align="center"> 2.18 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-6-4" align="center">2.25</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-6-5" align="center"> 1.00  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-7-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-7-1" align="right"> 7</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-7-2" align="center"> 5.52 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-7-3" align="center"> 2.22 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-7-4" align="center">2.32</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-7-5" align="center"> 1.00</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-8-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-8-1" align="right">   8</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-8-2" align="center">  4.60    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-8-3" align="center"> 2.03 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-8-4" align="center">2.11</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-8-5" align="center"> 1.00  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-9-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-9-1" align="right"> 9</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-9-2" align="center"> 4.48 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-9-3" align="center"> 2.11 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-9-4" align="center">2.22</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-9-5" align="center"> 1.00</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-10-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-10-1" align="right">  10</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-10-2" align="center">  4.41    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-10-3" align="center"> 2.13 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-10-4" align="center">2.24</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-10-5" align="center"> 1.00  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-11-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-11-1" align="right"> 11</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-11-2" align="center"> 4.15 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-11-3" align="center"> 2.11 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-11-4" align="center">2.19</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-11-5" align="center"> 1.00</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-12-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-12-1" align="right">  12</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-12-2" align="center">  3.57    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-12-3" align="center"> 1.87 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-12-4" align="center">1.93</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-12-5" align="center"> 1.00  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-13-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-13-1" align="right"> 13</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-13-2" align="center"> 3.73 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-13-3" align="center"> 2.08 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-13-4" align="center">1.98</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-13-5" align="center"> 1.00</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-14-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-14-1" align="right">  14</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-14-2" align="center">  3.29    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-14-3" align="center"> 1.82 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-14-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-14-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-15-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-15-1" align="right">  15</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-15-2" align="center">  3.10    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-15-3" align="center"> 1.81 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-15-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-15-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-16-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-16-1" align="right">  16</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-16-2" align="center">  3.11    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-16-3" align="center"> 1.74 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-16-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-16-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-17-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-17-1" align="right">  17</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-17-2" align="center">  3.08    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-17-3" align="center"> 1.84 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-17-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-17-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-18-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-18-1" align="right">  18</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-18-2" align="center">  3.78    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-18-3" align="center"> 1.59 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-18-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-18-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-19-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-19-1" align="right">  19</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-19-2" align="center">  2.95    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-19-3" align="center"> 1.47 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-19-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-19-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-20-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-20-1" align="right">  20</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-20-2" align="center">  2.86    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-20-3" align="center"> 1.37 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-20-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-20-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-21-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-21-1" align="right">  21</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-21-2" align="center">  2.56    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-21-3" align="center"> 1.36 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-21-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-21-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-22-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-22-1" align="right">  22</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-22-2" align="center">  2.97    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-22-3" align="center"> 1.25 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-22-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-22-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-23-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-23-1" align="right">  23</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-23-2" align="center">  3.09    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-23-3" align="center"> 1.50 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-23-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-23-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-24-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-24-1" align="right">  24</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-24-2" align="center">  2.83    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-24-3" align="center"> 1.23 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-24-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-24-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-25-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-25-1" align="right">  25</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-25-2" align="center">  2.87    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-25-3" align="center"> 1.43 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-25-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-25-5" align="center"> 1.00  </td>
+</tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-2-26-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-26-1" align="right">    </td></tr></table></div></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Table&#160;2: </span><span>Relative runtimes for Bordeaux-FFT, Napa-FFT, djbfft and FFTW
+for forward complex-double DFT</span></div><!--tex4ht:label?: x1-80022 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr></div>
+   <h3><span>3   </span> <a id="x1-90003"></a>What&#8217;s next?</h3>
+<!--l. 477--><p style="text-indent:0em">The prototype is already pretty good, and definitely warrants more hacking. There
+are a few obvious things on my list: </p>
+     <ul><li>Most of the improvements in the radix-2 generator (larger base cases and
+     making the temporary vector useless) can be ported to Bordeaux-FFT;
+     </li>
+     <li>Both the small FFT generator and Bordeaux-FFT could benefit from a
+     split-radix (radix-2/4 instead radix-2) rewrite;
+     </li>
+     <li>Scaling (during copy or transpose) is already coded, it must simply be
+     enabled;
+     </li>
+     <li>Inverse transforms would be useful;
+     </li>
+     <li>In-place  rectangular  transpositions  would  probably  help  reduce  the
+     performance  gap  between  odd  and  even  powers  of  two  for  the  6-step
+     algorithms;
+     </li>
+     <li>Processing real input specially can lead to hugely faster code with little
+     work;
+     </li>
+     <li>Generalizing     the     transposition     code     to     handle     arbitrary
+     (power-of-two&#8211;sized) matrices would enable easy multidimensional FFTs;
+     </li>
+     <li>Finally,   I   must   write   a   library   instead   of   writing   base   cases,
+     constant-folding address computations or unrolling (and jamming) loops
+     by  hand.  It  would  pretty  much  be  a  compiler  geared  toward  large
+     recursively-generated, but repetitive and simple, array-manipulation code.</li></ul><!--l. 503--><p style="text-indent:1.5em">   It&#8217;s pretty clear that SBCL&#8217;s native support on x86-64 for SSE2 complex float
+arithmetic pays off. I expect other tasks would similarly benefit from hand-written
+assembly routines for a few domain-specific operations. SBCL&#8217;s architecture makes
+that very easy. It&#8217;s when we want to rewrite patterns <em style="font-style:italic">across </em>function calls that
+Python gets in the way&#8230;and that&#8217;s exactly what code generators should be concerned
+with getting right.
+                                                                  
+
+                                                                  
+</p><!--l. 511--><p style="text-indent:1.5em">   In the end, I think the most interesting result is that the runtime performance of
+(SB)CL can definitely be competitive with C for memory-bound tasks like FFT.
+Common Lisp compilers generally suffer from simplistic, 70&#8217;s-style, low-level code
+generation facilities; luckily, when tackling memory-bound tasks, getting
+the algorithms and data layouts right to reduce the operation count and
+exploit hierarchical memory matters a lot more. The advantage of CL is
+that, unlike C, it&#8217;s easy to generate and compile, even at runtime. CL is also
+easier to debug, since we can enable or disable runtime checks with a single
+declaration.
+</p><!--l. 522--><p style="text-indent:1.5em">   If the trend of memory bandwidth (and latency) improving much more slowly
+than computing power persists, while we keep processing larger data sets, the
+suitability of Common Lisp to the generation of high-performance code is an asset
+that will prove itself more and more useful in the near future.
+</p><!--l. 528--><p style="text-indent:1.5em">   I&#8217;m also pleasantly surprised by the performance of Napa-FFT2, regardless of the
+target language. I&#8217;ll probably try and re-implement it in runtime-specialised C
+(<a href="https://github.com/pkhuong/VLBDB">VLBDB</a>, another side-project of mine). This would hopefully help close the gap with
+FFTW even further, and make it easier to try and exploit MMU tricks.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 18:45 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/napa-fft2-implementation-notes.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Sat, 01 Jan 2011</h2>
+<div class="entry">
+  <a id="two-neat-tricks" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Two variations on old themes</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">I&#8217;ve been reading some code, and going through some old notes today and I think the
+following two tricks are too neat not to share.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>Ticket &#8220;spinaphores&#8221;</h3>
+<!--l. 15--><p style="text-indent:0em">I stumbled upon those in the ia64 section of Linux (<code style="font-family:monospace">arch/ia64/mm/tlb.c</code>); they
+adjust ticket spinlocks to allow multiple processes in the critical section.
+</p><!--l. 19--><p style="text-indent:0em">
+</p>
+   <h4><span>1.1   </span> <a id="x1-20001.1"></a>Ticket spinlocks</h4>
+<!--l. 20--><p style="text-indent:0em">LWN has a very good description of Linux&#8217;s implementation of ticket spinlocks at
+<a href="http://lwn.net/Articles/267968/">http://lwn.net/Articles/267968/</a>.
+</p><!--l. 24--><p style="text-indent:1.5em">   The basic idea is to have two counters, a ticket counter, and a &#8220;now serving&#8221;
+(serve) counter. Both are initialised to 0, and monotonically incremented (with
+wraparound). Each process that wants to hold the spinlock goes through three steps:
+acquiring a ticket, waiting for its turn, and releasing the spinlock.
+</p><!--l. 30--><p style="text-indent:1.5em">   Acquiring a ticket is a fetch-and-add (atomically increment the ticket counter,
+and return the previous value).
+</p><!--l. 33--><p style="text-indent:1.5em">   Once a process has a ticket number, it spins on the serve counter until its value is
+equal to the process&#8217;s ticket; the process then holds the spinlock.
+</p><!--l. 37--><p style="text-indent:1.5em">   Finally, to release the spinlock, a process increments the serve counter, signaling
+to the next process in line that it&#8217;s now its turn.
+</p><!--l. 40--><p style="text-indent:1.5em">   x86oids have a fairly strong memory model, and Linux exploits that to simplify
+its ticket locks: both counters are packed in a single word, so that acquiring a ticket
+and reading the serve counter is a single instruction, and the serve counter is
+incremented with a half-word instruction (cache coherence and the barrier in
+fetch-and-add are enough to avoid reordering).
+</p><!--l. 47--><p style="text-indent:0em">
+</p>
+   <h4><span>1.2   </span> <a id="x1-30001.2"></a>From locks to counting semaphores</h4>
+<!--l. 48--><p style="text-indent:0em">&#8220;spinaphores&#8221; generalize the serve counter. Instead of serving only the one process
+whose ticket is equal to the serve counter, they instead serve all the processes whose
+tickets are inferior to the serve counter. To allow <em style="font-style:italic">k </em>processes to hold a spinaphore
+concurrently, the serve counter is simply initialised to <em style="font-style:italic">k</em>: the serve counter is only
+incremented when a process releases the spinaphore, so all but the last <em style="font-style:italic">k </em>processes
+with low enough tickets have already released the spinaphore. The only other
+difference with ticket spinlocks is that incrementing the serve counter must also be
+atomic.
+                                                                  
+
+                                                                  
+</p><!--l. 58--><p style="text-indent:1.5em">   There are some wraparound issues with the definition of &#8220;inferior&#8221;, but the
+distance between the ticket and serve counters is bounded by the number of
+concurrent waiters, which can&#8217;t be too large. One can thus define &#8220;inferior&#8221; as being
+in [<code style="font-family:monospace">serve</code><span>-</span><em style="font-style:italic">M,</em><code style="font-family:monospace">serve</code>] (with wraparound), where <em style="font-style:italic">M </em>is an arbitrary large value (e.g.
+2<sup><span style="font-size:70%">31</span></sup>). On a computer, that&#8217;s pretty much equivalent to subtracting the ticket and the
+serve counter and looking at the sign bit.
+</p><!--l. 67--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-40002"></a>Robin hood hashing</h3>
+<!--l. 68--><p style="text-indent:0em">I have been looking for a hash table scheme that work well with modern hardware for
+a couple years now; <a href="http://www.pvk.ca/Blog/numerical_experiments_in_hashing.html">Numerical experiments in hashing</a> and <a href="http://www.pvk.ca/Blog/LowLevel/more_to_locality_than_cache.html">There&#8217;s more to locality
+than caches</a> are related to this effort. It seems that most of the good worst-case
+bounds come from choosing between multiple buckets during insertion (e.g. d-left and
+cuckoo hashing).
+</p><!--l. 77--><p style="text-indent:1.5em">   In his Phd thesis &#8220;<a href="http://www.cs.uwaterloo.ca/research/tr/1986/CS-86-14.pdf">Robin Hood Hashing</a>&#8221;, Pedro Celis describes a simple variant
+of open addressing hashing that also achieves very good worst-case bounds. In fact,
+in &#8220;<a href="http://cg.scs.carleton.ca/~luc/robinhood.pdf">On worst-case Robin Hood hashing</a>&#8221;, Devroye, Morin &amp; Viola find that, for load
+factors inferior to 1, the worst-case performance of Robin Hood hash tables is pretty
+much identical to that of multiple-choice hashing schemes (<span><img src="http://www.pvk.ca/Blog/resources/cmsy10-4f.png" alt="O"></img></span>(lg log <em style="font-style:italic">n</em>), with high
+probability).
+</p><!--l. 87--><p style="text-indent:1.5em">   When inserting in regular open addressing tables, the first entry to probe a given
+cell is allocated to it; the allocation is first-come, first-served. Robin Hood hashing
+instead bump entries to make sure that lookups don&#8217;t have to probe too long: if a
+new entry hashes to an occupied cell <em style="font-style:italic">n </em>probes after its initial hash location, while the
+occupant is only <em style="font-style:italic">m &lt; n </em>probes away from its own initial location, the current
+occupant is bumped out and iteratively re-inserted in the table. Intuitively, this
+policy isn&#8217;t useful to improve the average probe length (in fact, it may even worsen
+it), but rather to reduce the variance of probe lengths, and thus the worst
+case.
+</p><!--l. 98--><p style="text-indent:1.5em">   The theoretical results assume independent random probing sequences for each
+key. In his simulations and numerical experiments, Celis approximated that ideal
+with double hashing, and found that this small tweak to the usual collision handling
+scheme results in an exponential improvement in the worst case performance of open
+addressing hash tables! In fact, some simulations on my end make me believe that the
+performance might be almost as excellent with linear probing instead of
+double hashing, which is extremely interesting for cache-friendly hash tables (:
+</p> 
+
+
+    </div>
+<p>
+  posted at: 22:32 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/two-neat-tricks.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Sun, 11 Jul 2010</h2>
+<div class="entry">
+  <a id="more_to_locality_than_cache" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>There's more to locality than caches</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">After some <a href="http://www.pvk.ca/Blog/numerical_experiments_in_hashing.html">theoretical experiments on hash tables</a>, I implemented a prototype for
+2-left hash tables with large buckets (16 entries) to see how it&#8217;d work in the real
+world. It worked pretty well, but the way its performance scaled with table size
+sometimes baffled me. Playing with the layout (despite not fully understanding the
+initial prototype&#8217;s behaviour) helped, but the results were still confounding. The
+obvious solution was to run microbenchmarks and update my mental performance
+model for accesses to memory!
+</p><!--l. 22--><p style="text-indent:1.5em">   (The full set of results are at the end, but I&#8217;ll copy the relevant bits
+inline.)
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>The microbenchmark</h3>
+<!--l. 26--><p style="text-indent:0em">The microbenchmark consists of ten million independent repetitions of a small loop
+that executes an access pattern on 16 independent cache lines. The addresses are
+generated with a Galois LFSR to minimise the number of uninteresting memory
+accesses while foiling any prefetch logic.
+</p><!--l. 32--><p style="text-indent:1.5em">   There are four access patterns. The first pattern, &#8220;0&#8221;, reads the first word in the
+line; &#8220;0-3&#8221; reads the first and fourth words; &#8220;0-3-7&#8221; reads the first, fourth and eighth
+(last) words; finally, &#8220;0-3-7-8&#8221; reads the first, fourth and eighth words of the cache
+line and the first of the next cache line. It would be interesting to test &#8220;0-8&#8221;, but it&#8217;s
+not that relevant to my application.
+</p><!--l. 39--><p style="text-indent:1.5em">   The working sets are allocated in regular pages (4K bytes) or in huge pages (2M
+bytes) to investigate the effect of the TLB (<a href="http://en.wikipedia.org/wiki/Translation_lookaside_buffer">Translation Lookaside Buffer</a>) when
+appropriate. A wide number of working set sizes are tested, from 16 KB to 1
+GB.
+</p><!--l. 45--><p style="text-indent:1.5em">   Finally, &#8220;Cache miss&#8221; measures the number of cache misses (that is, accesses that
+hit main memory) across the execution of the program, in millions (including a
+small amount of noise, e.g. to record timings); &#8220;TLB miss&#8221; measures the
+number of TLB misses (the TLB caches mappings from logical to physical
+address), again in millions; and &#8220;Cycle/pattern&#8221; is the median number of cycles
+required to execute the access pattern once, computed as the average of
+16 independent pattern executions (without compensating for timing or
+looping overhead, which should be on the order of 20-30 cycles for all 16
+executions).
+</p><!--l. 56--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>Mistake number one: Use the whole cache line, it&#8217;s free</h3>
+<!--l. 57--><p style="text-indent:0em">CPUs deal with memory one cache line at a time. Barring non-temporal accesses,
+reading even a single byte results in reading the whole corresponding cache line (64
+bytes on current x86oids). Thus, the theory goes, we&#8217;re always going to pay for
+                                                                  
+
+                                                                  
+loading the whole cache line from memory and it shouldn&#8217;t be any slower to read it
+all than to access only a single word.
+</p><!--l. 64--><p style="text-indent:1.5em">   My initial prototype had buckets (of 16 entries) split in two vectors, one for the
+hash values (four byte each, so one cache line per bucket of hash values), and another
+for the key-value pairs (more than a cache line per bucket, but the odds of two
+different keys hashing identically are low enough that it shouldn&#8217;t be an issue).
+Having the hashes in a vector of their own should have improved locality
+and definitely simplified the use of SSE to compare four hash values at a
+time.
+</p><!--l. 73--><p style="text-indent:1.5em">   The in-cache performance was as expected. Reads had a pretty much
+constant overhead, with some of it hidden by out of order and superscalar
+execution.
+</p><!--l. 77--><p style="text-indent:1.5em">   In my microbenchmark, that&#8217;s represented by the test cases with working set size
+from 16KB to 256KB (which all fit in L1 or L2 caches). All the misses are noise (5
+million misses for 160 million pattern execution is negligible), and we observe a slow
+increase for &#8220;Cycle/pattern&#8221; as the size of the working set and the number of
+accesses go up.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">                +--------------------------------+ 
+                |           4K pages             | 
+                |    0      0-3    0-3-7  0-3-7-8| 
+                +--------------------------------+ 
+  Size 16KB     |                                | 
+Cache miss (M)  |   3.89    3.85    3.88    3.88 | 
+TLB miss   (M)  |   0.50    0.51    0.50    0.58 | 
+Cycle/pattern   |   4.50    6.25    6.50    6.50 | 
+                |                                | 
+                +--------------------------------+ 
+  Size 32KB     |                                | 
+Cache miss (M)  |   3.79    3.87    3.86    3.88 | 
+TLB miss   (M)  |   0.52    0.51    0.50    0.50 | 
+Cycle/pattern   |   4.75    6.25    6.25    6.50 | 
+                |                                | 
+                +--------------------------------+ 
+  Size 128KB    |                                | 
+Cache miss (M)  |   3.80    3.67    3.84    3.66 | 
+TLB miss   (M)  |   0.52    0.36    0.50    0.39 | 
+Cycle/pattern   |   5.25    6.25    6.50    7.25 | 
+                |                                | 
+                +--------------------------------+ 
+  Size 256KB    |                                | 
+Cache miss (M)  |   5.03    5.07    5.07    4.06 | 
+TLB miss   (M)  |   0.51    0.50    0.51    0.47 | 
+Cycle/pattern   |   5.25    6.50    7.25    7.25 | 
+                |                                | 
+                +--------------------------------+</pre>
+<!--l. 114--><p style="text-indent:0em">
+</p><!--l. 117--><p style="text-indent:1.5em">   Once we leave cache, for instance at 128MB, things get weirder:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">                +--------------------------------+ 
+                |           4K pages             | 
+                |    0     0-3    0-3-7  0-3-7-8 | 
+                +--------------------------------+ 
+  Size 128MB    |                                | 
+Cache miss (M)  | 153.21  153.35  296.01  299.06 | 
+TLB miss   (M)  | 158.00  158.07  158.10  160.58 | 
+Cycle/pattern   |  30.50   34.50   41.00   44.00 | 
+                |                                | 
+                +--------------------------------+</pre>
+<!--l. 130--><p style="text-indent:0em">
+</p><!--l. 133--><p style="text-indent:1.5em">   According to my theory, the cost for accessing additional words in the same cache
+line should be negligible compared to loading it from memory. Yet, &#8220;Cycle/pattern&#8221;
+increases slowly but regularly. I believe that the reason for that is that memory
+controllers don&#8217;t read a full cache line at a time. When an uncached address is
+accessed, the CPU does load the whole line into cache, but only in multiple
+steps.
+</p><!--l. 141--><p style="text-indent:1.5em">   The first step also executes much slower than the others because of the way
+memory is addressed in RAM: addresses are sent in two halves, first the &#8220;column&#8221;,
+and then the &#8220;row&#8221;. To read an arbitrary address, both halves must be sent, one
+after the other. Reading an address close to the previous one, however, only updates
+the row.
+</p><!--l. 147--><p style="text-indent:1.5em">   It&#8217;s also interesting to note that both patterns &#8220;0-3-7&#8221; and &#8220;0-3-7-8&#8221; trigger about
+twice as many cache misses as &#8220;0&#8221; and &#8220;0-3&#8221;. Yet, &#8220;0-3-7&#8221; only reads from one cache
+line, while &#8220;0-3-7-8&#8221; reads from two. I believe that&#8217;s because of prefetching.
+We&#8217;ll come back to the issue of multiple reads from out-of-cache memory
+later.
+</p><!--l. 154--><p style="text-indent:1.5em">   So, while it is true that it&#8217;s better to fully use a cache line (because it&#8217;ll be
+completely read regardless), reading more words still incurs additional latency, and
+it&#8217;s only slightly cheaper than hitting an adjacent cache line.
+</p><!--l. 159--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-30003"></a>Mistake number two: Cache misses dominate everything else</h3>
+<!--l. 160--><p style="text-indent:0em">In response to my better understanding of memory, I changed the layouts of my
+buckets to minimise the expected number of reads. In the end, I decided to pack each
+bucket&#8217;s hash values in a header of 128 bit (the size of an XMM register). With 16
+bytes used for the hash values, I could append 15 key-value pairs to have a
+                                                                  
+
+                                                                  
+round size of 256 bytes per bucket, and execute only adjacent accesses on
+successful lookups. The extra 16<sup><span style="font-size:70%">th</span></sup> hash value stored the number of entries in the
+bucket.
+</p><!--l. 170--><p style="text-indent:1.5em">   So, instead of having one vector of hash buckets and one of value buckets per
+subtable (and two subtables per hash table):
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">struct entry { 
+        u64 key, val; 
+}; 
+ 
+struct hash_bucket { 
+        u32 hashes[16]; 
+}; 
+ 
+struct value_bucket { 
+        struct entry entries[16]; 
+};</pre>
+<!--l. 184--><p style="text-indent:0em">
+</p><!--l. 186--><p style="text-indent:1.5em">   I had:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">struct bucket { 
+        union { 
+                vu8 pack; // SSE vector of u8 
+                u8  vec[16]; 
+        } hash; 
+        struct entry entries[15]; 
+};</pre>
+<!--l. 195--><p style="text-indent:0em">
+</p><!--l. 198--><p style="text-indent:1.5em">   The new layout meant that I only had one byte of hash value for each entry. It
+wasn&#8217;t such an issue, since I was already computing two independent hash values per
+key (for the two subtables). When working with the right subtable, I could simply
+store the hash value from the left subtable (but still index buckets with the right
+subtable&#8217;s hash value), and vice versa. Since the hashes are independent, the odds of
+false positives are on the order of 5%. According to my new-found knowledge,
+this should perform really well: only one access to scan the hash values,
+and then, when the hash values match, the key-value pairs are at adjacent
+addresses.
+</p><!--l. 209--><p style="text-indent:1.5em">   The histogram of timings for inserts and lookups did improve and even showed
+nice, steep peaks (depending on whether one or two subtables were probed). Yet,
+there was still something really hard to explain: I seemed to run out cache much
+earlier than expected.
+</p><!--l. 214--><p style="text-indent:1.5em">   I have 256KB of L2 cache, and 12MB of L3 on my machine... but, in my
+microbenchmark, we observe drastic changes in timings even between working sets of
+2MB and 8MB:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">                +--------------------------------+ 
+                |           4K pages             | 
+                |    0     0-3    0-3-7  0-3-7-8 | 
+                +--------------------------------+ 
+  Size 2MB      |                                | 
+Cache miss (M)  |   5.06    5.10    5.11    5.14 | 
+TLB miss   (M)  |   0.67    0.85    0.88    0.90 | 
+Cycle/pattern   |   6.50    7.25    8.75   10.75 | 
+                |                                | 
+                +--------------------------------+ 
+  Size 8MB      |                                | 
+Cache miss (M)  |   7.29    7.28    8.67    8.68 | 
+TLB miss   (M)  | 120.45  120.55  120.63  122.52 | 
+Cycle/pattern   |  11.00   13.00   15.50   17.25 | 
+                |                                | 
+                +--------------------------------+</pre>
+<!--l. 235--><p style="text-indent:0em">
+</p><!--l. 238--><p style="text-indent:1.5em">   The access times nearly double, for working sets that both are much larger than
+L2 but do fit in L3 (as evidenced by the very low number of cache misses).
+This is where the &#8220;TLB miss&#8221; row is interesting: the number of TLB misses
+goes from negligible to nearly one miss per access (each access to memory
+triggers a TLB lookup to map from logical to physical address). The L2
+TLB on my machine holds 512 pages, at 4K each, for a total of 2MB; a
+working set not fitting in TLB has as much of an impact as not fitting in
+cache!
+</p><!--l. 247--><p style="text-indent:1.5em">   I should have thought of that: people who ought to know like kernel developers or
+Kazushige Goto (of GotoBLAS and libflame fame) have been writing about the effect
+of TLB misses since at least 2005. So, I used huge pages (2MB instead of 4KB)
+and observed a return to sanity. On my microbenchmark, this shows up
+as:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">                +--------------------------------+---------------------------------+ 
+                |           4K pages             :          2M pages               | 
+                |    0     0-3    0-3-7  0-3-7-8 :   0      0-3    0-3-7   0-3-7-8 | 
+                +--------------------------------+---------------------------------+ 
+  Size 2MB      |                                :                                 | 
+Cache miss (M)  |   5.06    5.10    5.11    5.14 :   5.03   5.01    5.02    5.05   | 
+TLB miss   (M)  |   0.67    0.85    0.88    0.90 :   0.23   0.27    0.23    0.24   | 
+Cycle/pattern   |   6.50    7.25    8.75   10.75 :   5.25   6.75    7.75    9.75   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 8MB      |                                :                                 | 
+Cache miss (M)  |   7.29    7.28    8.67    8.68 :   5.21   5.22    5.22    5.25   | 
+TLB miss   (M)  | 120.45  120.55  120.63  122.52 :   0.23   0.30    0.27    0.25   | 
+Cycle/pattern   |  11.00   13.00   15.50   17.25 :   5.00   6.75    7.75   10.00   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+</pre>
+<!--l. 271--><p style="text-indent:0em">
+</p><!--l. 274--><p style="text-indent:1.5em">   Using huge pages cuts the times by almost 50% on the microbenchmark; that&#8217;s on
+par the difference between L3 and L1 (only <span>&#8776; </span>33%, but timing overhead is much
+more significative for L1). More importantly, the timings are the same for two
+working sets that fit in L3 but largely spill out of L2.
+</p><!--l. 280--><p style="text-indent:1.5em">   Improvements are almost as good when hitting main memory:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">                +--------------------------------+---------------------------------+ 
+                |           4K pages             :          2M pages               | 
+                |    0     0-3    0-3-7  0-3-7-8 :   0      0-3    0-3-7   0-3-7-8 | 
+                +--------------------------------+---------------------------------+ 
+  Size 16MB     |                                :                                 | 
+Cache miss (M)  |  49.37   49.41   90.72   91.77 :  47.82  47.72   81.46   88.01   | 
+TLB miss   (M)  | 140.59  140.60  140.67  142.87 :   0.25   0.25    0.24    0.25   | 
+Cycle/pattern   |  18.00   20.50   24.00   26.50 :  14.00  15.25   17.00   18.75   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 32MB     |                                :                                 | 
+Cache miss (M)  | 106.93  107.09  203.73  207.82 : 106.55  106.62  186.50  206.83  | 
+TLB miss   (M)  | 150.56  150.74  150.82  153.09 :   0.24   0.26    0.25    0.27   | 
+Cycle/pattern   |  22.25   24.75   31.00   34.00 :  15.75  17.25   20.00   27.50   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 64MB     |                                :                                 | 
+Cache miss (M)  | 137.03  137.23  263.73  267.88 : 136.67  136.82  232.64  266.93  | 
+TLB miss   (M)  | 155.63  155.79  155.81  158.21 :   5.09   5.25    5.69    5.78   | 
+Cycle/pattern   |  26.00   29.25   36.75   39.75 :  16.75  18.25   24.25   30.75   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+</pre>
+<!--l. 305--><p style="text-indent:0em">
+The access times are much better (on the order of 30% fewer cycles), but they also
+make a lot more sense: the difference in execution time between working sets that
+don&#8217;t fit in last level cache (L3) is a lot smaller with huge pages. Moreover,
+now that TLB misses are out of the picture, accesses to two cache lines
+(&#8220;0-3-7-8&#8221;) are almost exactly twice as expensive as an access to one cache line
+(&#8220;0&#8221;).
+</p><!--l. 314--><p style="text-indent:1.5em">   My test machine has a 32 entry TLB for 2M pages (and another 32 for 4M pages,
+but my kernel doesn&#8217;t seem to support multiple huge page sizes). That&#8217;s enough for
+64 MB of address space. Indeed, we observe TLB misses with larger working
+sets:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">                +--------------------------------+---------------------------------+ 
+                |           4K pages             :          2M pages               | 
+                |    0     0-3    0-3-7  0-3-7-8 :   0      0-3    0-3-7   0-3-7-8 | 
+                +--------------------------------+---------------------------------+ 
+  Size 128MB    |                                :                                 | 
+Cache miss (M)  | 153.21  153.35  296.01  299.06 : 152.77  152.86  261.09  298.71  | 
+TLB miss   (M)  | 158.00  158.07  158.10  160.58 :  80.84   84.96   91.48   96.40  | 
+Cycle/pattern   |  30.50   34.50   41.00   44.00 :  18.75   20.75   27.25   33.25  | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 512MB    |                                :                                 | 
+Cache miss (M)  | 170.65  170.90  326.84  329.59 : 169.90  170.22  286.47  326.54  | 
+TLB miss   (M)  | 160.39  160.41  162.17  164.62 : 140.35  147.28  160.81  179.58  | 
+Cycles/patterm  |  36.75   41.00   47.00   50.00 :  20.50  23.00   29.75   35.50   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 1GB      |                                :                                 | 
+Cache miss (M)  | 184.29  184.29  353.23  356.73 : 180.11  180.43  300.66  338.62  | 
+TLB miss   (M)  | 163.64  164.26  176.04  178.88 : 150.37  157.85  169.58  190.89  | 
+Cycle/pattern   |  37.25   41.50   52.00   55.25 :  22.00  24.75   30.50   37.00   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+</pre>
+<!--l. 342--><p style="text-indent:0em">
+</p><!--l. 345--><p style="text-indent:1.5em">   However, even with a working set of 1GB, with nearly as many TLB misses for
+huge as for regular pages, we see a reduction in timing by 30-40%. I think that&#8217;s
+simply because the page table fits better in cache and is quicker to search. 1GB of
+address space uses 256K pages (at 4KB each). If each page descriptor uses only 16
+bytes (one quad word for the logical address and another for the physical address),
+that&#8217;s still 4MB for the page table!
+</p><!--l. 353--><p style="text-indent:0em">
+</p>
+   <h3><span>4   </span> <a id="x1-40004"></a>TL;DR</h3>
+     <ul><li>Multiple accesses to the same cache line still incur a latency overhead over
+     only one access (but not in memory throughput, since the cache line will
+     be fully read anyway).
+                                                                  
+
+                                                                  
+     </li>
+     <li>Use huge pages if you can. Otherwise, you&#8217;ll run out of TLB space at about
+     the same time as you&#8217;ll leave L2 (or even earlier)... and TLB misses are
+     more expensive than L2 misses, almost as bad as hitting main memory.
+     </li>
+     <li>Prefer accessing contiguous cache lines. If you can&#8217;t use huge pages or if
+     your working set is very large, only one TLB miss is incurred for accesses to
+     lines in the same page. You might also benefit from automatic prefetching.
+     </li>
+     <li>This is why cache-oblivious algorithms are so interesting: they manage to
+     take advantage of all those levels of caching (L1, L2, TLB, L3) without
+     any explicit tuning, or even considering multiple levels of caches.</li></ul><!--l. 372--><p style="text-indent:0em">The test code can be found at <a href="http://discontinuity.info/~pkhuong/cache-test.c"><code style="font-family:monospace">http://discontinuity.info/~pkhuong/cache-test.c</code></a>.
+</p><!--l. 376--><p style="text-indent:1.5em">   I could have tried to tweak the layout of my 2-left hash table some more in
+reaction to my new cost model. However, it seems that it&#8217;s simply faster to hit
+multiple contiguous cache lines (e.g. like linear or quadratic probing) than to access a
+few uncorrelated cache lines (2-left or cuckoo hashing). I&#8217;m not done playing with
+tuning hash tables for caches, though! I&#8217;m currently testing a new idea that seems to
+have both awesome utilisation and very cheap lookups, but somewhat heavier inserts.
+More on that soon(ish).
+</p><!--l. 385--><p style="text-indent:0em">
+</p>
+   <h3><span>5   </span> <a id="x1-50005"></a>Annex: full tables of results from the microbenchmark</h3>
+     <ul><li>Test machine: unloaded 2.8 GHz Xeon (X5660) with DDR3-1333 (I don&#8217;t
+     remember the timings)
+     </li>
+     <li>Cache sizes:
+         <ul><li>L1D: 32 KB
+         </li>
+         <li>L2: 256 KB
+         </li>
+         <li>L3: 12 MB</li></ul></li>
+     <li>TLB sizes
+                                                                  
+
+                                                                  
+         <ul><li>L1 dTLB (4KB): 64 entries
+         </li>
+         <li>L1 dTLB (2M):32 entries
+         </li>
+         <li>L2 TLB (4 KB): 512 entries</li></ul></li></ul><!--l. 403--><p style="text-indent:0em">Benchmark description: access 16 independent cache lines, following one of four
+access patterns. 10M repetitions (with different addresses). Test with regular 4KB
+pages and with huge pages (2MB). Report the total number of cache and TLB misses
+(in million), and the median of the number of cycle per repetition (divided by 16,
+without adjusting for looping or timing overhead, which should be around 30 cycles
+per repetition). Source at <a href="http://discontinuity.info/~pkhuong/cache-test.c"><code style="font-family:monospace">http://discontinuity.info/~pkhuong/cache-test.c</code></a>.
+</p><!--l. 414--><p style="text-indent:1.5em">   Access patterns: </p>
+     <ul><li>0: Read the cache line&#8217;s first word
+     </li>
+     <li>0-3: Read the cache line&#8217;s first and fourth words
+     </li>
+     <li>0-3-7: Read the cache line&#8217;s first, fourth and eighth words
+     </li>
+     <li>0-3-7-8: Read the cache line&#8217;s first, fourth and eighth words, and the next
+     cache line&#8217;s first word</li></ul><hr></hr><div><table><tr><td>
+                                                                  
+
+                                                                  
+<a id="x1-50011"></a>
+                                                                  
+
+                                                                  
+<pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">                +--------------------------------+---------------------------------+ 
+                |           4K pages             :          2M pages               | 
+                |    0     0-3    0-3-7  0-3-7-8 :   0      0-3    0-3-7   0-3-7-8 | 
+                +--------------------------------+---------------------------------+ 
+  Size 16KB     |                                :                                 | 
+Cache miss (M)  |   3.89    3.85    3.88    3.88 :   3.58   3.78    3.78    3.79   | 
+TLB miss   (M)  |   0.50    0.51    0.50    0.58 :   0.16   0.25    0.25    0.25   | 
+Cycle/pattern   |   4.50    6.25    6.50    6.50 :   4.50   6.25    6.50    6.50   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 32KB     |                                :                                 | 
+Cache miss (M)  |   3.79    3.87    3.86    3.88 :   3.77   3.78    3.78    3.78   | 
+TLB miss   (M)  |   0.52    0.51    0.50    0.50 :   0.25   0.24    0.26    0.24   | 
+Cycle/pattern   |   4.75    6.25    6.25    6.50 :   4.75   6.25    6.25    6.50   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 128KB    |                                :                                 | 
+Cache miss (M)  |   3.80    3.67    3.84    3.66 :   3.76   3.77    3.77    3.78   | 
+TLB miss   (M)  |   0.52    0.36    0.50    0.39 :   0.26   0.26    0.24    0.26   | 
+Cycle/pattern   |   5.25    6.25    6.50    7.25 :   5.25   6.25    6.50    7.25   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 256KB    |                                :                                 | 
+Cache miss (M)  |   5.03    5.07    5.07    4.06 :   3.98   3.98    3.83    3.83   | 
+TLB miss   (M)  |   0.51    0.50    0.51    0.47 :   0.27   0.26    0.23    0.25   | 
+Cycle/pattern   |   5.25    6.50    7.25    7.25 :   5.25   6.25    6.75    7.25   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+</pre>
+<!--l. 453--><p style="text-indent:0em">
+<br></br></p><table style="text-align:center" align="center"><tr style="vertical-align:baseline; text-align:center" align="center"><td style="white-space:nowrap; font-weight:bold">Figure&#160;1: </td><td>Working sets fit in L1 or L2 (16 to 256 KB)</td></tr></table><!--tex4ht:label?: x1-50011 --></td></tr></table></div><hr></hr><hr></hr><div><table><tr><td>
+                                                                  
+
+                                                                  
+<a id="x1-50022"></a>
+                                                                  
+
+                                                                  
+<pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">                +--------------------------------+---------------------------------+ 
+                |           4K pages             :          2M pages               | 
+                |    0     0-3    0-3-7  0-3-7-8 :   0      0-3    0-3-7   0-3-7-8 | 
+                +--------------------------------+---------------------------------+ 
+  Size 1MB      |                                :                                 | 
+Cache miss (M)  |   5.04    5.09    5.09    5.09 :   5.00   4.99    5.00    4.99   | 
+TLB miss   (M)  |   0.50    0.50    0.49    0.50 :   0.23   0.25    0.24    0.24   | 
+Cycle/pattern   |   6.25    7.25    8.50   10.50 :   5.25   6.75    7.75    9.50   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 2MB      |                                :                                 | 
+Cache miss (M)  |   5.06    5.10    5.11    5.14 :   5.03   5.01    5.02    5.05   | 
+TLB miss   (M)  |   0.67    0.85    0.88    0.90 :   0.23   0.27    0.23    0.24   | 
+Cycle/pattern   |   6.50    7.25    8.75   10.75 :   5.25   6.75    7.75    9.75   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 4MB      |                                :                                 | 
+Cache miss (M)  |   5.19    5.19    5.19    5.22 :   5.08   5.07    5.08    5.11   | 
+TLB miss   (M)  |  80.42   80.59   80.70   81.98 :   0.24   0.25    0.24    0.24   | 
+Cycle/pattern   |   8.25   10.00   12.00   13.75 :   5.00   6.75    7.75    9.75   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 8MB      |                                :                                 | 
+Cache miss (M)  |   7.29    7.28    8.67    8.68 :   5.21   5.22    5.22    5.25   | 
+TLB miss   (M)  | 120.45  120.55  120.63  122.52 :   0.23   0.30    0.27    0.25   | 
+Cycle/pattern   |  11.00   13.00   15.50   17.25 :   5.00   6.75    7.75   10.00   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+</pre>
+<!--l. 487--><p style="text-indent:0em">
+<br></br></p><table style="text-align:center" align="center"><tr style="vertical-align:baseline; text-align:center" align="center"><td style="white-space:nowrap; font-weight:bold">Figure&#160;2: </td><td>Working sets fit in L3 and in huge TLB, but not always in regular
+TLB</td></tr></table><!--tex4ht:label?: x1-50022 --></td></tr></table></div><hr></hr><hr></hr><div><table><tr><td>
+                                                                  
+
+                                                                  
+<a id="x1-50033"></a>
+                                                                  
+
+                                                                  
+<pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">                +--------------------------------+---------------------------------+ 
+                |           4K pages             :          2M pages               | 
+                |    0     0-3    0-3-7  0-3-7-8 :   0      0-3    0-3-7   0-3-7-8 | 
+                +--------------------------------+---------------------------------+ 
+  Size 16MB     |                                :                                 | 
+Cache miss (M)  |  49.37   49.41   90.72   91.77 :  47.82  47.72   81.46   88.01   | 
+TLB miss   (M)  | 140.59  140.60  140.67  142.87 :   0.25   0.25    0.24    0.25   | 
+Cycle/pattern   |  18.00   20.50   24.00   26.50 :  14.00  15.25   17.00   18.75   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 32MB     |                                :                                 | 
+Cache miss (M)  | 106.93  107.09  203.73  207.82 : 106.55  106.62  186.50  206.83  | 
+TLB miss   (M)  | 150.56  150.74  150.82  153.09 :   0.24   0.26    0.25    0.27   | 
+Cycle/pattern   |  22.25   24.75   31.00   34.00 :  15.75  17.25   20.00   27.50   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 64MB     |                                :                                 | 
+Cache miss (M)  | 137.03  137.23  263.73  267.88 : 136.67  136.82  232.64  266.93  | 
+TLB miss   (M)  | 155.63  155.79  155.81  158.21 :   5.09   5.25    5.69    5.78   | 
+Cycle/pattern   |  26.00   29.25   36.75   39.75 :  16.75  18.25   24.25   30.75   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+</pre>
+<!--l. 515--><p style="text-indent:0em">
+<br></br></p><table style="text-align:center" align="center"><tr style="vertical-align:baseline; text-align:center" align="center"><td style="white-space:nowrap; font-weight:bold">Figure&#160;3: </td><td>Working sets exceed L3, but still fit in huge TLB</td></tr></table><!--tex4ht:label?: x1-50033 --></td></tr></table></div><hr></hr><hr></hr><div><table><tr><td>
+                                                                  
+
+                                                                  
+<a id="x1-50044"></a>
+                                                                  
+
+                                                                  
+<pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">                +--------------------------------+---------------------------------+ 
+                |           4K pages             :          2M pages               | 
+                |    0     0-3    0-3-7  0-3-7-8 :   0      0-3    0-3-7   0-3-7-8 | 
+                +--------------------------------+---------------------------------+ 
+  Size 128MB    |                                :                                 | 
+Cache miss (M)  | 153.21  153.35  296.01  299.06 : 152.77  152.86  261.09  298.71  | 
+TLB miss   (M)  | 158.00  158.07  158.10  160.58 :  80.84   84.96   91.48   96.40  | 
+Cycle/pattern   |  30.50   34.50   41.00   44.00 :  18.75   20.75   27.25   33.25  | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 512MB    |                                :                                 | 
+Cache miss (M)  | 170.65  170.90  326.84  329.59 : 169.90  170.22  286.47  326.54  | 
+TLB miss   (M)  | 160.39  160.41  162.17  164.62 : 140.35  147.28  160.81  179.58  | 
+Cycles/patterm  |  36.75   41.00   47.00   50.00 :  20.50  23.00   29.75   35.50   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+ 
+  Size 1GB      |                                :                                 | 
+Cache miss (M)  | 184.29  184.29  353.23  356.73 : 180.11  180.43  300.66  338.62  | 
+TLB miss   (M)  | 163.64  164.26  176.04  178.88 : 150.37  157.85  169.58  190.89  | 
+Cycle/pattern   |  37.25   41.50   52.00   55.25 :  22.00  24.75   30.50   37.00   | 
+                |                                :                                 | 
+                +--------------------------------+---------------------------------+</pre>
+<!--l. 543--><p style="text-indent:0em">
+<br></br></p><table style="text-align:center" align="center"><tr style="vertical-align:baseline; text-align:center" align="center"><td style="white-space:nowrap; font-weight:bold">Figure&#160;4: </td><td>Working sets exceed caches and TLBs</td></tr></table><!--tex4ht:label?: x1-50044 --></td></tr></table></div><hr></hr>
+
+    </div>
+<p>
+  posted at: 22:31 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/more_to_locality_than_cache.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Sat, 26 Dec 2009</h2>
+<div class="entry">
+  <a id="some-notes-on-warren" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Some notes on Warren</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">N.B. A <a href="http://www.pvk.ca/Blog/resources/some-notes-on-warren.pdf">pdf version</a> is also available.
+</p><!--l. 13--><p style="text-indent:1.5em">   My girlfriend gave me Warren&#8217;s <a href="http://www.hackersdelight.org">Hacker&#8217;s Delight</a> for Christmas. It&#8217;s really a nice
+compendium of tricks that are usually available on the web, but strewn across a
+dozen websites.
+</p><!--l. 18--><p style="text-indent:1.5em">   I only started reading it this morning, and I figured I&#8217;d put some of my notes here
+instead of leaving them in the margins. The page numbers refer to the ninth
+printing.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>2-5: Sign Extension (p. 18)</h3>
+<!--l. 23--><p style="text-indent:0em">For sign extension (i.e. replicate the <em style="font-style:italic">k</em><sup><em style="font-size:70%; font-style:italic">th</em></sup> bit to the left), Warren suggests (for sign
+extension of a byte into a word):
+     </p><ol style="list-style-type:decimal"><li id="x1-1002x1">((<em style="font-style:italic">x </em>+ <code style="font-family:monospace">0x00000080</code>)<em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em><code style="font-family:monospace">0x000000FF</code>) <span>-</span><code style="font-family:monospace">0x00000080</code>
+     </li>
+     <li id="x1-1004x2">((<em style="font-style:italic">x</em><em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em><code style="font-family:monospace">0x000000FF</code>) <span>&#8853;</span><code style="font-family:monospace">0x00000080</code>) <span>-</span><code style="font-family:monospace">0x00000080</code></li></ol><!--l. 30--><p style="text-indent:1.5em">   When one knows that the higher bits of <em style="font-style:italic">x </em>are all zero, the second variant becomes
+(<em style="font-style:italic">x </em><span>&#8853;</span><code style="font-family:monospace">0x00000080</code>) <span>-</span><code style="font-family:monospace">0x00000080</code>. A similar variant is <em style="font-style:italic">x</em><span>|- </span>(<em style="font-style:italic">x</em><em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em><code style="font-family:monospace">0x00000080</code>).
+</p><!--l. 34--><p style="text-indent:1.5em">   Warren&#8217;s variant doesn&#8217;t require any temporary register, but needs a
+single constant twice. Mine only requires that constant once, but needs a
+temporary register. On <code style="font-family:monospace">x86</code>, with its good support for constant operands,
+Warren&#8217;s is probably preferable. With a RISCier ISA, the other version could be
+useful.
+</p><!--l. 40--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>2-9: Decoding a &#8220;Zero Means <code style="font-family:monospace">2**n</code>&#8221; Field (p. 20)</h3>
+<!--l. 41--><p style="text-indent:0em">The idea here is that we have a field which will never take a value of 0; it could
+however, take any value from 1 to 2<sup><em style="font-size:70%; font-style:italic">n</em></sup>. We obviously want to pack this into exactly <em style="font-style:italic">n</em>
+bits. A simple encoding would simply map 0 to 1, 1 to 2, etc. For various reasons,
+we&#8217;re sometimes stuck with an encoding where everything except 0 maps to itself,
+and 0 to 2<sup><em style="font-size:70%; font-style:italic">n</em></sup>.
+</p><!--l. 48--><p style="text-indent:1.5em">   Notice that 0 <span>&#8801; </span>2<sup><em style="font-size:70%; font-style:italic">n</em></sup>  mod 2<sup><em style="font-size:70%; font-style:italic">n</em></sup>. What we want to do is perform an identity modulo
+2<sup><em style="font-size:70%; font-style:italic">n</em></sup>, but skip the modulo on the final result. Obvious candidates are <em style="font-style:italic">x </em><span>- </span>1 + 1,
+<em style="font-style:italic">x </em>+ 1 <span>- </span>1 and 0 <span>--</span><em style="font-style:italic">x </em>(and since we&#8217;re working modulo 2<sup><em style="font-size:70%; font-style:italic">n</em></sup>, <span>-</span>1 <span>&#8801; </span>2<sup><em style="font-size:70%; font-style:italic">n</em></sup><span>- </span>1 and
+0 <span>&#8801; </span>2<sup><em style="font-size:70%; font-style:italic">n</em></sup>).
+</p><!--l. 53--><p style="text-indent:1.5em">   From Warren&#8217;s list of eight &#8220;identities&#8221; (for 2<sup><em style="font-size:70%; font-style:italic">n</em></sup> = 8), three clearly fall from the
+above:
+                                                                  
+
+                                                                  
+     </p><ol style="list-style-type:decimal"><li id="x1-2002x1">((<em style="font-style:italic">x </em><span>- </span>1)<em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em>7) + 1
+     </li>
+     <li id="x1-2004x2">8 <span>- </span>(<span>-</span><em style="font-style:italic">x</em><em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em>7)
+     </li>
+     <li id="x1-2006x3">((<em style="font-style:italic">x </em>+ 7)<em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em>7) + 1</li></ol><!--l. 61--><p style="text-indent:1.5em">   Interestingly, those involving <em style="font-style:italic">&#160;</em><span>|</span><em style="font-style:italic">&#160; </em><span>- </span>8 also do! <em style="font-style:italic">x</em><em style="font-style:italic">&#160;</em><span>|</span><em style="font-style:italic">&#160; </em><span>- </span>8 computes (<em style="font-style:italic">x</em><em style="font-style:italic">&#160;</em>&amp;<em style="font-style:italic">&#160;</em>7) <span>- </span>8:
+it&#8217;s sending <em style="font-style:italic">x </em>to a representative from its equivalence class modulo 8, but
+to the smallest negative value, instead of the smallest positive value. The
+intuition is that, like masking with 7, all but the three low bits are discarded;
+however, instead of filling the rest with 0s, like &amp;<em style="font-style:italic">&#160;</em>7, <span>|</span><em style="font-style:italic">&#160; </em><span>- </span>8 fills them with
+1s.
+</p><!--l. 69--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-30003"></a>Extra! Extra!</h3>
+<!--l. 70--><p style="text-indent:0em">This entry is more markup-heavy than usual. That would be because I&#8217;m
+actually typing this in <span>L<span style="position:relative; top:-0.5ex; font-size:85%; left:-0.4em">A</span><span style="position:relative; letter-spacing:-0.125em; left:-0.4em">T<span style="position:relative; top:0.5ex; left:-0.0417em">E</span>X</span></span>, while a Lisp script drives the conversion
+(via <a href="http://www.cse.ohio-state.edu/~gurari/TeX4ht">tex4ht</a>) into XHTML for pyblosxom. You can find the script at
+<a href="http://discontinuity.info/\~pkhuong/tex2blosxom.lisp"><code style="font-family:monospace">http://discontinuity.info/\</code><code style="font-family:monospace">~</code><code style="font-family:monospace">pkhuong/tex2blosxom.lisp</code></a>. It&#8217;s a hack, but it
+works! </p> 
+
+
+    </div>
+<p>
+  posted at: 15:18 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/some-notes-on-warren.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Mon, 06 Oct 2008</h2>
+<div class="entry">
+  <a id="VM_tricks_safepoints" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Revisiting VM tricks for safepoints</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>In February this year, Nathan Froyd described
+<a href="http://www.method-combination.net/blog/archives/2008/02/01/vm-tricks.html">allocation sequences in SBCL</a> and alternative approaches other
+implementations use to make sure the runtime never sees
+half-initialised objects.  At first sight, SBCL's sequence
+seems fairly large and slow for what, in the end, increments a
+thread-local pointer, even on x86-64, with its awesome 14 (RBP
+actually serves as a frame pointer in SBCL) GPRs:</p>
+
+<pre class="example">
+    Set the pseudo-atomic bit
+OR BYTE PTR [R12+160], 8
+
+    (what you'd expect for bump:) Load the allocation pointer
+MOV R11, [R12+80]
+    Test for overflow
+LEA RDX, [R11+16]
+CMP [R12+88], RDX
+    Jump to an out of line sequence
+JBE L4
+    Or save incremented pointer
+MOV [R12+80], RDX
+    ... and tag it
+LEA RDX, [R11+7]
+    (end of allocation per se)
+
+    Finally, unset the pseudo-atomic bit
+XOR BYTE PTR [R12+160], 8
+    Check for interrupt pending
+JEQ L2
+    Trigger a signal if so
+BREAK 9                    ;      pending interrupt trap
+L2: ...
+</pre>
+
+<p>That's two load/store and a test just to make sure we're not caught
+with our pants down, handling improperly initialised objects.</p>
+
+<p>One element of the alternatives is to actively check for pending
+interrupts (or GCs, etc).  Instead of allowing interruptions
+everywhere except around key sequences, interruptions are queued, and
+explicit checks inserted by the compiler. That seems like an
+interesting implementation choice, so I wanted to see what it'd look
+like in SBCL.</p>
+
+<p>It was pretty easy to adapt the compiler to insert such checks at
+appropriate locations (in the current case, at the end of each
+function' prologue, and at the head of loops).  Using memory
+protection to turn an access into a conditional interruption seemed
+like a good idea, and that's what I quickly implemented.</p>
+
+<p>These checks can be executed fairly often in tight loops, so it's
+important that they be very efficient.  The first version loaded a
+magic address from thread-local storage (an address pointed to by a
+register), and then wrote to that address.  When the thread had to be
+interrupted, the page containing that address was made unreadable and
+unwritable, so the last access triggered a segfault, which was then
+handled specially.</p>
+
+<p>The result was slow... 25% as much time as the original (signals-ful)
+version for a simple <code>(loop repeat n do [not cons])</code> function, and no
+difference for a consing loop.  Modifying the safepoint sequence to
+read from the magic address instead of writing to it halved the
+slowdown to ~10%, and did not improve the runtime of the consing
+loop.  That's still far from impressive.</p>
+
+<p>Executing two instructions at each safepoint seems obviously fishy.
+Indeed, things improved sensibly when the safepoint sequence became a
+single <code>TEST</code>, as in Nathan's example from HotSpot.  Instead of having
+to read an arbitrary address from the thread struct, I moved the
+&quot;magic page&quot; to a fixed offset from the thread structure.  The
+safepoint sequence then became a single instruction, <code>TEST EAX,
+[THREAD_STRUCT_REG + offset]</code> (a register is dedicated to thread-local
+storage).  That's a single instruction, reads from memory and does not
+clobber any register.  Unfortunately, that was only enough to bring
+the runtime for safepoints to the same level (+/- 1-2%) as that of the
+original code (it does save ~50 KB out of 40 MB on the x86-64 core
+:).</p>
+
+<p>I'm not sure how to explain the results, except by saying that x86-64
+(both Core 2 and K10) memory subsystems are awesome.  In any case,
+unless I was doing something extremely wrong, the current
+<code>XOR/XOR/JEQ/BREAK</code> sequence seems to perform well, even when compared
+to what other implementations (not constrained by any systems
+programming goal) do.  There still are reasons to look into a safe
+point system for SBCL (simpler to reason about, easier to avoid
+certain states, easier to manipulate where and when interruptions can
+happen, ...), but performance doesn't seem to be one of them.</p>
+
+    </div>
+<p>
+  posted at: 23:25 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/VM_tricks_safepoints.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Wed, 03 Sep 2008</h2>
+<div class="entry">
+  <a id="SWAR-some-zerop" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>SWAR implementation of (some #'zerop ...)</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>SWAR (SIMD Within A Register) codes can portably express short-vector
+parallelism for operations on small packed data (e.g. byte or even
+nybble vectors).  A trivial application of the technique is when we
+test whether any bit in a word is set (equal to 1) by comparing the
+whole word against 0. Obviously, that also work to test whether any
+field (of arbitrary width) is not filled with 0. <a href="http://cobweb.ecn.purdue.edu/~hankd/SWAR/over.html">This document</a>, from
+1997, provides a fairly clear and complete overview.</p>
+
+<p>Just like testing whether any bit is set, it is easy to find whether
+some bit is <em>not</em> set (it's simply the opposite of whether every bit
+in the word is set).  Things are more complex when the data
+are wider than a single bit (but obviously narrower than a full
+word).  I found a short implementation (and barely tested it), but
+it might be possible to do even shorter.  Skip to the series of
+asterisks if you want to solve that puzzle (to efficiently find
+whether any field in a sequence of data, itself packed into a single
+word, is 0) yourself.</p>
+
+<p>To simplify the description, I'll assume that we're working with
+4-bit-wide fields.  It should be clear how the code can be adapted to
+other widths or even mixed widths.</p>
+
+<p>Let <code>x = aaaabbbbccccdddd...</code> be the input.</p>
+
+<p>1. <code>x&apos; = x &#124; (x &gt;&gt; 1)</code>.
+The first bit in each field is now, for our purposes, noise. However,
+some of the remaining 3 bits are now non-zero iff some the original 4
+were.</p>
+
+<p>2. <code>ones = x' &amp; ~0x8888...</code>. The noise bits are masked out.</p>
+
+<p>3. <code>borrow = 0x8888... - ones</code>. The first bit of each field
+in <code>borrow</code> is 0 iff some of the 3 other bits in <code>ones</code> aren't (iff some
+of the 4 bits in <code>x</code> weren't).</p>
+
+<p>4. <code>result = borrow &amp; 0x8888...</code> is zero iff the first bit
+of every field in <code>borrow</code> is 0 (iff every field in <code>x</code> was non-null).</p>
+
+<p>And, finally, that is easy to test for, a word at a time. In the end,
+it takes 5 (hopelessly serial) operations (<code>&gt;&gt;</code>, <code>|</code>, <code>&amp;</code>, <code>-</code> and <code>&amp;</code>) and a
+conditional branch.</p>
+
+<p><code>****</code> Testing whether any field in a word is filled with 0 may seem
+incredibly obscure.  Apart from <code>(some #'zerop
+[packed-unboxed-vector])</code>, what use is there for such code sequences?
+One trick is to exploit <code>xor</code>.  <code>xor</code> lets us compare multiple fields at a
+time: a field is 0 in <code>a xor b</code> iff the corresponding fields in <code>a</code> and <code>b</code>
+are identical (bit for bit).  Now that we can determine when at least
+one pair of fields is equal, it's simple to implement, e.g., default
+<code>FIND</code> on specialised vectors without having to test each datum
+separately (until the very end, when we know that one of the pairs is
+equal, but not which).  As usual, a full implementation, capable of
+dealing with <code>:start</code>, <code>:end</code> and displaced vectors is a lot more work.</p>
+
+    </div>
+<p>
+  posted at: 02:07 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/SWAR-some-zerop.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Tue, 23 Oct 2007</h2>
+<div class="entry">
+  <a id="fast-integer-division" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Fast Constant Integer Division</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>Integer division (and its kissing cousins, remainder and modulo) is an
+operation that regularly pops up in surprising places. The first time
+I encountered the problem was a few years ago, when I wanted to
+implement a corewar VM in SBCL (probably my first attempt at a real
+project in CL). My program was much slower than I would have expected:
+constant MOD were compiled to actual divisions. More recently, I hit
+the same problem when trying to implement hash functions and PRNGs
+efficiently. The main technique to make such operation decently fast
+approximates division by a multiplication and a shift (in other words,
+multiplication by a fraction). However, there are other tricks in more
+restricted situations that can sometimes yield simpler code.</p>
+
+<p>Expressing division as a multiplication is actually simple when you
+think of it in terms of fractions. Division (and then truncation) by <code>x</code>
+is like multiplication by <code>1/x</code>. Since the only type of division we can
+easily express is division by a power of 2, we want to approximate
+multiplication by <code>1/x</code> with a multiplication by <code>y/2^k</code>. Moreover, since
+the result will be truncated, we want to overapproximate (in absolute
+value) the fraction. We thus find (for <code>x</code> positive) the folklore
+formula <code>y = ceiling(2^k/x)</code> (or <code>1 + floor(2^k/x)</code>,
+which suffers from an off-by-one when <code>x</code> is a power of 2). Note that
+since the multiplier is rounded up, any error will be one of
+overapproximation. If the sign of the input is known (or the range
+otherwise asymetric), it is possible to use a small additive constant
+to bring the result of the multiplication closer to 0 before dividing
+and taking the floor (with a shift), and reduce the overapproximation.</p>
+
+<p>In <a href="http://www.discontinuity.info/~pkhuong/pseudoinverse.pdf">http://www.discontinuity.info/~pkhuong/pseudoinverse.pdf</a>, we find a
+nice way to figure out the smallest <code>z</code> such that <code>floor(z/x)</code> is
+different from <code>floor(z*y/2^k)</code>. If the input is known to fit in the
+range (which is often on the order of machine ints), then it is
+possible to convert integer division to multiplication. Unfortunately,
+this doesn't even consider the possibility of a (constant) additive
+fixup between multiplication and division/flooring.</p>
+
+<p>When implementing this on a machine that offers <code>BxB -&gt; B, B</code>
+multiplication (e.g., <code>32x32 -&gt; 32, 32</code> on IA32, or <code>64x64 -&gt; 64, 64</code> on
+x86-64), or even just the most significant half (like Itanium or
+Alpha), there are two main interesting values for <code>k</code> (as in <code>y/2^k</code>): <code>B</code>
+and <code>B + floor(lg x)</code>. If we take <code>k = B</code>, then we can simply
+use the most significant word as an implicitly shifted value. If that
+isn't precise enough, then <code>B + floor(lg x)</code> is the largest denominator
+such that <code>y</code> (skipping leading zeros) will fit in <code>B</code> bits; the result
+must however then be shifted. In both cases, but especially when
+shifting, it is essential to ensure that the result won't overflow
+the space available in the significant half of the product. When a
+machine offers many multiplication sizes, it can be useful to try
+smaller ones first: wider multiplications are sometimes slower, and
+larger constant always take up more space.</p>
+
+<p>Sometimes, we're only interested in the remainder (MOD is slightly
+more complex and can be expressed in terms of REM). In the general
+case, it is impossible to avoid a division, or at least a
+multiplication by a pseudoinverse, followed by a multiplication and a
+subtraction. However, when the input range is restricted, some nice
+tricks are available. It's much simpler to assume that the input is
+always positive (or always negative). Doing otherwise requires a
+non-trivial amount of mask generation and subsequent masking, making
+the tricks less attractive.</p>
+
+<p>Apart from powers of 2, the most obvious trick is when we want <code>(rem z
+x)</code>, where <code>z</code> is known to be smaller than <code>2x</code>. We can express <code>x</code> as
+<code>2^n - e</code>. We have <code>(rem z x) = z</code> if <code>z &lt; x</code>, and
+<code>(rem z x) = z-x</code> otherwise. It would be simple to compare,
+generate a mask and do a masked subtraction. However, when <code>z + e</code>
+might overflow (and <code>n</code> is the width of the register), a simple way to
+check for that is to add <code>e</code> to <code>z</code>. If the result is greater than <code>2^n -
+1</code>, <code>z &gt;= x</code> (but we still have <code>z &lt; 2^(n+1)</code>). Luckily, the
+implicit wrap around (masking off everything but the lower <code>n</code> bits) is
+enough to subtract <code>x</code> (remember that <code>e</code> was previously added, so
+subtracting <code>2^n</code> really subtracts <code>x</code>). If <code>z &lt; x</code> (the
+overflow bit isn't set), then we have to subtract <code>e</code> back. This logic can
+easily be expressed with a masked subtraction.</p>
+
+<p>A slightly more widely applicable trick is also based on representing
+the modulo <code>x</code> as <code>2^k - e</code>. We can split <code>z</code> in 2 (or more) parts: <code>z
+= z1 2^k + z0</code>. Thus <code>(rem z x) = (rem (z1 e + z0) x)</code>.
+If the product <code>z1 e</code> is small enough, we can then use the previous
+trick instead of computing the remainder the usual way (it would be
+possible to recurse). By adding <code>e</code> to <code>z1 e</code> and then adding that to <code>z0</code>
+we can guarantee that any overflow will only happen in the last
+addition, thus making it possible to easily use hardware flags.</p>
+
+<p>Official SBCL should be able to express some of these tricks (at the
+very least reciprocal multiplication) some time soon. The neat thing
+about optimising divisions away is that they're so expensive (on the
+order of 100-200 clock cycles on modern x86) that even branches are
+pretty much guaranteed to be an improvement, even in the worst case :)</p>
+
+    </div>
+<p>
+  posted at: 00:49 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/fast-integer-division.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

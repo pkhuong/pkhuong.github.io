@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>An issue nobody cares about - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 15 Aug 2011</h2>
+<div class="entry">
+  <a id="bug-nobody-cares-about" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>An issue nobody cares about</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+                                                                  
+
+                                                                  
+   <pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">CL-USER&gt; (values (truncate (ash 1 60) pi)) 
+366986312910250176 
+CL-USER&gt; (values (truncate (+ 4 (ash 1 60)) pi)) 
+366986312910250176</pre>
+<!--l. 16--><p style="text-indent:0em">
+</p><!--l. 18--><p style="text-indent:1.5em">   Obviously, it&#8217;s just <a href="http://download.oracle.com/docs/cd/E19957-01/806-3568/ncg_goldberg.html">another floating-point issue</a>.
+</p><!--l. 22--><p style="text-indent:1.5em">   It&#8217;s also an extremely minor optimisation obstable: when only the first return
+value is needed, it can be faster to implement the division exactly with machine
+integers than to convert to FP, divide, and convert back to an integer. Unfortunately,
+doing so would be <em style="font-style:italic">too </em>exact: we would have different results for equivalent
+programs depending on the level of optimisation (or the constant-ness of the
+divisor).
+</p><!--l. 30--><p style="text-indent:1.5em">   Plus, who does that, or cares about that operation? </p> 
+
+
+    </div>
+<p>
+  posted at: 15:55 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/bug-nobody-cares-about.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

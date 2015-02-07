@@ -1,0 +1,403 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Interlude: Numerical experiments in hashing - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 13 Apr 2009</h2>
+<div class="entry">
+  <a id="numerical_experiments_in_hashing" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Interlude: Numerical experiments in hashing</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>EDIT: Added clarifications, modifed the wording a bit, and linked to
+the source (see bottom of post).</p>
+
+<p>Cleaning up the SSE work, making it useful and using it in something
+interesting would take too much time given my current situation. SSE
+intrinsics, part 2, will have to wait.  However, there's always time
+for a couple experiments induced by reading papers.  <em>d-left</em> hashing
+seems to have gotten some attention in the last couple years.
+Unfortunately, I have a hard time mapping from the papers to
+real-world performance.</p>
+
+<p>The idea behind <em>d-left</em> hashing is simple. Insertions work as follows:</p>
+
+<ol>
+<li>Split our hash table in <em>d</em> equal sections (typically two, the left
+and the right halves), and order the sections from left to right
+arbitrarily.</li>
+
+<li>Associate <em>d</em> independent hash values to the key, h_1, h_2, ... h_d.</li>
+
+<li>Use the <em>d</em> hash values to find a bucket in each section of the hash
+table, and put the key-value pair in the least loaded bucket; break
+ties <em>not randomly</em>, but by taking the bucket in the leftmost section
+(as per the arbitrary ordering established in 1.).</li>
+</ol>
+
+<p>The procedure for lookups is easily derived from the above.</p>
+
+<p>Surprisingly, breaking ties unfairly behaves slightly better than
+random tie-breaking. Mitzenmacher's, Richa's and Sitaraman's
+<a href="http://www.eecs.harvard.edu/~michaelm/postscripts/handbook2001.pdf">The Power of Two Random Choices: A Survey of Techniques and Results</a>
+covers the topic fairly extensively.</p>
+
+<p>Having a choice in which bucket to use gives a substantial (theoretic)
+advantage over having a single hash function (<em>d</em> = 1). Assuming ideal
+hash functions, we expect the greatest number of elements in the
+buckets of a regular bucketed hash table with <em>n</em> buckets in which we
+insert <em>n</em>  elements to be around log n/log log n; for <em>d</em> &gt; 1, that's log
+log n/log d + Theta(1). Clearly, setting <em>d</em> to 2 yields a great
+improvement over <em>d</em> = 1, and <em>d</em> &gt; 2 only shaves a constant factor.</p>
+
+<p>I don't doubt the theory, but &quot;approximately&quot; and &quot;Theta(1)&quot; aren't
+negligible for hash tables, where we're pretty much always fighting
+for better constant factors regarding space usage. Luckily, this
+idealised ball and bin setting is easily to simulate (the hash
+functions are just PRNGs here and in the sequel).  I ran numerical
+experiments with <em>n</em> = 2^4, 2^5, ... 2^20, each time with 1000
+repetition (I'll use the same number of independent repetitions
+throughout the post). The distribution of bucket sizes is fairly
+constant over the range, so I'll only show the results for <em>n</em> = 2^20.</p>
+
+<pre class="example">
+Size  1-left (%)  2-left (%)
+ 0      36.8        22.8
+ 1      36.8        54.8
+ 2      18.4        21.9
+ 3       6.1         0.4
+ 4       1.5         0.0
+ 5       0.3          0
+ 6       0.1          0
+         ...         ...
+12       0.0          0
+13        0           0
+</pre>
+
+<p>The theoretical results predict a maximal size of 5~6 for <em>1-left</em> and
+3~4 for <em>2-left</em>, which is pretty close to what we observe here.</p>
+
+<p>Unfortunately, I don't find that result satisfying: how will the
+buckets be implemented?  If they're preallocated, we can only tell
+that the buckets would have to all be 3-entry deep (assuming a short
+overflow list to supplement the 6e-6% buckets with more than 3
+entries) for all 2^20 entries to fit.  That uses 3 times as much space
+as the actual data!  Buckets implemented as linked lists or allocated
+adaptively might use less space, but, again, the constant factors are
+extremely important, since we expect to have relatively shallow
+buckets; the additional pointers might outweigh most or all the space
+savings. The results above are a good hint that <em>2-left</em> hashing will
+perform much better than regular buckets, but otherwise don't seem
+particularly telling.</p>
+
+<p>I found it interesting to compare the space efficiency of <em>2-left</em> hash
+tables to that of a regular, even naive, hash table with linear open
+addressing. Again, the experiments fills 2^20 bins with 2^20
+balls (the hash functions are again PRNGs), so the load is the inverse
+of the space usage. However, each bin can only contain up to 1
+ball; when full, we try to put the ball in the next bin, up to a
+certain probe length limit (so we examine at most a small fixed number
+of bins). We won't be able to place all the balls (without a lot of
+luck, anyway), but it'll be interesting to see how much of the 2^20
+balls will fit.  I tried that with a maximal probe length of 16, and
+another one with again a maximal probe length of 16, but also an
+overflow list of at most 8 entries. The overflow list is used to host
+a small number of entries that exceed the probe length limit (or
+bucket size) instead of aborting immediately. Since very few entries
+hit the limit, a short list is often enough to substantially increase
+the expected load.</p>
+
+<pre class="example">
+           Open       Open+Overflow
+Load (%)  Freq. (%)  Freq. (%)
+18           0         0
+19          0.10       0
+20          0.20       0
+21          0.31       0
+22          0.31       0
+23          0.20       0
+24          0.82       0
+25          1.33       0
+26          2.34       0
+27          3.37       0
+28          3.88       0
+29          8.17       0
+30          8.99       0
+31         11.34       0
+32         12.77       0
+33         13.89       0
+34         13.59      0.10
+35         10.83      0.31
+36          5.82      2.65
+37          1.63      8.56
+38          0.10     21.71
+39           0       35.07
+40           0       24.57
+41           0        6.93
+42           0        0.10
+43           0         0
+</pre>
+
+<p>With linear open addressing, we can already expect to have
+approximately the same space overhead as <em>2-left</em> tables with
+preallocated buckets if we wanted to guarantee that all 2^20 entries
+fit. The small overflow list has two effects: the worst case is
+greatly improved, and the mode (and average) is also considerably
+better. The expected space overhead is now even lower, probably close
+to what <em>2-left</em> with buckets as linked lists would achieve! However,
+probing 16 cells might be a bit slow. Looking at the experiment's
+results show that most probes are very short (although this doesn't
+tell us much about lookups of missing keys), so it's not that bad. For
+the open addressing table with overflow list, we have:</p>
+
+<pre class="example">
+Probe length  Frequency (%)
+ 1             80.55
+ 2             12.77
+ 3              3.84
+ 4              1.49
+ 5              0.66
+ 6              0.32
+ 7              0.16
+ 8              0.09
+ 9              0.05
+10              0.03
+11              0.02
+12              0.01
+13              0.01
+14              0.00
+15              0.00
+16              0.00
+</pre>
+
+<p>Still, as a comparison point, <em>2-left</em> hashing with 1/4 * 2^20 4-deep
+buckets and an 8-entry overflow list achieves much better loads
+(regular preallocated buckets are almost pitiful). Unlike the
+theoretical setting, buckets have a bounded size (at most 4), so the
+table uses 2^20 cells (+ the overflow list). The amount of space
+allocated is much more interesting, but it also means that it will
+take much fewer than 2^20 balls to have enough collisions to fill the
+overflow list. Note that for the sequel, I'll always use the same
+space budget: 2^20+8 key-value cells, whether they're arranged in
+buckets or not. Load is always computed as the fraction of 2^20
+balls that could be placed before hitting the probe length or bucket
+size limits 8 times (enough to fill the overflow list). All the
+statistics are aggregated from 1000 independent runs.</p>
+
+<pre class="example">
+           2-left, 4-buckets, 8-overflow
+Load (%)  Frequency (%)
+54           0
+55          1.31
+56         14.76
+57         49.75
+58         32.46
+59          1.72
+60           0
+</pre>
+
+<p>Bucket utilisation is also pretty good:</p>
+
+<pre class="example">
+Bucket size  Frequency (%)
+0              1.90
+1             13.39
+2             42.50
+3             38.38
+4              3.83
+</pre>
+
+<p><em>2-left</em> hashing is clearly very interesting, even with preallocated
+buckets; that's much more obvious here than with the previous
+unbounded bucket experiment. Can we do better?</p>
+
+<p>Having the choice of which table to use can clearly be very
+effective. A similar trick can be used on linear open addressing
+tables: split in two sub-tables, probe both sub-tables and stop as
+soon as one of them has an empty slot (again, breaking ties
+unfairly). I simulated such a scheme with 2 sub-tables of 1/2 * 2^20
+cells, an 8-element overflow list, and maximal probe lengths of 8 and
+16.</p>
+
+<pre class="example">
+           Probe: 8
+Load (%)   Freq. (%)
+52            0
+53           0.51
+54           4.18
+55          18.33
+56          34.83
+57          31.16
+58          10.29
+59           0.71
+60            0
+</pre>
+
+<pre class="example">
+           Probe: 16
+Load (%)   Freq. (%)
+68            0
+69           0.10
+70           4.76
+71          25.63
+72          47.11
+73          21.38
+74           1.01
+75            0
+</pre>
+
+<p>With a maximal probe length of 8, the <em>2-open</em> addressing table already
+hits an expected load similar to that of <em>2-left</em> table.  When the
+maximal length is pushed to 16, load is much better, and, again,
+successful probes usually aren't very long: 98.9% of probes are of
+length at most 4 (in both tables, meaning that at most 8 bins are
+examined).</p>
+
+<p>Allowing probes (of length greater than 1) has the advantage of
+letting buckets overflow into adjacent ones, so that lightly loaded
+buckets are better exploited in the rare cases when one
+overflows. Deeper buckets, on the other hand, avoid the clustering
+issues of linear open addressing; they're also slightly more
+cache-friendly. When data is moved into cache, it's loaded a whole
+cache line at a time. Linear addressing can exploit caches nicely
+since it will probe consecutive addresses. However, there's no
+guarantee that the probe will start at the beginning of the cache
+line. If we take care to align buckets cache lines will be used more
+efficiently.</p>
+
+<p>Why not do both? Once we've settled on using multiple tables, short
+probes and small preallocated buckets don't really make the code more
+complex. For a first attempt, I simulated hash tables with 2
+sub-tables, 4-deep buckets, up to 2, 3 or 4 -long probes and an
+overflow list of at most 8 entries. So, an insertion will compute two
+hash values to decide where to start probing, and insert in the least
+loaded bucket (breaking ties as usual), continuing to the next bucket
+in each table if both are empty. Load is pretty good, better than
+<em>2-left</em> hashing:</p>
+
+<pre class="example">
+           2-probes
+Load (%)   Freq. (%)
+66           0
+67          0.91
+68         17.00
+69         51.11
+70         30.77
+71          0.20
+72           0
+</pre>
+
+<pre class="example">
+           3-probes
+Load (%)   Freq. (%)
+72           0
+73          0.20
+74         10.82
+75         53.79
+76         34.78
+77          0.40
+78           0
+</pre>
+
+<pre class="example">
+           4-probes
+Load (%)   Freq. (%)
+76           0
+77          0.10
+78         11.36
+79         62.27
+80         26.17
+81          0.10
+82           0
+</pre>
+
+<p>The 2-table with 3-long probes and 4-deep buckets already performs
+better than the 2-open table with 16-long probes while examining fewer
+elements in the worst case. Longer probes on shallower buckets aren't
+really an improvement; deeper buckets, on the other hand, are. With
+8-deep buckets (but still the same space budget) and no open
+addressing, we hit a load factor of ~78% (85% with probes of length up
+to 2), and 90% for 16-deep buckets (open addressing isn't that
+effective anymore). The problem with deeper buckets is that they take
+more time to search (since they're usually nearly full), while the
+vast majority of probes are of length 1 (&gt; 99% for the last three
+parameter sets). Let's also keep in mind that we have to execute the
+search on two sub-tables; searching among 16 elements <em>twice</em> adds up to
+a substantial amount of work.</p>
+
+<p>I've listed many possibilities. The following table recapitulates the
+modal load factor for all the simulations above. Keep in mind that the
+inverse, the space usage, is actually more relevant in practice. As
+load values get closer to 1, the difference in space overhead becomes
+smaller, so the 6% difference between <code>open(16)</code> without overflow and
+<code>open(16)</code> is much more important than the 5% difference between
+<code>2-combo(8,2)</code> and <code>2-left(16)</code>.</p>
+
+<pre class="example">
+Implementation   Modal load (%)
+open(16) w/o OF      33         no overflow list
+open(16)             39         16-probe at most
+2-left(4)            57         4-buckets
+2-open(8)            56         2 x 8-probe at most
+2-open(16)           72
+2-combo(4,2)         69         2-left, 4-buckets, 2-probes
+2-combo(4,3)         75
+2-combo(4,4)         79
+2-left(8)            78
+2-combo(8,2)         85
+2-left(16)           90
+</pre>
+
+<p>Implementation-wise, 4-deep buckets are particularly interesting
+because four 32-bit values (e.g. keys or hash values) are exactly the
+size of an SSE register and can easily be searched in a single SSE
+instruction. 16-deep buckets, on the other hand, usually fill cache
+lines (often 64 bytes) exactly. 8-deep buckets still exploit cache
+lines fairly well, without being too long to search in the common
+case. Moreover, if we modify 2-combo(8, 2) so that probes always stay
+in the same 64 bytes segment (probe bucket <code>i</code>, then <code>i xor 1</code>), the load
+factor isn't affected (in simulations), but cache lines are used as
+well as with 16-deep buckets. That's a nice bunch of interesting
+structures to implement and test. I'll try and come back to the
+topic with real timings in a couple posts.</p>
+
+<p>Unorganised source code for the simulations may be found at
+<a href="http://discontinuity.info/~pkhuong/hashing-simulation.lisp">http://discontinuity.info/~pkhuong/hashing-simulation.lisp</a>.</p>
+
+    </div>
+<p>
+  posted at: 23:09 | <a href="http://www.pvk.ca/Blog/" title="path">/</a> | <a href="http://www.pvk.ca/Blog/numerical_experiments_in_hashing.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

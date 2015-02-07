@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Complex float improvements for sbcl 1.0.30/x86-64 - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 29 Jun 2009</h2>
+<div class="entry">
+  <a id="SSE_complexes" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Complex float improvements for sbcl 1.0.30/x86-64</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>Complex single- and double- floats used to be represented as pairs of
+SSE registers on the x86-64 port.  Doing so simplified the porting
+work, since more code could be shared with other backends.
+Representing complexes packed in SSE registers as would be obviously
+preferable was left for the future.  Luckily, most of my work on SSE
+intrinsics is directly applicable to that task: all the SSE{1,2}
+instructions were finally defined, and modifying a pre-existing
+primitive object type is much simpler than adding a new one.</p>
+
+<p>The initial work was mostly straightforward, since, by default, the
+only operations on complexes are moves (to/from registers, the
+stack/arguments, vectors, or the heap [as boxed objects]), creation
+from scalar components, and extraction of components.  The
+modifications mostly entailed modifying the way register allocation
+manipulates complexes (they only need a single SSE register, like
+scalar values), and making the boxed representation more SSE-friendly
+(alignment, packing single floats for MOVQ).  There's only one problem
+I can remember in that part of the code: the stack isn't guaranteed to
+be aligned on 16 byte boundaries!  That means that I'm forced to use
+MOVUPD when moving complex double floats between the stack and an SSE
+register.</p>
+
+<p>Already, using half the registers and half the memory accesses is
+interesting.  The real pay-off with packed complexes, however, is the
+ability to use vector instructions in arithmetic operations.  The
+obvious cases are addition and subtraction (both complex-complex and
+complex-real), which exhibit natural horizontal parallelism: each pair
+of components (real-real or imaginary-imaginary) can be processed
+separately.  For complex-real multiplication or division, things are
+only slightly more complex: the real operand has to be duplicated
+before operating in parallel.  I encountered two important bugs in
+that code.</p>
+
+<p>First, scalar values were still passed around with narrow
+register-register moves (movsd or movss).  When we only ever
+manipulated scalars, that wasn't an issue.  Complex-real addition and
+subtraction, however, really want to exploit the fact that the high
+part of a scalar value is filled with 0.  That's not the case when a
+narrow move is used to move a single float value into a register that
+used to hold a double...  Using full register moves instead (for both
+complex and scalar values) not only made the code correct, but also
+improved performance, due to their being simpler for the SSE pipeline
+to handle.</p>
+
+<p>Second, packed single float division executes four divisions, not
+two.  Thus, it's not enough to duplicate the real operand in a
+complex-real division before executing a packed division: depending on
+the exception mask, the 0.0/0.0 in the higher half of the result may
+trigger an arithmetic exception.  The simplest solution I found was to
+perform the same operation in both halves of the operands.  Obviously,
+an exception will be signalled iff operating only on the lower half
+would have signalled too.  The cost is one additional shuffle step for
+the complex value: the real value always has to be duplicated, and the
+high half of the result must be reset to 0 anyway.</p>
+
+<p>That leaves complex-complex multiplication, and
+complex-complex/real-complex division.  Complex multiplication is a
+fairly common operation; common enough for Intel to pretty much
+dedicate an instruction to that operation (ADDSUBP{S,D}) in SSE3.
+Even when restricting ourselves to SSE2, the code is fairly simple.
+The most unnatural part is computing the conjugate, given the absence
+of ADDSUB (more on that later).  Complex division, however, is a much
+more complicated beast.  I decided to stick to an implementation in
+CL, but rewritten to use block (complex-at-a-time) instead of
+component-wise arithmetic.  In the end, it still wanted an additional
+operation: swapping the real and imaginary components of a complex.</p>
+
+<p>Finally, that leaves non-arithmetic operations, like equality tests
+(both bitwise and as numbers), conjugate and negation.  Once there's a
+guarantee that the unused components in a SSE register are 0-filled (a
+guarantee that is supported by most load-from-memory instructions),
+testing for equality is very straightforward.  Computing the conjugate
+of a complex or negating one, on the other hand, isn't so nice.  One
+look at the way floats are laid out in register shows that they may be
+implemented as simple bit-wise operations.  That leaves the problem of
+loading the relevant constants in.  That's where a later patch comes
+in.</p>
+
+<p>Negating and taking the absolute value of a real requires constants
+for bit-wise operations, like conjugating or negating a complex.
+Until now, SBCL generated code that loaded the constant in a GPR, and
+then moved it from the GPR into an SSE register.  Generating the
+constant usually required some shifting (often slow), and moving data
+between the GPR and SSE register files takes a relatively long time on
+current microarchitectures.  Loading such constants from memory
+directly into SSE registers would be preferable.  However, by the time
+assembly code is generated, it's too late to add constants, and some
+of these constants would have to be boxed (be it as fixnums or
+bignums).  In other words, both not feasible and not always a good
+idea.</p>
+
+<p>A second patch adds support for unboxed constants stored <em>inline</em>, after
+the executable code.  The system must already support code relocation,
+so the moving GC isn't an issue more than it already is (RIP-relative
+addressing on x86-64, and post-GC fixups on x86).  I haven't bothered
+to look at the situation for other platforms yet, but, with some luck,
+things will be similarly simple.  Storing constants in the code
+segments was already possible, with a small bit of hacking.  What the
+patch mostly offers is the ability to pack the constants together.
+The advantage is that they can be stored far enough away from code
+(one cache line) to not confuse caches, and that a more global outlook
+allows the code generator to merge identical constants together and to
+reorder them to guarantee sufficient alignment without wasting too
+much space.</p>
+
+<p>With that infrastructure in place, it was easy to generate much
+simpler and faster code for the previous bitwise operations on floats.
+It also became interesting to store some unboxed constants inline.  On
+x86-64, I implemented that for constant floats (both real and complex)
+and fixnums that fit in registers, but can't be assembled as
+immediates (so +/- 2^29 and wider).  On x86, fixnums can always be
+assembled as immediates, so only floats are stored as unboxed inline
+constants.  Float constants are interesting to store inline because
+they're frequently found in speed-oriented code.  Wider-than-fixnum
+constants, on the other hand, not so much.  There's also a certain
+trade-off to consider: unboxed constants cause additional consing (and
+code bloat) each time they must be boxed.</p>
+
+<p>Unboxed constants open the door for another set of improvements for
+x86oids: many instructions can load one operand directly from memory.
+Using that feature may save a register, and always makes the code
+smaller.  The latter can often have a heavier impact on performance
+than the former.  Using fewer registers mostly matters when the
+compiler has to spill values; that does not happen so often in inner
+loops on the x86-64.  Smaller code, on the other hand, helps with
+memory (fits better in cache, needs less bandwidth) and reduces the
+pressure on the instruction decoder.  Finally, when a constant shows
+up as an operand, it pretty much always pays off to store is inline,
+so even wider-than-fixnum integer constants are stored inline in that
+case.</p>
+
+<p>The union of these changes transparently speeds up most complex float
+operations by up to ~100% on my Core 2.  In the current version of
+<a href="http://vintage-digital.com/hefner/software/bordeaux-fft/manual.html">Bordeaux-FFT</a>, that translates into a 110% speed-up for 1024-point
+FFTs.  Scalar operations also show significant improvements.
+Nikodemus Siivola's implementation of the (broken) mandelbrot routine
+at <a href="http://random-state.net/log/3452921796.html">http://random-state.net/log/3452921796.html</a> shows a 55% speed-up
+for hand-rolled complex arithmetic (within 20% of the execution time
+of the fastest g++ version).  The complex-ful version shows a lesser
+speed-up, 38%, probably because a good portion of the runtime is spent
+operating element-wise to compute the 2-norm of complexes.  If you
+have performance-sensitive code that performs a lot of floating point
+computations, you might be pleasantly surprised by this month's
+release.</p>
+
+<p>P.S. Considering the size of these patches, I would probably be even
+more pleasantly surprised if they were bug-free. Bug reports (to
+sbcl-bugs, or, more realistically, directly to sbcl-devel) are always
+welcome, especially during the code freeze period starting today!</p>
+
+    </div>
+<p>
+  posted at: 02:00 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/SSE_complexes.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Hacking serialisable closures with SBCL - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Thu, 06 Sep 2007</h2>
+<div class="entry">
+  <a id="serialisable_closures_in_sbcl" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Hacking serialisable closures with SBCL</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>The key element in <a href="http://www.discontinuity.info/~pkhuong/common-cold/">Common Cold</a> was being able to generate
+serialisable closures without having to transform all the lexically
+enclosing code. To do that, I had to have access to two things:
+all the functions in the lexical environment &mdash; remember that CL is a
+Lisp-2, so even if <code>lambda</code> are serialisable, local functions won't
+benefit from that automatically (that would also be pretty bad for
+performance) &mdash; and all the variables in the enviroment (along with
+their values, at runtime).</p>
+
+<p>As would be expected, there is a list of all the lexical variable
+definitions (whether they're symbol-macros, lexical variables or
+dynamically scoped ones) in the lexical environment (lexenv)
+object. After all, most of that is needed for <code>macroexpand</code> to work
+correctly. As is logical, the innermost variables are at the
+head. Even better: SBCL's compiler seems to always store the
+information needed to inline local functions (in the lexenv), which
+is, luckily enough, more than enough to recover their source and their
+ordering. Some of that information is a bit hidden, however, since the
+goals of the compiler are different from ours. What is directly
+available in the lexenv object is a list of function 'nodes', with the
+most nested function(s) first. Note how there is no direct way to know
+how functions and variables are interleaved, or which functions were
+defined in the same <code>labels</code> or <code>flet</code> (this is not an issue for
+variables, since their value will already have been computed when
+we'll unserialise the closures).</p>
+
+<p>To recover that information, we can use the lexenv object associated
+with each function node. To group functions together, we simply have
+to detect when they close over the same set of functions.  Recursive
+functions (defined with <code>labels</code>) also close over themselves, while
+those defined with <code>flet</code> don't. Local macros are represented as
+closures, so there is no need to get their grouping right, only the
+ordering, which is implicit in the list of functions. Note that, since
+local functions must be defined where they are bound (CL is a Lisp-2),
+we know that simply getting this ordering and grouping right will be
+enough to rebuild the correct lexical environment.</p>
+
+<p>In order to know where each variable should be defined, we can, again,
+use the lexenv object associated with each function node to find the
+outermost (group of) function that closes over that variable. Now,
+we can easily generate a form that will have all the function/macros
+definition and variable binding/symbol macro definition forms nested
+in the right order to recreate the lexical environment. To bind the
+variables to the right values, the simplest way is to wrap the form
+in a lambda, and take the values as arguments (bound to gensymmed
+variables, otherwise there would be issues with variables that
+have the same names). There is also the issue of local macros: macro
+functions are stored as functions. Trying to store them in the form
+would be quite painful: no dumping to fasls, no easy way to share the
+data across processes, ... Instead, they are left in the form only to
+expand all the macros away with sb-walker, and then removed from the
+form. We can finally splice in whatever form we want inside all those
+definitions and bindings (before macroexpanding everything). Once we
+evaluate the complete form and pass it the values of the lexical
+variables, we will have the value of the spliced in form, evaluated
+inside a recreation of the lexical environment represented by the
+lexenv object.</p>
+
+<p>That still leaves the question of how to get the values of the
+variables. Naively, since we have access to all the variables' names, it
+seems like we could just generate a form to create a list of all the
+variables' values. That dies when lexical scope is used to have two
+variables with the same name. We also cannot only capture the value of
+innermost variable of each name: the values are needed for surrounding
+local functions. The solution that I found is to make sure I get a
+fresh lexenv, side effect it to associate all the variable objects
+with fresh names, and create the list inside that new environment.</p>
+
+<p>In <a href="http://www.discontinuity.info/~pkhuong/common-cold/closures.lisp">slightly more than 400 LOC</a>, this gives us a generic way to evaluate
+forms in serialisable lexical environments, and thus serialisable
+closures, and a global registry to unserialise these closures (and to
+detect nearly duplicate unserialisers, which may happen with nested
+serialisable closures, or serialisable closures inside local functions
+that surround another serialisable closure, although that blow-up is,
+at most, quadratic in the number of environment serialising forms).</p>
+
+    </div>
+<p>
+  posted at: 00:00 | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold" title="path">/Lisp/CommonCold</a> | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold/serialisable_closures_in_sbcl.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

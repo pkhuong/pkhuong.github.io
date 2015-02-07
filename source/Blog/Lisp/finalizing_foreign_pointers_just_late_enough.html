@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Finalizing foreign pointers just late enough - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Sun, 13 Nov 2011</h2>
+<div class="entry">
+  <a id="finalizing_foreign_pointers_just_late_enough" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Finalizing foreign pointers just late enough</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">SBCL exposes a low-level type, <code style="font-family:monospace">system-area-pointer</code>s (SAPs), which are roughtly
+equivalent to <code style="font-family:monospace">void * </code>pointers in C. Since it&#8217;s so low level, we allow ourselves a lot of
+tricks to ensure performance. In particular, SAPs may be represented as raw
+addresses in machine registers. In order to simplify the implementation of this fairly
+useful optimization, they are given the same leeway as numbers with respect to <code style="font-family:monospace">EQ</code>:
+SAPs that represent the same address, even from multiple evaluations of the same
+bindings or value, are not guaranteed to be <code style="font-family:monospace">EQ</code>. When SAPs are compiled to
+machine registers, this lets us simply re-create a type-generic heap value as
+needed.
+</p><!--l. 23--><p style="text-indent:1.5em">   CFFI chose to directly expose SAPs in its user-facing interface. Finalizing SAPs is
+obviously a no-no: multiple references to the same (semantically) SAP can randomly
+be transformed into references to an arbitrary number of (physically) different
+objects.
+</p><!--l. 28--><p style="text-indent:1.5em">   If you want to finalize potentially-strange system-provided types, it&#8217;s probably
+better to wrap them in a read-only structure, and finalize that structure; for
+example:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defstruct (wrapper 
+            (:constructor make-wrapper (pointer))) 
+  (pointer nil :read-only t)) 
+ 
+(defun gced-foreign-alloc (type &amp;rest rest) 
+  (let* ((ptr (apply #&#8217;foreign-alloc type rest)) 
+         (wrapper (make-wrapper ptr))) 
+    (tg:finalize wrapper 
+                 (lambda () 
+                   (foreign-free ptr)))))</pre>
+<!--l. 43--><p style="text-indent:0em"> </p> 
+
+
+    </div>
+<p>
+  posted at: 00:48 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/finalizing_foreign_pointers_just_late_enough.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

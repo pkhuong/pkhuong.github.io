@@ -1,0 +1,29 @@
+digraph G {
+	rankdir=LR;
+	bgcolor=transparent;
+	n0 [label="0" shape=circle];
+	n1 [label="1" shape=circle];
+	nK2 [label="K:2" shape=square];
+	nK4 [label="K:4" shape=square];
+	nK7 [label="K:7" shape=square];
+	n5 [label="3" shape=cds];
+	n8 [label="5" shape=circle];
+	n9 [label="6" shape=cds];
+	n12 [label="8" shape=circle];
+	n13 [label="9" shape=doublecircle];
+	n0 -> n1 [label="&#97;"];
+	n1 -> nK2 [label="&#98;"];
+	nK2 -> n5 [label="&#101;"];
+	nK4 -> n8 [label="&#99;"];
+	n8 -> n9 [label="&#100;"];
+	nK7 -> n12 [label="&#102;"];
+	n12 -> n13 [label="&#103;"];
+	n5 -> nK2 [color=blue];
+	n5 -> nK4 [color=blue];
+	n5 -> nK7 [color=blue];
+	n9 -> nK2 [color=blue];
+	n9 -> nK4 [color=blue];
+	n9 -> nK7 [color=blue];
+	nK2 -> nK4 [color=blue];
+	nK2 -> nK7 [color=blue];
+}

@@ -1,0 +1,588 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Napa-FFT(2) implementation notes - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Wed, 04 Jan 2012</h2>
+<div class="entry">
+  <a id="napa-fft2-implementation-notes" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Napa-FFT(2) implementation notes</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 12--><p style="text-indent:0em">TL;DR: program-generated Common Lisp for a memory-bound task (FFT) can reach
+runtime performance identical to solid C code (djbfft), and close to the state of the
+art (FFTW).
+</p><!--l. 16--><p style="text-indent:1.5em">   Discrete fourier transforms are an interesting case study in high-performance
+computing: they&#8217;re extremely regular recursive computations, completely free of
+control dependencies, and memory-bound. The recursiveness and regularity means
+they can be expressed or generated with relatively little code, freedom of control
+dependency makes them easier to benchmark, and memory-boundedness
+ensures that low-level instruction-selection issues can mostly be ignored.
+Basically, they&#8217;re perfect for specialised compilers that generate Common Lisp
+code. With SBCL, we have decent control over how things are laid out in
+memory and reasonable compilation of high-level constructs like function
+calls or complex float multiplication; its simple colouring register allocator
+and na&#239;ve code generation sometimes yield nasty assembly, but the net
+effect is virtually noise compared to the memory latency inherent to the
+algorithms.
+</p><!--l. 31--><p style="text-indent:1.5em">   I pushed <a href="https://github.com/pkhuong/Napa-FFT">Napa-FFT</a> on github last week. It&#8217;s an implementation of <a href="http://crd-legacy.lbl.gov/~dhbailey/dhbpapers/fftq.pdf">Bailey&#8217;s 6-step
+FFT [PDF]</a> algorithm, which breaks DFTs of size <em style="font-style:italic">n </em>into 2<img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes0x.png" alt="&#8730;n-"></img> DFTs of size <img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes1x.png" alt="&#8730;n--"></img> (with
+appropriate rounding up/down when <em style="font-style:italic">n </em>isn&#8217;t a perfect square). I found the 6-step
+algorithm interesting because it seems perfect to exploit caches. Reducing
+computation size by a factor of <span>&#8776;</span><img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes2x.png" alt="&#8730;n-"></img> is huge: 1M complex doubles, which usually
+overflows L2 or even L3 caches, becomes 1K, and that fits comfortably in most <em style="font-style:italic">L1</em>
+caches. This huge reduction also means that the algorithm has a very shallow
+recursion depth. For example, three recursion steps suffice to re-express a
+DFT of 16 M complex doubles as a (large) number of 8-point DFT base
+cases.
+</p><!--l. 45--><p style="text-indent:1.5em">   I completely failed to realize the latter characteristic, and I feel the approach
+taken in Napa-FFT is overly complex. This is where <a href="https://github.com/pkhuong/Napa-FFT2">Napa-FFT2</a> comes in. It&#8217;s a
+complete rewrite of the same general idea, but explicitly structured to exploit the
+shallow recursion depth. This suffices to yield routines that perform comparably to
+<a href="http://cr.yp.to/djbfft.html">djbfft</a> on small or medium inputs, and only 25-50% slower than <a href="http://www.fftw.org/">FFTW</a> on large
+inputs.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>Napa-FFT2</h3>
+<!--l. 56--><p style="text-indent:0em">Napa-FFT2 features a small number of routine generators, each geared toward
+different input sizes. A first FFT generator handles small inputs and base cases for
+other routines; this family of routines is not expected to fare well on even
+medium inputs. A second generator is dedicated to slightly larger inputs and
+reduces medium FFTs to small ones, and a final generator builds upon the
+small and medium FFT generators to process even the largest inputs. Thus,
+there are at most two levels of recursion before specialised base cases are
+executed.
+                                                                  
+
+                                                                  
+</p><!--l. 66--><p style="text-indent:0em">
+</p>
+   <h4><span>1.1   </span> <a id="x1-20001.1"></a>Radix-2 routine generator</h4>
+<!--l. 67--><p style="text-indent:0em">The <a href="https://github.com/pkhuong/Napa-FFT2/blob/master/small-fft.lisp">small FFT</a> generator implements the same radix-2 approach as <a href="https://github.com/ahefner/bordeaux-fft/">Bordeaux-FFT</a>:
+tiny DFTs on indices in bit-reversed order, followed by lg <em style="font-style:italic">n </em>steps of contiguous
+additions or subtractions (butterflies) and multiplications by twiddle factors. Overall,
+it&#8217;s a very good algorithm: only the leaf DFTs aren&#8217;t on contiguous addresses, and
+the number of arithmetic operations is close to the best upper bounds known to date.
+The generator in Napa-FFT2 improves on Bordeaux-FFT by implementing larger
+base cases (up to <em style="font-style:italic">n </em>= 8), constant-folding most of the address computations and
+recognizing that no temporary vector is needed.
+</p><!--l. 80--><p style="text-indent:1.5em">   The only issue is that the access pattern needed to exploit the structure of the
+DFT matrix is awful on all but the smallest sizes. An L2 cache of 2 MB can only hold
+128K complex doubles; for a lot of programs, temporal locality ensures most accesses
+hit cache even if the working set exceeds cache size. Unfortunately, the opposite
+happens with bit-reversed ordered accesses. The closest two indices are (e.g. they
+only differ in the least significant bit), the farther apart they are accessed, time-wise
+(see figure <a href="#x1-20011">1<!--tex4ht:ref: fig:bit-reverse --></a>).
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-20011"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 90--><p style="text-indent:0em">
+
+</p><!--l. 91--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/bit-reversal-resized.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;1: </span><span>Bit-reversed addressing pattern for 8 elements</span></div><!--tex4ht:label?: x1-20011 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 96--><p style="text-indent:1.5em">   This explains the strong performance degradation in figure <a href="#x1-20022">2<!--tex4ht:ref: fig:radix-2 --></a>. The graph reports
+cycle counts on my 2.8 GHz X5660, which has (per core) 32 KB of L1D, 256
+KB of L2, and 12 MB of L3 cache per socket. For tiny inputs, the constant
+overhead (function calls, the cpuid/rdtsc sequence, etc.) dominates, but,
+afterwards, we observe a fairly constant slope until 2<sup><span style="font-size:70%">12</span></sup>, and then from 2<sup><span style="font-size:70%">13</span></sup> to
+2<sup><span style="font-size:70%">17</span></sup>; finally from 2<sup><span style="font-size:70%">18</span></sup> onward, performance degrades significantly. This fits
+well with the cache sizes. If we take into account the input, output and
+twiddle factor vectors, the jump from 2<sup><span style="font-size:70%">12</span></sup> to 2<sup><span style="font-size:70%">13</span></sup> overflows L2, and 2<sup><span style="font-size:70%">17</span></sup> to 2<sup><span style="font-size:70%">18</span></sup>
+L3.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-20022"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 108--><p style="text-indent:0em">
+
+</p><!--l. 109--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/radix-2.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;2: </span><span>Runtimes of generated functions for the radix-2 algorithm for forward
+complex-double DFT</span></div><!--tex4ht:label?: x1-20022 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><h4><span>1.2   </span> <a id="x1-30001.2"></a>2/4/6-step FFT algorithms</h4>
+<!--l. 116--><p style="text-indent:0em">This is the effect that the 6-step algorithm attempts to alleviate. Each recursive
+FFT is significantly smaller: transforms of size 2<sup><span style="font-size:70%">18</span></sup>, which overflows L3, are
+executed as transforms of size 2<sup><span style="font-size:70%">9</span></sup>, which fits in L1. The total algorithmic
+complexity of the transform isn&#8217;t improved, but the locality of memory accesses
+is.
+</p><!--l. 123--><p style="text-indent:1.5em">   <a href="http://www.computer.org/portal/web/csdl/doi/10.1109/AFIPS.1966.83">Gentleman and Sande</a> describe how the DFT on a vector can be re-expressed as
+multiple DFTs on columns of row-major matrices, plus a transposition and an
+element-wise multiplication by a close cousin of the DFT matrix (figure <a href="#x1-30013">3<!--tex4ht:ref: fig:4-step --></a>). The
+transposition is nearly free of arithmetic, while the element-wise multiplication
+only involves streaming memory accesses, so fusing them makes a lot of
+sense.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-30013"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 131--><p style="text-indent:0em">
+
+</p><!--l. 132--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/4-step-resized.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;3: </span><span>Sketch of the 4-step FFT algorithm</span></div><!--tex4ht:label?: x1-30013 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 137--><p style="text-indent:1.5em">   The <a href="https://github.com/pkhuong/Napa-FFT2/blob/master/large-fft.lisp">6-step algorithm</a> adds two transposition steps, before and after the four
+steps. This way, each sub-FFT operates on adjacent addresses (figure <a href="#x1-30024">4<!--tex4ht:ref: fig:6-step --></a>), and the
+output is in the correct order.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-30024"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 144--><p style="text-indent:0em">
+
+</p><!--l. 145--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/6-step-resized.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;4: </span><span>Sketch of the 6-step FFT algorithm</span></div><!--tex4ht:label?: x1-30024 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 150--><p style="text-indent:1.5em">   Finally, the 2-step algorithm (also found in <a href="http://crd-legacy.lbl.gov/~dhbailey/dhbpapers/fftq.pdf">Bailey&#8217;s paper [PDF]</a>) is
+a hybrid of the 4 and 6 -step algorithms (figure <a href="#x1-30035">5<!--tex4ht:ref: fig:2-step --></a>). Rather than inserting
+transposition steps, columns are copied to temporary vectors before FFTing
+them and copying them back. Of course, the intermediate transposition and
+element-wise multiplication can be fused with the copy from temporary
+vectors.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-30035"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 159--><p style="text-indent:0em">
+
+</p><!--l. 160--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/2-step-resized.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;5: </span><span>Sketch of the 2-step FFT algorithm</span></div><!--tex4ht:label?: x1-30035 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><h4><span>1.3   </span> <a id="x1-40001.3"></a>Recursively transposing matrices</h4>
+<!--l. 166--><p style="text-indent:0em">Transpositions represent a significant portion of the runtime for both 6-step
+algorithms. This isn&#8217;t surprising: good FFTs are memory-bound, and the only steps
+that aren&#8217;t cache-friendly are the three transpositions. Napa-FFT2 generates
+the initial and final transpositions separately from the middle 4 steps of
+the 6-step algorithms. This makes it easier to exploit out-of-order input or
+output.
+</p><!--l. 174--><p style="text-indent:1.5em">   It also enables us to estimate the time elapsed during each transposition step
+compared to the rest of the computation (for the range of sizes considered, from 2<sup><span style="font-size:70%">6</span></sup> to
+2<sup><span style="font-size:70%">25</span></sup> points). Depending on the size of the input (odd or even powers of two), each
+transposition (initial or final) adds 5-20% of the runtime of the middle steps. With
+some algebra we find that, for a full DFT with in-order input and output, the three
+transposition steps (initial, middle and final) represent 13-40% of the total
+runtime!
+</p><!--l. 183--><p style="text-indent:0em">
+</p>
+   <h5><span>1.3.1   </span> <a id="x1-50001.3.1"></a>Transposing square matrices</h5>
+<!--l. 184--><p style="text-indent:0em">Transposition steps are faster for input sizes that are even powers of two (<em style="font-style:italic">n </em>= 2<sup><span style="font-size:70%">2</span><em style="font-size:70%; font-style:italic">k</em></sup>).
+The reason is that the corresponding transposition operates on square matrices of
+size 2<sup><em style="font-size:70%; font-style:italic">k</em></sup><span>&#215; </span>2<sup><em style="font-size:70%; font-style:italic">k</em></sup>. These are easily implemented recursively, by decomposing each matrix
+in four blocks until the base size is reached.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-50016"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 191--><p style="text-indent:0em">
+</p>
+<center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes3x.png" alt="[      |    ]         [      &#8242;|    &#8242; ]&#10;   A   |B                 A   | C&#10;  -----|-----  - &#8594;       -----|------&#10;   C   |D                 B  &#8242;|D   &#8242;&#10;       |                      |&#10;" style="text-align:center" align="center"></img></center>
+<!--l. 202--><p style="text-indent:0em">
+</p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;6: </span><span>Square in-place transposition</span></div><!--tex4ht:label?: x1-50016 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 208--><p style="text-indent:1.5em">   As figure <a href="#x1-50016">6<!--tex4ht:ref: fig:square-transp --></a> shows, a matrix of size 2<sup><em style="font-size:70%; font-style:italic">k</em></sup><span>&#215; </span>2<sup><em style="font-size:70%; font-style:italic">k</em></sup> can be transposed in-place by
+transposing each quadrant in-place, and swapping the top-right and bottom-left
+quadrants. Napa-FFT2 instead transposes the top-left and bottom-right quadrants
+in-place, and simultaneously transposes and swaps the two other. The in-place
+transpositions are simply decomposed recursively. Transpose-and-swap operations are
+similarly recursively decomposed into four smaller transpose-and-swaps. This
+recursive decomposition ensures that, for each level of the memory hierarchy (e.g.
+L1D cache, L2, TLB, L3), some recursion depth is well-suited to that level&#8217;s
+size.
+</p><!--l. 219--><p style="text-indent:1.5em">   The iterative base case for in-place transposition is not quite a trivial loop nest,
+so it&#8217;s just two nested for loops. Thankfully, it&#8217;s only used for blocks directly on the
+diagonal; it probably doesn&#8217;t matter much. Transpose-and-swap is simpler, and
+represents the vast majority of the computation. The loop nest is manually
+unrolled-and-jammed to improve spatial locality of the routine, and fully (or nearly)
+use the data brought in by each cache miss: the outer loop is partially unrolled,
+and the duplicated inner loops fused (everyone keeps referring to Allen and
+Cocke&#8217;s &#8220;A catalogue of optimizing transformations,&#8221; but I can&#8217;t find any
+relevant link, sorry). In figure <a href="#x1-50027">7<!--tex4ht:ref: fig:unroll-and-jam --></a>, assuming that matrices A and B are in
+row-major order, accesses to A are naturally in streaming order; the short
+inner-most loop helps maximise the reuse of (non-consecutive) cache lines in
+B.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-50027"></a>
+                                                                  
+
+                                                                  
+<pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">for i below n by 4 
+  for j below m 
+    for ii from i below i+4 
+      operate on A(ii, j), B(j, ii), etc.</pre>
+<!--l. 240--><p style="text-indent:0em">
+<br></br></p><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;7: </span><span>Unrolled-and-jammed loop nest</span></div><!--tex4ht:label?: x1-50027 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><h5><span>1.3.2   </span> <a id="x1-60001.3.2"></a>Transposing rectangular matrices</h5>
+<!--l. 245--><p style="text-indent:0em">Transposing general rectangular matrices is much more difficult than for square,
+power-of-two&#8211;sized, matrices. However, the 6-step algorithms only need to transpose
+matrices of size 2<sup><em style="font-size:70%; font-style:italic">k</em></sup><span>&#215; </span>2<sup><em style="font-size:70%; font-style:italic">k</em><span style="font-size:70%">+1</span></sup> or 2<sup><em style="font-size:70%; font-style:italic">k</em><span style="font-size:70%">+1</span></sup><span>&#215; </span>2<sup><em style="font-size:70%; font-style:italic">k</em></sup>. For these shapes, it&#8217;s possible to split the
+input in two square block submatrices, transpose them in-place, and interleave or
+de-interleave the rows (figure <a href="#x1-60018">8<!--tex4ht:ref: fig:rectangular-in-place --></a>).
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-60018"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 254--><p style="text-indent:0em">
+</p>
+<center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes4x.png" alt="                  &#8970;   a&#8242;  &#8971;         &#8970;   &#8242; |  &#8242; &#8971;&#10;[      ]          |   a0&#8242;  |            a0 |b 0&#10;   A              ||   a1&#8242;  ||         |  a&#8242; |b &#8242; |&#10;  ------  -  &#8594;    ||---b2&#8242;--||  - &#8594;    |&#8968;   1&#8242; |  1&#8242; |&#8969;&#10;   B              |&#8968;   b0&#8242;  |&#8969;            a2 |b 2&#10;                      b1&#8242;                  |&#10;                       2&#10;" style="text-align:center" align="center"></img></center>
+<!--l. 275--><p style="text-indent:0em">
+</p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;8: </span><span>Rectangular in-place transposition</span></div><!--tex4ht:label?: x1-60018 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 281--><p style="text-indent:1.5em">   For now, though, I found it simpler to implement that by transposing the
+submatrices out-of-place, moving the result to temporary storage (figure <a href="#x1-60029">9<!--tex4ht:ref: fig:rectangular-copy --></a>). The
+data, implicitly (de-)interleaved, is then copied back.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-60029"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 287--><p style="text-indent:0em">
+</p>
+<center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/napa-fft2-implementation-notes5x.png" alt="[      ]&#10;   A              [      |     ]&#10;  ------  -  &#8594;      A  &#8242; |B  &#8242;&#10;   B                     |&#10;" style="text-align:center" align="center"></img></center>
+<!--l. 298--><p style="text-indent:0em">
+</p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;9: </span><span>Rectangular copying transposition</span></div><!--tex4ht:label?: x1-60029 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 304--><p style="text-indent:1.5em">   This simplistic implementation explains a lot of the slowdown on odd powers of
+two sizes. However, even the in-place algorithm would probably be somewhat slower
+than a square in-place transpose of comparable size: copying rows and tracking
+whether they have already been swapped into place would still use a lot of
+cycles.
+</p><!--l. 310--><p style="text-indent:1.5em">   I believe the block copies could be simplified by going through the MMU.
+Matrices of 128K complex doubles or more will go through block copies (or swap) of
+at least 4 KB&#8230;the usual page size on x86oids. If the vectors are correctly aligned, we
+can instead remap pages in the right order. This is far from free, but it may well be
+faster than actually copying the data. We&#8217;re constantly paying for address translation
+but rarely do anything but <code style="font-family:monospace">mmap </code>address space in; why not try and exploit the
+hardware better?
+</p>
+   <h4><span>1.4   </span> <a id="x1-70001.4"></a>Choosing algorithms</h4>
+<!--l. 320--><p style="text-indent:0em">The <a href="https://github.com/pkhuong/Napa-FFT2/blob/master/medium-fft.lisp">medium FFT generator</a> produces code for the 2-step algorithm, with smaller
+FFTs computed by specialised radix-2 code. The copy/FFT/copy loops are manually
+unroll-and-jammed here too.
+</p><!--l. 326--><p style="text-indent:1.5em">   The <a href="https://github.com/pkhuong/Napa-FFT2/blob/master/medium-fft.lisp">large FFT generator</a> produces code for the 6-step algorithm (without the
+initial and final transpositions), with smaller FFTs computed either by the
+radix-2 or 2-step algorithms; the <a href="https://github.com/pkhuong/Napa-FFT2/blob/master/transpose.lisp">transposition generator</a> is exposed separately.
+I assume that out-of-order output is acceptable, and only transpose the
+input, in place. A final transposition would be necessary to obtain in-order
+output.
+</p><!--l. 336--><p style="text-indent:1.5em">   Figure <a href="#x1-700110">10<!--tex4ht:ref: fig:napa-tune --></a> lets us compare the performance of the 4 methods (radix-2, 2-step,
+6-step/radix-2 and 6-step/2-step).
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-700110"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 340--><p style="text-indent:0em">
+
+</p><!--l. 341--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/Napa-tune.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;10: </span><span>Respective performance of Napa-FFT2&#8217;s four methods for forward
+complex-double DFT</span></div><!--tex4ht:label?: x1-700110 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 347--><p style="text-indent:1.5em">   Again, radix-2 shows a severe performance degradation as soon as the working set
+exceeds L3 size. Both 6-step algorithms show spikes in runtimes on odd powers of
+two: the transposition code isn&#8217;t in-place for these vector sizes. On smaller inputs
+(below <span>&#8776; </span>2<sup><span style="font-size:70%">10</span></sup>), 6-step/2-step seems dominated by constant overhead, while the spikes
+are on even powers of two for 6-step/radix-2. I&#8217;m not sure why this is the case for
+6-step/radix-2, but the reverse for 2-step.
+</p><!--l. 355--><p style="text-indent:1.5em">   Table <a href="#x1-70021">1<!--tex4ht:ref: tab:napa-tune --></a> shows the same data, but scaled by the lowest cycle count for each input
+size; I don&#8217;t have confidence intervals, but the spread was extremely low, on the order
+of 1%.
+</p>
+   <div>
+                                                                  
+
+                                                                  
+<!--l. 359--><p style="text-indent:1.5em">   <a id="x1-70021"></a></p><hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 360--><p style="text-indent:0em">
+</p>
+<div style="margin-top:0.5em; margin-bottom:0.5em; text-align:center" align="left"> <table id="TBL-1" cellspacing="0" cellpadding="0" rules="groups" style="margin-right:auto; border-right:solid black 0.4pt; margin-left:auto; border-left:solid black 0.4pt"><colgroup id="TBL-1-1g"><col id="TBL-1-1"></col></colgroup><colgroup id="TBL-1-2g"><col id="TBL-1-2"></col><col id="TBL-1-3"></col><col id="TBL-1-4"></col><col id="TBL-1-5"></col></colgroup><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-1-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-1-1" align="right">lg <em style="font-style:italic">n</em></td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-2" align="center">Radix-2</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-3" align="center">2-step</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-4" align="center">6-step/radix-2</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-5" align="center">6-step/2-step</td>
+</tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-2-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-2-1" align="right">   2</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-3" align="center">     </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-4" align="center">            </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-5" align="center">           </td></tr><tr style="vertical-align:baseline;" id="TBL-1-3-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-3-1" align="right"> 3</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-3" align="center"> </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-4" align="center"> </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-5" align="center"></td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-4-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-4-1" align="right">   4</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-3" align="center">     </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-4" align="center">            </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-5" align="center">           </td></tr><tr style="vertical-align:baseline;" id="TBL-1-5-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-5-1" align="right"> 5</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-3" align="center"> </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-4" align="center"> </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-5" align="center"></td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-6-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-6-1" align="right">   6</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-6-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-6-3" align="center"> 1.28 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-6-4" align="center">    1.17       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-6-5" align="center">           </td></tr><tr style="vertical-align:baseline;" id="TBL-1-7-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-7-1" align="right"> 7</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-7-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-7-3" align="center"> 1.34 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-7-4" align="center"> 1.01 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-7-5" align="center"></td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-8-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-8-1" align="right">   8</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-8-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-8-3" align="center"> 1.17 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-8-4" align="center">    1.12       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-8-5" align="center">    2.04      </td></tr><tr style="vertical-align:baseline;" id="TBL-1-9-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-9-1" align="right"> 9</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-9-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-9-3" align="center"> 1.24 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-9-4" align="center"> 1.02 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-9-5" align="center"> 1.68</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-10-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-10-1" align="right">  10</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-10-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-10-3" align="center"> 1.17 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-10-4" align="center">    1.05       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-10-5" align="center">    1.51      </td></tr><tr style="vertical-align:baseline;" id="TBL-1-11-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-11-1" align="right"> 11</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-11-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-11-3" align="center"> 1.23 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-11-4" align="center"> 1.13 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-11-5" align="center"> 1.45</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-12-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-12-1" align="right">  12</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-12-2" align="center">  1.01  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-12-3" align="center"> 1.14 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-12-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-12-5" align="center">    1.36      </td></tr><tr style="vertical-align:baseline;" id="TBL-1-13-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-13-1" align="right"> 13</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-13-2" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-13-3" align="center"> 1.12 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-13-4" align="center"> 1.11 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-13-5" align="center"> 1.27</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-14-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-14-1" align="right">  14</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-14-2" align="center">  1.04  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-14-3" align="center"> 1.08 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-14-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-14-5" align="center">    1.16      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-15-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-15-1" align="right">  15</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-15-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-15-3" align="center"> 1.07 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-15-4" align="center">    1.08       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-15-5" align="center">    1.20      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-16-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-16-1" align="right">  16</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-16-2" align="center">  1.06  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-16-3" align="center"> 1.08 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-16-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-16-5" align="center">    1.13      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-17-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-17-1" align="right">  17</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-17-2" align="center">  1.00  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-17-3" align="center"> 1.03 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-17-4" align="center">    1.03       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-17-5" align="center">    1.11      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-18-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-18-1" align="right">  18</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-18-2" align="center">  1.38  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-18-3" align="center"> 1.16 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-18-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-18-5" align="center">    1.15      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-19-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-19-1" align="right">  19</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-19-2" align="center">  1.30  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-19-3" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-19-4" align="center">    1.15       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-19-5" align="center">    1.21      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-20-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-20-1" align="right">  20</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-20-2" align="center">  1.41  </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-20-3" align="center"> 1.04 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-20-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-20-5" align="center">    1.04      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-21-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-21-1" align="right">  21</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-21-2" align="center">       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-21-3" align="center"> 1.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-21-4" align="center">    1.04       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-21-5" align="center">    1.08      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-22-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-22-1" align="right">  22</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-22-2" align="center">       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-22-3" align="center"> 1.08 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-22-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-22-5" align="center">    1.07      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-23-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-23-1" align="right">  23</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-23-2" align="center">       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-23-3" align="center"> 1.03 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-23-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-23-5" align="center">    1.03      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-24-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-24-1" align="right">  24</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-24-2" align="center">       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-24-3" align="center"> 1.04 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-24-4" align="center">    1.00       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-24-5" align="center">    1.03      </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-25-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-25-1" align="right">  25</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-25-2" align="center">       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-25-3" align="center"> 1.02 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-25-4" align="center">    1.01       </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-25-5" align="center">    1.00      </td>
+</tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-26-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-1-26-1" align="right">    </td></tr></table></div></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Table&#160;1:  </span><span>Relative  performance  of  Napa-FFT2&#8217;s  four  methods  for  forward
+complex-double DFT</span></div><!--tex4ht:label?: x1-70021 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr></div>
+<!--l. 396--><p style="text-indent:1.5em">   Radix-2 provides the best performance until <em style="font-style:italic">n </em>= 2<sup><span style="font-size:70%">12</span></sup>, at which point
+6-step/radix-2 is better for even powers of two. As input size grows, the gap between
+radix-2 and 2-step narrows, until <em style="font-style:italic">n </em>= 2<sup><span style="font-size:70%">19</span></sup>, at which point 2-step becomes faster than
+radix-2. Finally, from <em style="font-style:italic">n </em>= 2<sup><span style="font-size:70%">22</span></sup> onward, 6-step/radix-2 is faster than both radix-2 and
+2-step.
+</p><!--l. 402--><p style="text-indent:1.5em">   On ridiculously large inputs (2<sup><span style="font-size:70%">25</span></sup> points or more) 6-step/2-step seems to becomes
+slightly faster than 6-step/radix-2, reflecting the narrowing gap between radix-2 and
+2-step at sizes around 2<sup><span style="font-size:70%">13</span></sup> and greater. At first sight, it seems interesting to
+implement 6-step/6-step/radix-2, but this table is for out-of-order results; the 6-step
+algorithms depend on in-order results from the sub-FFTs, and, for those, 2-step
+consistently performs better.
+</p>
+   <h3><span>2   </span> <a id="x1-80002"></a>Napa-FFT2, Bordeaux-FFT, djbfft and FFTW</h3>
+<!--l. 411--><p style="text-indent:0em">Choosing the fastest method for each input size, from 2<sup><span style="font-size:70%">2</span></sup> to 2<sup><span style="font-size:70%">25</span></sup>, yields the full
+implementation of Napa-FFT2. The graph in figure <a href="#x1-800111">11<!--tex4ht:ref: fig:overall --></a> illustrates the performance of
+Bordeaux-FFT, Napa-FFT2 without the final transpose for 6-step, djbfft (which
+lacks transforms past 2<sup><span style="font-size:70%">13</span></sup>) with out-of-order output, and FFTW (the fastest of
+in-place and out-of-place for each size, at default planning settings). Napa-FFT2&#8217;s,
+or, rather, radix-2&#8217;s, performance curve is pretty much the same as djbfft&#8217;s until
+djbfft&#8217;s maximum size is reached. It&#8217;s interesting to note that djbfft is written in
+hand-tuned C, while Napa-FFT2 is machine-generated (SB)CL, without any low-level
+annotation except type declarations and the elimination of runtime safety
+checks.
+</p>
+   <hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<a id="x1-800111"></a>
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 425--><p style="text-indent:0em">
+
+</p><!--l. 426--><p style="text-indent:0em"><img src="http://www.pvk.ca/Blog/resources/Overall.png" alt="PIC" style="text-align:center" align="center"></img></p></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Figure&#160;11: </span><span>Comparison of runtimes for Bordeaux-FFT, Napa-FFT, djbfft and
+FFTW for forward complex-double DFT</span></div><!--tex4ht:label?: x1-800111 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr><!--l. 432--><p style="text-indent:1.5em">   Table <a href="#x1-80022">2<!--tex4ht:ref: tab:overall --></a> presents the same data, scaled by the lowest cycle count. FFTW
+consistently has the lowest cycle counts. Napa-FFT2 and djbfft are both around
+twice as slow on small and medium inputs, and, on larger inputs, Napa-FFT2
+becomes only 25% to 50% slower than FFTW. Bordeaux-FFT, however, is always
+around 3 times (or more) as slow as FFTW, and more than 50% slower than
+Napa-FFT2.
+</p>
+   <div>
+                                                                  
+
+                                                                  
+<!--l. 439--><p style="text-indent:1.5em">   <a id="x1-80022"></a></p><hr></hr><div style="margin-right:auto; margin-left:auto">
+                                                                  
+
+                                                                  
+<div style="margin-right:1em; margin-left:1em; text-align:center" align="center">
+<!--l. 440--><p style="text-indent:0em">
+</p>
+<div style="margin-top:0.5em; margin-bottom:0.5em; text-align:center" align="left"> <table id="TBL-2" cellspacing="0" cellpadding="0" rules="groups" style="margin-right:auto; border-right:solid black 0.4pt; margin-left:auto; border-left:solid black 0.4pt"><colgroup id="TBL-2-1g"><col id="TBL-2-1"></col></colgroup><colgroup id="TBL-2-2g"><col id="TBL-2-2"></col><col id="TBL-2-3"></col><col id="TBL-2-4"></col><col id="TBL-2-5"></col></colgroup><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-2-1-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-1-1" align="right">lg <em style="font-style:italic">n</em></td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-1-2" align="center">Bordeaux</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-1-3" align="center">Napa</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-1-4" align="center"> djb </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-1-5" align="center">FFTW</td>
+</tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-2-2-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-2-1" align="right">   2</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-2-2" align="center">  7.26    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-2-3" align="center"> 1.71 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-2-4" align="center">1.00</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-2-5" align="center"> 1.21  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-3-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-3-1" align="right"> 3</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-3-2" align="center"> 7.04 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-3-3" align="center"> 1.35 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-3-4" align="center">1.00</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-3-5" align="center"> 1.11</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-4-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-4-1" align="right">   4</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-4-2" align="center">  6.83    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-4-3" align="center"> 1.57 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-4-4" align="center">1.39</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-4-5" align="center"> 1.00  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-5-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-5-1" align="right"> 5</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-5-2" align="center"> 6.46 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-5-3" align="center"> 2.00 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-5-4" align="center">2.06</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-5-5" align="center"> 1.00</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-6-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-6-1" align="right">   6</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-6-2" align="center">  6.10    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-6-3" align="center"> 2.18 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-6-4" align="center">2.25</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-6-5" align="center"> 1.00  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-7-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-7-1" align="right"> 7</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-7-2" align="center"> 5.52 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-7-3" align="center"> 2.22 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-7-4" align="center">2.32</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-7-5" align="center"> 1.00</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-8-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-8-1" align="right">   8</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-8-2" align="center">  4.60    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-8-3" align="center"> 2.03 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-8-4" align="center">2.11</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-8-5" align="center"> 1.00  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-9-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-9-1" align="right"> 9</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-9-2" align="center"> 4.48 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-9-3" align="center"> 2.11 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-9-4" align="center">2.22</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-9-5" align="center"> 1.00</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-10-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-10-1" align="right">  10</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-10-2" align="center">  4.41    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-10-3" align="center"> 2.13 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-10-4" align="center">2.24</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-10-5" align="center"> 1.00  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-11-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-11-1" align="right"> 11</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-11-2" align="center"> 4.15 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-11-3" align="center"> 2.11 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-11-4" align="center">2.19</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-11-5" align="center"> 1.00</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-12-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-12-1" align="right">  12</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-12-2" align="center">  3.57    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-12-3" align="center"> 1.87 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-12-4" align="center">1.93</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-12-5" align="center"> 1.00  </td></tr><tr style="vertical-align:baseline;" id="TBL-2-13-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-13-1" align="right"> 13</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-13-2" align="center"> 3.73 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-13-3" align="center"> 2.08 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-13-4" align="center">1.98</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-13-5" align="center"> 1.00</td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-14-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-14-1" align="right">  14</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-14-2" align="center">  3.29    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-14-3" align="center"> 1.82 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-14-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-14-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-15-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-15-1" align="right">  15</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-15-2" align="center">  3.10    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-15-3" align="center"> 1.81 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-15-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-15-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-16-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-16-1" align="right">  16</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-16-2" align="center">  3.11    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-16-3" align="center"> 1.74 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-16-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-16-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-17-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-17-1" align="right">  17</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-17-2" align="center">  3.08    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-17-3" align="center"> 1.84 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-17-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-17-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-18-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-18-1" align="right">  18</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-18-2" align="center">  3.78    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-18-3" align="center"> 1.59 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-18-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-18-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-19-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-19-1" align="right">  19</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-19-2" align="center">  2.95    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-19-3" align="center"> 1.47 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-19-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-19-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-20-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-20-1" align="right">  20</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-20-2" align="center">  2.86    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-20-3" align="center"> 1.37 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-20-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-20-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-21-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-21-1" align="right">  21</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-21-2" align="center">  2.56    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-21-3" align="center"> 1.36 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-21-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-21-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-22-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-22-1" align="right">  22</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-22-2" align="center">  2.97    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-22-3" align="center"> 1.25 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-22-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-22-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-23-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-23-1" align="right">  23</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-23-2" align="center">  3.09    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-23-3" align="center"> 1.50 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-23-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-23-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-24-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-24-1" align="right">  24</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-24-2" align="center">  2.83    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-24-3" align="center"> 1.23 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-24-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-24-5" align="center"> 1.00  </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-2-25-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-25-1" align="right">  25</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-25-2" align="center">  2.87    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-25-3" align="center"> 1.43 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-25-4" align="center">   </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-2-25-5" align="center"> 1.00  </td>
+</tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-2-26-"><td style="white-space:nowrap; text-align:right; padding-right:5pt; padding-left:5pt" id="TBL-2-26-1" align="right">    </td></tr></table></div></div>
+<br></br><div style="margin-right:1em; text-align:left; margin-left:3em; text-indent:-2em" align="left"><span style="white-space:nowrap; font-weight:bold">Table&#160;2: </span><span>Relative runtimes for Bordeaux-FFT, Napa-FFT, djbfft and FFTW
+for forward complex-double DFT</span></div><!--tex4ht:label?: x1-80022 -->
+                                                                  
+
+                                                                  
+   </div><hr></hr></div>
+   <h3><span>3   </span> <a id="x1-90003"></a>What&#8217;s next?</h3>
+<!--l. 477--><p style="text-indent:0em">The prototype is already pretty good, and definitely warrants more hacking. There
+are a few obvious things on my list: </p>
+     <ul><li>Most of the improvements in the radix-2 generator (larger base cases and
+     making the temporary vector useless) can be ported to Bordeaux-FFT;
+     </li>
+     <li>Both the small FFT generator and Bordeaux-FFT could benefit from a
+     split-radix (radix-2/4 instead radix-2) rewrite;
+     </li>
+     <li>Scaling (during copy or transpose) is already coded, it must simply be
+     enabled;
+     </li>
+     <li>Inverse transforms would be useful;
+     </li>
+     <li>In-place  rectangular  transpositions  would  probably  help  reduce  the
+     performance  gap  between  odd  and  even  powers  of  two  for  the  6-step
+     algorithms;
+     </li>
+     <li>Processing real input specially can lead to hugely faster code with little
+     work;
+     </li>
+     <li>Generalizing     the     transposition     code     to     handle     arbitrary
+     (power-of-two&#8211;sized) matrices would enable easy multidimensional FFTs;
+     </li>
+     <li>Finally,   I   must   write   a   library   instead   of   writing   base   cases,
+     constant-folding address computations or unrolling (and jamming) loops
+     by  hand.  It  would  pretty  much  be  a  compiler  geared  toward  large
+     recursively-generated, but repetitive and simple, array-manipulation code.</li></ul><!--l. 503--><p style="text-indent:1.5em">   It&#8217;s pretty clear that SBCL&#8217;s native support on x86-64 for SSE2 complex float
+arithmetic pays off. I expect other tasks would similarly benefit from hand-written
+assembly routines for a few domain-specific operations. SBCL&#8217;s architecture makes
+that very easy. It&#8217;s when we want to rewrite patterns <em style="font-style:italic">across </em>function calls that
+Python gets in the way&#8230;and that&#8217;s exactly what code generators should be concerned
+with getting right.
+                                                                  
+
+                                                                  
+</p><!--l. 511--><p style="text-indent:1.5em">   In the end, I think the most interesting result is that the runtime performance of
+(SB)CL can definitely be competitive with C for memory-bound tasks like FFT.
+Common Lisp compilers generally suffer from simplistic, 70&#8217;s-style, low-level code
+generation facilities; luckily, when tackling memory-bound tasks, getting
+the algorithms and data layouts right to reduce the operation count and
+exploit hierarchical memory matters a lot more. The advantage of CL is
+that, unlike C, it&#8217;s easy to generate and compile, even at runtime. CL is also
+easier to debug, since we can enable or disable runtime checks with a single
+declaration.
+</p><!--l. 522--><p style="text-indent:1.5em">   If the trend of memory bandwidth (and latency) improving much more slowly
+than computing power persists, while we keep processing larger data sets, the
+suitability of Common Lisp to the generation of high-performance code is an asset
+that will prove itself more and more useful in the near future.
+</p><!--l. 528--><p style="text-indent:1.5em">   I&#8217;m also pleasantly surprised by the performance of Napa-FFT2, regardless of the
+target language. I&#8217;ll probably try and re-implement it in runtime-specialised C
+(<a href="https://github.com/pkhuong/VLBDB">VLBDB</a>, another side-project of mine). This would hopefully help close the gap with
+FFTW even further, and make it easier to try and exploit MMU tricks.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 18:45 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/napa-fft2-implementation-notes.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

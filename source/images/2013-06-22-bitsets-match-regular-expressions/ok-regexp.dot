@@ -1,0 +1,28 @@
+digraph G {
+	rankdir=LR;
+	bgcolor=transparent;
+	n0 [label="0" shape=circle];
+	n1 [label="1" shape=circle];
+	n2 [label="2" shape=square];
+	n3 [label="3" shape=circle];
+	n4 [label="4" shape=cds];
+	n5 [label="5" shape=circle];
+	n6 [label="6" shape=circle];
+	n7 [label="7" shape=cds];
+	n8 [label="8" shape=circle];
+	n9 [label="9" shape=circle];
+	n10 [label="10" shape=doublecircle];
+	n0 -> n1 [label="&#97;"];
+	n1 -> n2 [label="&#98;"];
+	n3 -> n4 [label="&#101;"];
+	n5 -> n6 [label="&#99;"];
+	n6 -> n7 [label="&#100;"];
+	n8 -> n9 [label="&#102;"];
+	n9 -> n10 [label="&#103;"];
+	n2 -> n5 [color=blue];
+	n2 -> n3 [color=blue];
+        n2 -> n8 [color=blue];
+        n7 -> n8 [color=blue];
+        n4 -> n8 [color=blue];
+        n8 -> n2 [color=blue constraint=false];
+}

@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Fri, 01 Apr 2011</h2>
+<div class="entry">
+  <a id="introducing_pipes" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Introducing Pipes, a lightweight stream fusion EDSL</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 6--><p style="text-indent:0em">Fusion is cool. It lets us write bulk data processing programs modularly, with each
+pass or computation separate from the rest, while retaining the efficiency of
+code that executes all the passes simultaneously rather than building large
+intermediate values. In the last couple years, most of the attention has been
+coming from the Haskell crowd (e.g. <a href="http://www.cse.unsw.edu.au/~dons/streams.html">Data.List.Stream</a>), but Lisper aren&#8217;t
+immune to that siren&#8217;s call. In the late 80&#8217;s, Richard Waters worked on
+<a href="http://series.sourceforge.net/">SERIES</a>, a Common Lisp package to transform &#8220;obviously synchronizable series
+expressions&#8221; into buffer-less loops. That package is still available, and even lightly
+maintained.
+</p><!--l. 20--><p style="text-indent:1.5em">   I believe that, while the goal is noble, the approach taken in SERIES is too
+magical; I&#8217;d argue that it&#8217;s even more true of stream fusion in GHC.
+</p><!--l. 24--><p style="text-indent:1.5em">   SERIES goes through a lot of trouble to makes it transformation work on code
+expressed as regular CL, and even across function definitions. The problem is,
+SERIES can only handle a subset of CL, so users can be surprised when a seemingly
+minor refactoring suddenly breaks their code.
+</p><!--l. 30--><p style="text-indent:1.5em">   GHC&#8217;s fusion stuff has the virtue of using the language itself to handle the dirty
+work of looking just like regular Haskell. Unfortunately, it also depends on
+inlining and on rewrite rules (well, one), which don&#8217;t warn when they can&#8217;t be
+applied.
+</p><!--l. 35--><p style="text-indent:1.5em">   So, instead, I believe that we should be using an EDSL. It&#8217;s embedded, so it&#8217;s
+easy to use with the host language (both around and inside the DSL). It&#8217;s also
+domain specific, so it should be clear what the language does and doesn&#8217;t handle,
+and, in the worst case, the implementation can warn the user instead of silently
+reverting to slowness.
+</p><!--l. 42--><p style="text-indent:1.5em">   The design space is huge, but I think <a href="https://github.com/pkhuong/Pipes">Pipes</a> is a decent point. I haven&#8217;t been able
+to spend even one minute on it since a hackathon during the holidays; I hope
+someone else will be able to work on Pipes a bit.
+</p>
+   <h3><a id="x1-1000"></a>The idea behing Pipes</h3>
+<!--l. 49--><p style="text-indent:0em">The simplest fusion schemes attempt to handle cases like
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(mapcar f (mapcar g list)) -&gt; (mapcar (compose f g) list)</pre>
+<!--l. 52--><p style="text-indent:0em">
+</p><!--l. 54--><p style="text-indent:1.5em">   These cases are simple because each operation has at most one consumer (output)
+and one producer (input), and produces exactly one output value for each input
+value. The obvious ways to generalize allow arbitrarily many output values per input
+values, multiple consumers, or multiple producers.
+</p><!--l. 60--><p style="text-indent:1.5em">   Most common are transformations that handle an arbitrary number of output
+values per input values (or even arbitrary types!). <code style="font-family:monospace">foldr </code>fusion is probably the prime
+example. I like to think of these rules as based on a specialised CPS conversion:
+instead of consing a list up, producers call their continuations on each item that
+would have been in that list.
+</p><!--l. 67--><p style="text-indent:1.5em">   I&#8217;m not sure I can find examples of schemes that handle multiple consumers in the
+literature. We don&#8217;t see them as often in code as multiple producers, and they&#8217;re
+hard to handle with rewrite rules. Still, it&#8217;s not hard to treat those cases with
+a dedicated code generator: just compile a &#8220;push&#8221; dataflow engine. Such
+a compiler could easily be extended to allow many outputs (or none) per
+input.
+</p><!--l. 74--><p style="text-indent:1.5em">   Multiple producers are much more common, if only because <code style="font-family:monospace">zipWith </code>is a
+standard list operation. Stream fusion achieves that, and a lot more: concatenated
+and nested streams, mostly. It can also handle functions like <code style="font-family:monospace">filter </code>easily, by
+inserting &#8220;skip&#8221; values in the stream. In fact, it can allow functions to yield an
+arbitrary number of output values per input. That&#8217;s compatible with what a &#8220;pull&#8221;
+dataflow engine can achieve.
+</p><!--l. 82--><p style="text-indent:1.5em">   SERIES is somewhere else in the solution space. It allows multiple producers and
+consumers, but not, as far as I can tell, more than one output per input (it too uses
+&#8220;skip&#8221; values to implement functions like <code style="font-family:monospace">filter</code>). It achieves that by compiling to a
+loop that advances the state of each node in the dataflow graph exactly once per
+iteration. Thus, the amount of implicit buffering is constant (one output value for
+each node), and the loop&#8217;s body is generated by a simple traversal of the
+graph.
+</p><!--l. 91--><p style="text-indent:1.5em">   Pipes is mostly a &#8220;push&#8221; engine that handles multiple consumers, but uses a type
+system to recognize cases similar to what SERIES handles, and then allows multiple
+producers as well. It&#8217;s a different design choice than stream fusion, but I believe
+that it&#8217;s essential to allow multiple consumers instead of forcing users to
+build temporary values <em style="font-style:italic">and then traverse them multiple times</em>. Like SERIES,
+it compiles to a loop whose body corresponds to a traversal of the graph.
+However, instead of advancing each node exactly once per iteration, some
+subgraphs can advance multiple times per iteration, or even compile to nested
+loops.
+</p><!--l. 102--><p style="text-indent:1.5em">   I&#8217;ve been trying to find a good tradeoff for almost 5 years now, and it I feels like
+there&#8217;s a rule here, something like &#8220;arbitrary outputs per input, multiple consumers,
+                                                                  
+
+                                                                  
+multiple producers: choose two.&#8221; Stream fusion chooses multiple producers and
+arbitrary output, SERIES multiple producers and consumers, and Pipes multiple
+consumers and arbitrary output, plus a dash of multiple producers in certain cases.
+The fact that it almost manages to get that third feature is what I originally found
+exciting about that design.
+</p><!--l. 111--><p style="text-indent:0em">
+</p>
+   <h3><a id="x1-2000"></a>That&#8217;s it for now</h3>
+<!--l. 112--><p style="text-indent:0em">Frankly, I&#8217;m pretty much rediscovering my own code, but I remember thinking that it
+was almost ready for people to start playing with it. Again, it can be downloaded at
+<a href="https://github.com/pkhuong/Pipes">https://github.com/pkhuong/Pipes</a>.
+</p><!--l. 117--><p style="text-indent:1.5em">   Here&#8217;s a simple example:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">CL-USER&gt; 
+(lambda (x y) 
+  (declare (type (simple-array double-float 1) x y) 
+           (optimize speed (sb-c::insert-array-bounds-checks 0))) 
+  (pipes (let* ((x (- (from-vector x) (from-vector y))) 
+                ; x is bound to the difference at each iteration 
+                (_ sum-x (scan + x 0d0 double-float)) 
+                ; sum-x is bound to the final sum at the end of 
+                ; the loop 
+                (_ sum-x^2 (scan + (* x x) 0d0 double-float)) 
+                (_ min   (scan min x 
+                               double-float-positive-infinity 
+                               double-float)) 
+                (_ max   (scan max x 
+                               double-float-negative-infinity 
+                               double-float)))) 
+    (values (length x) sum-x sum-x^2 min max))) 
+#&lt;FUNCTION (LAMBDA (X Y)) {1004B7BAB9}&gt; 
+CL-USER&gt; 
+(funcall * 
+         (map-into (make-array 10 :element-type &#8217;double-float) 
+                   (let ((x 0d0)) 
+                     (lambda () 
+                       (incf x)))) 
+         (map-into (make-array 10 :element-type &#8217;double-float) 
+                   (let ((x 0d0)) 
+                     (lambda () 
+                       (decf x))))) 
+10 
+110.0d0 
+1540.0d0 
+2.0d0 
+20.0d0 
+CL-USER&gt; (disassemble **) 
+; disassembly for (LAMBDA (X Y)) 
+; 04125107:       488B4AF9         MOV RCX, [RDX-7]           ; no-arg-parsing entry point 
+;      10B:       488B5FF9         MOV RBX, [RDI-7] 
+;      10F:       4C8BC3           MOV R8, RBX 
+;      112:       488BF1           MOV RSI, RCX 
+;      115:       4839D9           CMP RCX, RBX 
+;      118:       488BCE           MOV RCX, RSI                                                                                                                                     
+;      11B:       490F4FC8         CMOVNLE RCX, R8 ; find the min length 
+;      11F:       488BD9           MOV RBX, RCX 
+;      122:       31C9             XOR ECX, ECX 
+;      124:       660F57E4         XORPD XMM4, XMM4 
+;      128:       660F57ED         XORPD XMM5, XMM5 
+;      12C:       F20F101554020000 MOVSD XMM2, [RIP+596] 
+;      134:       F20F101D54020000 MOVSD XMM3, [RIP+596] 
+;      13C:       EB46             JMP L3 
+;      13E:       90               NOP 
+;      13F:       90               NOP 
+;      140: L0:   F20F104C0A01     MOVSD XMM1, [RDX+RCX+1] 
+;      146:       F20F10740F01     MOVSD XMM6, [RDI+RCX+1] 
+;      14C:       F20F5CCE         SUBSD XMM1, XMM6 
+;      150:       F20F58E1         ADDSD XMM4, XMM1 
+;      154:       660F28F1         MOVAPD XMM6, XMM1 
+;      158:       F20F59F1         MULSD XMM6, XMM1 
+;      15C:       F20F58EE         ADDSD XMM5, XMM6 
+;      160:       660F2FD1         COMISD XMM2, XMM1 
+;      164:       0F8A52010000     JP L14 
+;      16A:       0F834C010000     JNB L14 ; rest of cmp/movapd 
+;      170: L1:   660F2FD9         COMISD XMM3, XMM1 
+;      174:       0F8A2D010000     JP L12 
+;      17A:       0F8627010000     JBE L12 ; same 
+;      180: L2:   4883C108         ADD RCX, 8 
+;      184: L3:   4839D9           CMP RCX, RBX 
+;      187:       7CB7             JL L0 
+[...]</pre>
+<!--l. 187--><p style="text-indent:0em">
+</p><!--l. 189--><p style="text-indent:1.5em">   This subtracts two vectors element-wise, and returns the sum of the differences,
+the sum of the squared differences, and the minimum and maximum differences. It&#8217;s
+definitely not the best example, as it doesn&#8217;t explicitly exploit the freedom to
+compute many outputs per input, but it&#8217;s something that I&#8217;ve had to write by hand
+before.
+</p><!--l. 195--><p style="text-indent:1.5em">   If you want to play with <a href="https://github.com/pkhuong/Pipes">Pipes</a> and have questions, ping me on <code style="font-family:monospace">#lisp</code>.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 21:20 | <a href="http://www.pvk.ca/Blog/Lisp/Pipes" title="path">/Lisp/Pipes</a> | <a href="http://www.pvk.ca/Blog/Lisp/Pipes/introducing_pipes.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

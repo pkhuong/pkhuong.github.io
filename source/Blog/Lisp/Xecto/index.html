@@ -1,0 +1,465 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Tue, 20 Dec 2011</h2>
+<div class="entry">
+  <a id="introducing-xecto-plumbing" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Xecto, a new project - the plumbing</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em"><a href="https://github.com/pkhuong/Xecto">Xecto</a> is another (SBCL-only) project of mine, available in its very preliminary state
+on github. It started out as a library for regular parallel operations on arrays (reduce,
+scan, map, etc), with the goal, not of hitting as close to peak performance
+as possible through whatever trick necessary, but rather to have a simple
+execution model, and thus a simple performance model as well. These days,
+I&#8217;d rather have a tool that can&#8217;t hit the theoretical peak performance, but
+has a simple enough performance model that I can program close to the
+tool&#8217;s peak, than a tool that usually gives me excellent performance through
+ill-explained voodoo (and sometimes suffers from performance glass jaw
+issues).
+</p><!--l. 23--><p style="text-indent:1.5em">   I like to think of it as preferring to map operations to the BLAS instead of
+writing loops in C and hoping the compiler autovectorise everything correctly. When
+performance is really critical, smart people can study the problem and come
+up with a judicious mixture of high-level optimisations, specialised code
+generators and hand-rolled assembly (ATLAS, GotoBLAS, FFTW, MKL,
+etc). When performance isn&#8217;t that important, going for a tool that&#8217;s easy to
+understand at the expense of some runtime performance (e.g. by punting
+to more generic but heavily optimised libraries from the previous list) is
+probably a good engineering trade-off. It seems to me it&#8217;s only in a strange no
+man&#8217;s land of applications that must really run quickly, but don&#8217;t justify the
+development of a bespoke solution, that complex automagic optimisation
+shines.
+</p><!--l. 37--><p style="text-indent:1.5em">   Xecto represents the nth time I&#8217;ve written most of the components: work queues,
+task-stealing deques, futures, optimising simple array-processing loops, etc. I&#8217;m very
+aggressively fighting the <a href="http://c2.com/cgi/wiki?SecondSystemEffect">second system effect</a>, and going for a simple, often simplistic,
+design. My hope is that this will yield a robust parallel-processing library upon which
+others can build as well.
+</p><!--l. 45--><p style="text-indent:1.5em">   I&#8217;ll try to document the state of the project as it goes. There&#8217;s currently a basic
+working prototype: parallel processing infrastructure, arrays as vectors and shape
+metadata, a minimal loop nest optimiser, and parallel (task, data and SIMD)
+execution of vector operations. I&#8217;m now trying to go from prototype to useful
+code.
+</p><!--l. 51--><p style="text-indent:1.5em">   Note that Xecto is SBCL-only: I use atomic primitives a lot, and don&#8217;t care <em style="font-style:italic">that</em>
+<em style="font-style:italic">much </em>about portability (yet).
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>Parallel processing plumbing</h3>
+<!--l. 55--><p style="text-indent:0em">The base of the parallelisation infrastructure is a thread pool; spawning one thread
+for each task is a silly waste of resources and often leads to CPUs constantly
+switching context between threads.
+</p><!--l. 59--><p style="text-indent:1.5em">   The thread pool (<a href="https://github.com/pkhuong/Xecto/blob/master/thread-pool.lisp"><code style="font-family:monospace">thread-pool.lisp</code></a>) spawns a fixed number of worker threads
+ahead of time, and jobs are submitted via a queue of work units. A job can simply be
+a function or a symbol to call, but that&#8217;s not very useful: we usually want to know
+                                                                  
+
+                                                                  
+when the job is finished and what the result was.
+</p><!--l. 67--><p style="text-indent:1.5em">   A task structure (<a href="https://github.com/pkhuong/Xecto/blob/master/work-units.lisp"><code style="font-family:monospace">work-units.lisp</code></a>) can be used for that. The <code style="font-family:monospace">function </code>slot of
+the structure will be called, with the task as its single argument. With inheritance,
+we can add a slot to hold the result, and another to wait for status changes
+(<a href="https://github.com/pkhuong/Xecto/blob/master/status.lisp"><code style="font-family:monospace">status.lisp</code></a>). <code style="font-family:monospace">status.lisp </code>implements a simple way to wait on a status, optimised
+for the common case when tasks are completed before the program waits on them: a
+status slot usually only stores status symbols, but waiters upgrade it to
+a reference to a structure with a mutex/waitqueue pair for more efficient
+waiting.
+</p><!--l. 80--><p style="text-indent:1.5em">   We often have a large number of small independent work units that represent a
+larger, logical, work units. A bulk task structure (<code style="font-family:monospace">work-units.lisp</code>) implements that
+case. A vector of subtasks is provided, and a function is called for each subtask; when
+all the subtasks have finished executing, a cleanup function is called. In the case of
+vector processing (and in many others), there is a certain locality between adjacent
+work units. The work queue exploits that by allowing multiple threads to work on the
+same bulk task, but ensuring that each thread tends to only execute its own range of
+subtasks.
+</p><!--l. 90--><p style="text-indent:1.5em">   Work units also often recursively generate additional work units. They could
+simply go through the regular work unit queue. In practice, however, it&#8217;s much more
+interesting to skip that and execute them on the same worker, in stack order
+(<a href="https://github.com/pkhuong/Xecto/blob/master/work-stack.lisp"><code style="font-family:monospace">work-stack.lisp</code></a>). We avoid some synchronisation overhead, and the LIFO
+evaluation order tends to improve <a href="http://en.wikipedia.org/wiki/Locality_of_reference">temporal locality</a>. If there were only private
+evaluation stacks, we could easily find ourselves with a lot of available tasks, but all
+assigned to a few workers. That&#8217;s why tasks can be <a href="http://en.wikipedia.org/wiki/Cilk#Work-stealing">stolen</a> by idle workers when the
+queue is empty.
+</p><!--l. 104--><p style="text-indent:1.5em">   Finally, tasks also have dependencies: we want to only start executing a given
+task after all its dependencies have completed their own execution.
+</p><!--l. 108--><p style="text-indent:1.5em">   The thread pool supports recursive waiting: work units can wait for other work
+units to complete. The worker thread will then continue executing tasks (on its
+stack first, then from the shared queue or by stealing) until the criterion (all
+dependencies fully executed) is met. This can waste a lot of stack space compared to
+implementations like Cilk that can steal and release waiting stack frames when the
+dependencies have all executed. However, the implementation is simple, and the
+space overhead is reasonable: a quadratic increase, in the worst case, I believe. If the
+serial program&#8217;s stack usage is decent (e.g. polylogarithmic in the input), it shouldn&#8217;t
+be an issue.
+</p><!--l. 119--><p style="text-indent:1.5em">   There&#8217;s also some machinery to move the dependency logic in the thread pool and
+eliminate the disadvantages of recursive waiting. Dependencies are registered between
+futures (<a href="https://github.com/pkhuong/Xecto/blob/master/futures.lisp"><code style="font-family:monospace">futures.lisp</code></a>, <a href="https://github.com/pkhuong/Xecto/blob/master/parallel-futures.lisp"><code style="font-family:monospace">parallel-futures.lisp</code></a>), and, when a future&#8217;s last
+dependency has just finished executing, it&#8217;s marked for execution (on the current
+worker&#8217;s stack). Because of my needs for vector processing, futures are bulk tasks
+with a function that&#8217;s called before executing the subtasks, and anoter one
+after.
+</p><!--l. 131--><p style="text-indent:1.5em">   It&#8217;s nothing special, and a lot of things is clearly suboptimal, but it&#8217;s mostly
+decent and can be improved again later.
+                                                                  
+
+                                                                  
+</p><!--l. 134--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>General-purpose parallel processing primitives</h3>
+<!--l. 135--><p style="text-indent:0em">The code that I mention in the previous section is already sufficient for a few
+common parallel processing primitives (<a href="https://github.com/pkhuong/Xecto/blob/master/parallel-primitives.lisp"><code style="font-family:monospace">parallel-primitives.lisp</code></a>). Xecto doesn&#8217;t
+use them, but they&#8217;re still pretty useful.
+</p><!--l. 141--><p style="text-indent:0em">
+</p>
+   <h4><span>2.1   </span> <a id="x1-30002.1"></a>Promises, <code style="font-family:monospace">parallel:let</code></h4>
+<!--l. 142--><p style="text-indent:0em">These are simple tasks that are always pushed on the worker&#8217;s stack if possible, or on
+the current parallel execution context otherwise.
+</p><!--l. 145--><p style="text-indent:1.5em">   <code style="font-family:monospace">parallel:promise </code>takes a function and a list of arguments, and pushes/enqueues
+a task that call the function with these arguments, and saves the results.
+</p><!--l. 149--><p style="text-indent:1.5em">   <code style="font-family:monospace">parallel:promise-value </code>will wait for the promise&#8217;s value, while
+<code style="font-family:monospace">parallel:promise-value* </code>will recursively wait on chains of promises.
+</p><!--l. 153--><p style="text-indent:1.5em">   <code style="font-family:monospace">parallel:let </code>uses promises to implement something like <a href="http://dreamsongs.com/Qlisp.html">Qlisp</a>&#8217;s <code style="font-family:monospace">qlet</code>. The
+syntax is the same as <code style="font-family:monospace">let </code>(except for bindings without value forms), and the bound
+values are computed in parallel. A binding clause for <code style="font-family:monospace">:parallel </code>defines a predicate
+value: if the value is true, the clauses are evaluated in parallel (the default), otherwise
+it&#8217;s normal serial execution.
+</p><!--l. 161--><p style="text-indent:1.5em">   This, along with the fact that waiting in workers doesn&#8217;t stop parallel
+execution, means that we can easily parallelise a recursive procedure like
+quicksort.
+</p><!--l. 165--><p style="text-indent:1.5em">   All of the following code is a normal quicksort.
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(deftype index () 
+  &#8216;(mod ,most-positive-fixnum)) 
+ 
+(declaim (inline selection-sort partition find-pivot)) 
+(defun partition (vec begin end pivot) 
+  (declare (type (simple-array fixnum 1) vec) 
+           (type index begin end) 
+           (type fixnum pivot) 
+           (optimize speed)) 
+  (loop while (&gt; end begin) 
+        do (if (&lt;= (aref vec begin) pivot) 
+               (incf begin) 
+               (rotatef (aref vec begin) 
+                        (aref vec (decf end)))) 
+        finally (return begin))) 
+ 
+(defun selection-sort (vec begin end) 
+  (declare (type (simple-array fixnum 1) vec) 
+           (type index begin end) 
+           (optimize speed)) 
+  (loop for dst from begin below end 
+        do 
+           (let ((min   (aref vec dst)) 
+                 (min-i dst)) 
+             (declare (type fixnum min) 
+                      (type index min-i)) 
+             (loop for i from (1+ dst) below end 
+                   do (let ((x (aref vec i))) 
+                        (when (&lt; x min) 
+                          (setf min   x 
+                                min-i i)))) 
+             (rotatef (aref vec dst) (aref vec min-i))))) 
+ 
+(defun find-pivot (vec begin end) 
+  (declare (type (simple-array fixnum 1) vec) 
+           (type index begin end) 
+           (optimize speed)) 
+  (let ((first  (aref vec begin)) 
+        (last   (aref vec (1- end))) 
+        (middle (aref vec (truncate (+ begin end) 2)))) 
+    (declare (type fixnum first last middle))                                                                                                                                     
+    (when (&gt; first last) 
+      (rotatef first last)) 
+    (cond ((&lt; middle first) 
+           first 
+           (setf middle first)) 
+          ((&gt; middle last) 
+           last) 
+          (t 
+           middle))))</pre>
+<!--l. 217--><p style="text-indent:0em">
+</p><!--l. 219--><p style="text-indent:1.5em">   Here, the only difference is that the recursive calls happen via <code style="font-family:monospace">parallel:let</code>.
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-2" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun pqsort (vec) 
+  (declare (type (simple-array fixnum 1) vec) 
+           (optimize speed)) 
+  (labels ((rec (begin end) 
+             (declare (type index begin end)) 
+             (when (&lt;= (- end begin) 8) 
+               (return-from rec (selection-sort vec begin end))) 
+             (let* ((pivot (find-pivot vec begin end)) 
+                    (split (partition vec begin end pivot))) 
+               (declare (type fixnum pivot) 
+                        (type index  split)) 
+               (cond ((= split begin) 
+                      (let ((next (position pivot vec 
+                                            :start    begin 
+                                            :end      end 
+                                            :test-not #&#8217;eql))) 
+                        (assert (&gt; next begin)) 
+                        (rec next end))) 
+                     ((= split end) 
+                      (let ((last (position pivot vec 
+                                            :start    begin 
+                                            :end      end 
+                                            :from-end t 
+                                            :test-not #&#8217;eql))) 
+                        (assert last) 
+                        (rec begin last))) 
+                     (t 
+                      (parallel:let ((left  (rec begin split)) 
+                                     (right (rec split end)) 
+                                     (:parallel (&gt;= (- end begin) 512))) 
+                        (declare (ignore left right)))))))) 
+    (rec 0 (length vec)) 
+    vec))</pre>
+<!--l. 255--><p style="text-indent:0em">
+</p><!--l. 257--><p style="text-indent:1.5em">   We will observe that, mostly thanks to the coarse grain of parallel recursion (only
+for inputs of size 512 or more), the overhead compared to the serial version is
+tiny.
+</p><!--l. 261--><p style="text-indent:1.5em">   We can test the performance (and scaling) on random vectors of fixnums. I also
+compared with SBCL&#8217;s heapsort to make sure the constant factors were decent, but
+the only reasonable conclusion seems to be that our heapsort is atrocious on largish
+vectors.
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-3" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun shuffle (vector) 
+  (declare (type vector vector)) 
+  (let ((end (length vector))) 
+    (loop for i from (- end 1) downto 0 
+          do (rotatef (aref vector i) 
+                      (aref vector (random (+ i 1))))) 
+    vector)) 
+ 
+(defun test-pqsort (nproc size) 
+  (let ((vec (shuffle (let ((i 0)) 
+                        (map-into (make-array size 
+                                              :element-type &#8217;fixnum) 
+                                  (lambda () 
+                                    (incf i))))))) 
+    (parallel-future:with-context (nproc) ; create an independent thread 
+      (time (pqsort vec)))                ; pool 
+    (loop for i below (1- (length vec)) 
+          do (assert (&lt;= (aref vec i) (aref vec (1+ i)))))))</pre>
+<!--l. 285--><p style="text-indent:0em">
+</p><!--l. 287--><p style="text-indent:1.5em">   Without parallelism (<code style="font-family:monospace">:parallel </code>is <code style="font-family:monospace">nil</code>), we find
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-4" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">* (test-pqsort 1 (ash 1 25)) 
+ 
+Evaluation took: 
+  6.245 seconds of real time 
+  6.236389 seconds of total run time (6.236389 user, 0.000000 system) 
+  99.86% CPU 
+  17,440,707,947 processor cycles 
+  0 bytes consed</pre>
+<!--l. 297--><p style="text-indent:0em">
+</p><!--l. 299--><p style="text-indent:1.5em">   With the <code style="font-family:monospace">parallel </code>clause above, we instead have
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-5" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">* (test-pqsort 1 (ash 1 25)) 
+ 
+Evaluation took: 
+  6.420 seconds of real time 
+  6.416401 seconds of total run time (6.416401 user, 0.000000 system) 
+  99.94% CPU 
+  17,930,818,675 processor cycles 
+  45,655,456 bytes consed</pre>
+<!--l. 309--><p style="text-indent:0em">
+</p><!--l. 311--><p style="text-indent:1.5em">   All that parallel processing bookkeeping and additional indirection conses up 45
+MB, but the net effect on computation time is negligible. Better: on my workstation,
+I observe nearly linear scaling until 4-5 threads, and there is still some acceleration
+by going to 8 or even 11 threads.
+</p><!--l. 317--><p style="text-indent:0em">
+</p>
+   <h4><span>2.2   </span> <a id="x1-40002.2"></a>Futures</h4>
+<!--l. 318--><p style="text-indent:0em">These are very similar to the futures I described above: they are created
+(<code style="font-family:monospace">parallel:future</code>) with a vector of dependencies, a callback, and, optionally, a
+vector of subtasks (each subtask is a function to call) and a cleanup function.
+</p><!--l. 323--><p style="text-indent:1.5em">   <code style="font-family:monospace">parallel:future-value[*] </code>will wait until the future has finished executing, and
+the <code style="font-family:monospace">* </code>variant recursively forces chains of futures.
+</p><!--l. 327--><p style="text-indent:1.5em">   <code style="font-family:monospace">parallel:bind </code>binds, similarly to <code style="font-family:monospace">let</code>, variables to the value of future values (if
+not a future, the value is used directly), but waits by going through the work queue.
+When the first form in the body is <code style="font-family:monospace">:wait</code>, the macro waits for the body to finish
+executing; otherwise, the future is returned directly.
+</p><!--l. 333--><p style="text-indent:1.5em">   These aren&#8217;t very useful directly, but are needed for parallel <code style="font-family:monospace">dotimes</code>.
+</p><!--l. 336--><p style="text-indent:0em">
+</p>
+   <h4><span>2.3   </span> <a id="x1-50002.3"></a><code style="font-family:monospace">parallel:dotimes</code></h4>
+<!--l. 337--><p style="text-indent:0em">Again, the syntax for <code style="font-family:monospace">parallel:dotimes </code>is very similar to that of <code style="font-family:monospace">dotimes</code>. The only
+difference is the lack of implicit block and tagbody: the implicit block doesn&#8217;t make
+sense in a parallel setting, and I was too lazy for tagbody (but it could easily be
+added).
+</p><!--l. 343--><p style="text-indent:1.5em">   The body will be executed for each integer from 0 below the count value. There&#8217;s
+no need to adapt the iteration count to the number of threads: the macro generates
+code to make sure the number of subtasks is at most the square of the worker count,
+                                                                  
+
+                                                                  
+and the thread pool ensures that adjacent subtasks tend to be executed by the
+same worker. When all the iterations have been executed, the result value is
+computed, again by a worker thread (which allows, e.g., pushing work units
+recursively).
+</p><!--l. 352--><p style="text-indent:1.5em">   Again, when the first form in the body is <code style="font-family:monospace">:wait</code>, the macro inserts code to wait
+for the future&#8217;s completion; otherwise, the future is returned directly.
+</p><!--l. 356--><p style="text-indent:1.5em">   In other words, this macro implements a parallel for:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-6" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(parallel:dotimes (i (length vector) vector) 
+  :wait 
+  (setf (aref vector i) (f i)))</pre>
+<!--l. 361--><p style="text-indent:0em">
+</p><!--l. 363--><p style="text-indent:0em">
+</p>
+   <h4><span>2.4   </span> <a id="x1-60002.4"></a>map, reduce, etc.</h4>
+<!--l. 364--><p style="text-indent:0em">Given <code style="font-family:monospace">parallel:dotimes</code>, it&#8217;s easy to implement <code style="font-family:monospace">parallel:map</code>, <code style="font-family:monospace">parallel:reduce</code>
+and <code style="font-family:monospace">parallel:map-group-reduce </code>(it&#8217;s something like map-reduce).
+</p><!--l. 368--><p style="text-indent:1.5em">   These are higher-order functions, and can waste a lot of performance executing
+generic code; inline them (or ask for high speed/low-space optimisation) to avoid
+that.
+</p><!--l. 372--><p style="text-indent:0em">
+</p>
+   <h5><span>2.4.1   </span> <a id="x1-70002.4.1"></a><code style="font-family:monospace">parallel:map</code></h5>
+<!--l. 374--><p style="text-indent:0em"><code style="font-family:monospace">(parallel:map type function sequence &amp;key (wait t)) </code>coerces the argument
+sequence to a simple vector, and uses <code style="font-family:monospace">parallel:dotimes </code>to call the function on each
+value. If <code style="font-family:monospace">type </code>is <code style="font-family:monospace">nil</code>, it&#8217;s only executed for effect, otherwise the result is stored in a
+temporary simple vector and coerced to the right type. If <code style="font-family:monospace">wait</code>, the value is returned,
+otherwise a future is returned.
+</p><!--l. 381--><p style="text-indent:0em">
+</p>
+   <h5><span>2.4.2   </span> <a id="x1-80002.4.2"></a><code style="font-family:monospace">parallel:reduce</code></h5>
+<!--l. 382--><p style="text-indent:0em"><code style="font-family:monospace">(parallel:reduce function sequence seed &amp;key (wait t) key) </code>agains coerces
+to a simple vector and then does it via <code style="font-family:monospace">parallel:dotimes</code>. It also exploits the
+<code style="font-family:monospace">work-queue:worker-id </code>to perform most of the reduction in thread-local
+accumulators, only merging them at the very end. <code style="font-family:monospace">function </code>should be associative
+and commutatiev, and <code style="font-family:monospace">seed </code>a neutral element for the function. <code style="font-family:monospace">key</code>, if provided,
+implements a fused map/reduce step. Again, <code style="font-family:monospace">wait </code>determines whether the reduced
+value or a future is returned.
+                                                                  
+
+                                                                  
+</p><!--l. 392--><p style="text-indent:0em">
+</p>
+   <h5><span>2.4.3   </span> <a id="x1-90002.4.3"></a><code style="font-family:monospace">parallel:map-group-reduce</code></h5>
+<!--l. 394--><p style="text-indent:0em"><code style="font-family:monospace">parallel:map-group-reduce </code>implements a hash-based map/group-by/reduce, or
+closer to google&#8217;s map/reduce, a mapcan/group-by/reduce. Again, it is implemented
+with thread-local accumulators and <code style="font-family:monospace">parallel:dotimes</code>.
+</p><!--l. 399--><p style="text-indent:1.5em">   <code style="font-family:monospace">(map-group-reduce sequence map reduce &amp;key group-test group-by) </code>maps
+over the sequence to compute a <code style="font-family:monospace">map</code>ped value and a group-by value. The latter is the
+<code style="font-family:monospace">map </code>function&#8217;s second return value if <code style="font-family:monospace">group-by </code>is <code style="font-family:monospace">nil</code>, and <code style="font-family:monospace">group-by</code>&#8217;s value for the
+current input otherwise. All the values given the same (according to <code style="font-family:monospace">group-test</code>)
+group-by keys are reduced with the <code style="font-family:monospace">reduce </code>function, and, finally, a vector of conses is
+returned: the <code style="font-family:monospace">car </code>are the group-by values, and the <code style="font-family:monospace">cdr </code>the associated reduced
+values.
+</p><!--l. 409--><p style="text-indent:1.5em">   When <code style="font-family:monospace">&amp;key master-table </code>is true, a hash table with the same associations is
+returned as a second value, and when it&#8217;s instead <code style="font-family:monospace">:quick</code>, a simpler to compute
+version of that table is returned (the value associated with each key is a cons, as in
+the primary return value).
+</p><!--l. 415--><p style="text-indent:1.5em">   When <code style="font-family:monospace">&amp;key fancy </code>is true, we have something more like the original map/reduce.
+<code style="font-family:monospace">map </code>is passed a value to process and a binary function: the first argument is the
+group-by key, and the second the value.
+</p><!--l. 420--><p style="text-indent:1.5em">   The function can be used, for instance, to process records in a vector.
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-7" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(parallel-future:with-context (4) 
+  (parallel:map-group-reduce rows #&#8217;row-age #&#8217;+ 
+                             :group-by #&#8217;row-first-name 
+                             :group-test #&#8217;equal)) 
+=&gt; #(("Bob" . 40) ("Alice" . 35) ...)</pre>
+<!--l. 428--><p style="text-indent:0em">
+</p><!--l. 430--><p style="text-indent:1.5em">   This uses up to four threads to sum the age of rows for each first name,
+comparing them with <code style="font-family:monospace">equal</code>.
+</p><!--l. 433--><p style="text-indent:1.5em">   A more classic example, counting the occurrences of words in a set of documents,
+would use the <code style="font-family:monospace">:fancy </code>interface and look like:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-8" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun count-words (documents) 
+  (parallel:map-group-reduce documents 
+                             (lambda (document accumulator) 
+                               (map nil (lambda (word) 
+                                          (funcall accumulator word 1)) 
+                                    document)) 
+                             #&#8217;+ 
+                             :group-test #&#8217;equal 
+                             :fancy t))</pre>
+<!--l. 445--><p style="text-indent:0em">
+</p><!--l. 447--><p style="text-indent:0em">
+</p>
+   <h4><span>2.5   </span> <a id="x1-100002.5"></a>Multiple-producer single-consumer queue</h4>
+<!--l. 448--><p style="text-indent:0em"><a href="https://github.com/pkhuong/Xecto/blob/master/mpsc-queue.lisp">mpsc-queue.lisp</a> is a very simple (56 LOC) lock-free queue for multiple producers
+(enqueuers), but only a single consumer (dequeuer). It&#8217;s a really classic construction
+that takes a lock-free stack and reverses it from time to time to pop items in queue
+order. This (building a queue from stacks) must be one of the very few uses for those
+CS trick questions hiring committees seem to adore.
+</p><!--l. 456--><p style="text-indent:1.5em">   It&#8217;s not related at all to the rest of Xecto, but it&#8217;s cute.
+</p><!--l. 458--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-110003"></a>Next</h3>
+<!--l. 459--><p style="text-indent:0em">I think the next step will be generating the vector-processing inner loops in C, and
+selecting the most appropriate one to use. Once that&#8217;s working, the arrays could be
+extended to more types than just <code style="font-family:monospace">double-float</code>, and allocated on the foreign
+heap.
+</p><!--l. 464--><p style="text-indent:1.5em">   In the meantime, I hope the parallel primitives can already be useful.
+Please have some fun and enjoy the fruits of <a href="http://random-state.net/log/sbcl-threading-news.html">Nikodemus&#8217;s work on threads in
+SBCL</a>.
+</p><!--l. 469--><p style="text-indent:1.5em">   P.S. The organisation of the code probably looks a bit weird. I&#8217;m trying
+something out: a fairly large number of tiny internal packages that aren&#8217;t meant to be
+<code style="font-family:monospace">:use</code>d. </p> 
+
+
+    </div>
+<p>
+  posted at: 02:10 | <a href="http://www.pvk.ca/Blog/Lisp/Xecto" title="path">/Lisp/Xecto</a> | <a href="http://www.pvk.ca/Blog/Lisp/Xecto/introducing-xecto-plumbing.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

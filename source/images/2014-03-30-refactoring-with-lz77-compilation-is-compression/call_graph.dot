@@ -1,0 +1,7 @@
+digraph G {
+        "Rule 8" -> "Rule 7", "Rule 6";
+        "Rule 7" -> "Rule 4", "Rule 5";
+        "Rule 4" -> "Rule 1", "Rule 1";
+        "Rule 5" -> "Rule 2", "Rule 3";
+        "Rule 6" -> "Rule 2";
+}

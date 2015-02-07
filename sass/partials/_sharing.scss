@@ -1,0 +1,13 @@
+.sharing {
+  text-align: center;
+  p.meta + & {
+    padding: { top: 1em; left: 0; bottom: .8em}
+    background: $img-border top left repeat-x;
+  }
+}
+
+#fb-root { display: none; }
+
+.fb-like.fb_iframe_widget span {
+  vertical-align: baseline !important;
+}

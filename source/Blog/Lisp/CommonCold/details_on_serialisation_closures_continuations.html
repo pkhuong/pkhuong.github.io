@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Details on the serialisation of closures and continuations - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 25 Jun 2007</h2>
+<div class="entry">
+  <a id="details_on_serialisation_closures_continuations" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Details on the serialisation of closures and continuations</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>Closures are serialised by saving information about their lexical
+environment at compile-time, and the values of the variables they
+close over at runtime. More accurately, the fully macroexpanded
+(another possible conflict with codewalked extensions) <em>source</em>
+of a function that will reconstruct the complete lexical environment
+of the closure, given the values of closed variables, and then
+recreate the closure in that environment, is generated. That source is
+compiled lazily, when needed, while the server is running. While this
+should increase the speed at which programs are compiled, it can be
+undesirable. <code>(ensure-all-builders)</code> will compile, in advance, all the
+deserialising functions.</p>
+
+<p>Note that, in order to save space, lexical environments that are
+identical modulo the equivalence of uninterned symbols are considered
+equivalent. In any case, using uninterned symbols for equality
+(as opposed to lexical variables or function) is a bad idea, since
+their identity is not preserved by a <code>print -&gt; read</code> round-trip. While
+using <code>symbol-name</code> would make sense, using strings sounds like a better
+idea.</p>
+
+<p>Once the deserialising function has been generated, it is associated
+with an unique closure descriptor number and saved in a global hash
+table. The descriptor is used during serialisation instead of the
+source itself to save space and improve speed. A serialisable closure
+is thus defined by a closure descriptor number and a list of the
+values it closes over (in an arbitrary but important order).</p>
+
+<p>Since both the descriptors (numbers) and the deserialising functions
+(or, rather, their source) can be printed readably, they can easily be
+serialised to migrate to another server or to improve load balancing
+and redundancy.</p>
+
+<p>Finally, continuations are simply lists of (serialisable) closures,
+generated at runtime by the <code>bind</code> and <code>dbind</code> macros, and are printed as
+such. Since <code>*print-circle*</code> is bound to <code>T</code> during serialisation
+(<code>print</code>ing), sharing <em>within a single continuation</em> is
+preserved. Object identity, however, is not, except for interned
+symbols.</p>
+
+    </div>
+<p>
+  posted at: 00:00 | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold" title="path">/Lisp/CommonCold</a> | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold/details_on_serialisation_closures_continuations.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

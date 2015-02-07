@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Specify absolute deadlines, not relative timeouts - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Wed, 24 Aug 2011</h2>
+<div class="entry">
+  <a id="deadline-vs-timeout" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Specify absolute deadlines, not relative timeouts</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">I don&#8217;t remember where I recently read this, but it was probably related to POSIX
+(real-time) semaphores.
+</p><!--l. 14--><p style="text-indent:1.5em">   It&#8217;s common for blocking operations (reading from a file or socket, acquiring a
+mutex, etc.) to offer variants with a timeout argument: when the operation blocks for
+longer than the timeout, it returns with an error value.
+</p><!--l. 19--><p style="text-indent:1.5em">   Exposing a deadline instead (with respect to an absolute time value like the
+system clock) leads to much more robust programs. Rather than specifying the
+amount of time for which an operation may block, the operation should return with
+an error value once the time is later than the deadline.
+</p><!--l. 25--><p style="text-indent:1.5em">   A timeout argument is preferable only when we don&#8217;t really care how long our
+program blocks, but don&#8217;t want it to block too long. However, whenever we perform
+some work alongside the blocking operation, or want to make sure not to hammer on
+a resource (but still want to use it as much as possible), a deadline is better. Instead
+of counting time from the beginning of the blocking operation, it lets us
+count from whichever program point at which we query the system clock. All
+intervening operations, interrupts, context switches, etc. are then considered in the
+deadline.
+</p><!--l. 35--><p style="text-indent:1.5em">   If you want to expose a timed variant of a blocking operation, offer a
+deadline argument. They make correct programs easier to express at the
+expense of quick hacks that only want to &#8220;block, but not too much&#8221;. Timeouts
+are the other way. Even better: timeouts are readily be expressed in terms
+of deadlines, while the reverse transformation is much more convoluted.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 01:03 | <a href="http://www.pvk.ca/Blog/Coding" title="path">/Coding</a> | <a href="http://www.pvk.ca/Blog/Coding/deadline-vs-timeout.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

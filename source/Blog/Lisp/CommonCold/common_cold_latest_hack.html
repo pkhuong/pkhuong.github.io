@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Common Cold, my latest hack - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 25 Jun 2007</h2>
+<div class="entry">
+  <a id="common_cold_latest_hack" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Common Cold, my latest hack</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>When someone wants to try continuations-based web pages in Common
+Lisp, they're usually directed at UnCommonWeb. A lot of work has gone
+into making UCW powerful, but that's not necessarily useful, and can
+even make things harder to understand, when one doesn't need all that
+power. <a href="http://www.discontinuity.info/~pkhuong/common-cold">Common Cold</a> tries to target that niche, as a simple library (I
+certainly wouldn't call it a framework) with a low cost of entry.</p>
+
+<p>To keep things simple, Common Cold (CC) defers to third-party
+libraries for nearly everything. It uses <a href="http://weitz.de/hunchentoot/">Hunchentoot</a> straightforwardly
+for web serving per se. Functions only have to return pages as
+strings, for example, using <a href="http://weitz.de/cl-who/">CL-WHO</a> (which is what CC does internally).
+Moreover, instead of striving for a transparent restructuring of code
+to extract continuations, explicitly marked macros must be used by the
+user. Hopefully, they won't prove to be particularly painful.</p>
+
+<p>Having the programmer annotate its code with special forms instead of
+using a codewalker has several advantages. Obviously, we can use the
+normal CL macro machinery instead of having to use a codewalker, which
+makes the code much less complex. It also makes the restructuring more
+transparent and controllable for the programmer. I believe the most
+important advantage, however, is simply that the border between
+continuations-ful code and normal CL code is always explicit. When
+playing with non-native but 'transparent' continuations, the
+abstraction tends to leak in various surprising ways (for example,
+when passing a continuation-capturing closure to an untransformed
+higher-order function), even more so when continuations are serialised,
+as in Common Cold.</p>
+
+<p>Serialised continuations are another design goal of Common
+Cold. Continuations-based web systems usually keep the continuations
+server-side (for a certain amount of time), and only pass an unique
+handle to the client. This means that every <em>request</em> consumes server
+resources and that URLs always have a somewhat short lifetime. It also
+makes load balancing more difficult, unless continuations can be
+migrated from one node to another. CC instead uses special forms to
+enable serialisable closures (and continuation frames). They are then
+encoded in the URL, instead of a session id or of a handle. The system
+was designed so that even the deserialisation routines can be
+serialised, making migration and load balancing easier to
+implement. These continuation URLs have an illimited lifetime, as long
+as the webpage functions are not recompiled (and that could be
+arranged). They are thus closer to the ideal of <a href="http://www.w3.org/Provider/Style/URI">cool URL</a>s than those
+of typical continuations-based web frameworks.</p>
+
+<p>Since serialising and deserialising closures and continuations amounts
+to deeply copying them, side effects to lexical bindings often make
+little sense. Dynamic bindings (special variables) are instead used
+for side-effectful bindings. Since special variables have a dynamic
+scope, capturing their latest value in continuations, which can be
+seen as capturing the current dynamic environment, seems to make
+sense. While assignment is restricted to special variables, it is far
+from discouraged. Common Cold establishes a parallel between CGI
+parameters and top-level (non-shadowed) dynamic bindings. Their values
+are always saved in the continuation URL. However, they may be
+overridden, as if by assignment, by CGI parameters with the same
+(symbol-)name. These parameters are also exposed in the URL to make
+them easier to manipulate. To simplify interactions via forms, only
+the rightmost binding for any given parameter is considered.</p>
+
+<p>More on how to actually use Common Cold later; I have a conference to
+register at in 6 hours.</p>
+
+    </div>
+<p>
+  posted at: 00:00 | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold" title="path">/Lisp/CommonCold</a> | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold/common_cold_latest_hack.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

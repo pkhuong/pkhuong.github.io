@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Yet another way to fake continuations - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 02 Jun 2008</h2>
+<div class="entry">
+  <a id="yet_another_way_to_fake_continuations" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Yet another way to fake continuations</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>The developers of the <a href="http://www.comet-online.org/Welcome.html">COMET</a> constraint programming library faced an
+interesting challenge when they decided to provide means to distribute
+computations. Their search model is, at the bottom level, based on
+continuations (implemented by copying the C stack in the sequential or
+threaded cases). To distribute work, they had to come up with a way to
+send continuations across the wire. Obviously, a copy of the stack
+isn't likely to work here, with pointers to the heap, randomised
+address space, multiple architectures, etc. Instead, they send a log
+of the non-deterministic choices taken so far, in order to make the
+same choices on the receiving machine (and then, hopefully, different
+ones).</p>
+
+<p>&quot;Continuations represent the rest of the computation&quot; is a common
+way to try to explain continuations. One approach to represent the
+rest of the computation is simply to store all the actions performed
+on the way to getting there. It is easy to see that only actions
+that result from non referentially-transparent code must be stored. In
+COMET's case, that means the values returned at choice points (the
+program is assumed to be otherwise referentially transparent).</p>
+
+<p>The approach is much more practical than it sounds: in a good
+constraint solver, most of the work is done outside the search itself,
+to propagate information through the constraint graph. Thus, to avoid
+the vast majority of recomputations, it suffices to send the
+constraint graph along with the 'continuation'. In general, it would
+also be possible to treat computationally expensive operations as non
+RT and save their results... they do take an observable amount of
+resources to evaluate after all.</p>
+
+<p>In some ways, stateful network interactions are similar. While they do
+have to somehow save and restore their computational state, most
+computationally expensive code is completely executed between
+receiving a request and sending a response back. The results of these
+computations are also easily serialised. On the other hand, code that
+must use continuations (because it waits for responses) is often
+nearly pure IO and flow control, directing the data to and from code
+that does the heavy lifting. In other words, if, as Cox wants us to,
+we instead used a state machine, we'd have a simple state machine with
+a couple fat states.</p>
+
+<p>One problem with this approach is that restoring a continuation takes
+time proportional to the number of actions previously executed. This
+can be alleviated by logging the result of forms that execute many
+actions; once the forms have been fully evaluated, there is no need to
+save or replay the intermediate actions. Still, that's not very good
+when suspending a potentially infinite loop. I see the approach more
+as a way to implement the part of the aforementioned state machine
+that is painful to do by hand (with many sequential or nested
+states). For the outer, driving loop, I would stick to a real state
+machine.</p>
+
+<p>A toy implementation of such continuations would look like:</p>
+
+<pre class="example">
+(defconstant +in-eval+ '+in-eval+
+  &quot;Used as a flag for calls that have been captured
+before completion&quot;)
+(defparameter *action-log* ()
+  &quot;Stack of executed actions.&quot;)
+(defparameter *replay* ()
+  &quot;Stack of actions to replay.&quot;)
+</pre>
+
+<pre class="example">
+(defun log-action (action)
+  (push action *action-log*)
+  (values-list (first action)))
+
+(defmacro /log (&amp;body body)
+  `(if (and *replay*
+            (if (eq (car *replay*) +in-eval+)
+                (prog1 nil
+                  (pop *replay*))
+                t))
+       (values-list (pop *replay*))
+       (log-action (multiple-value-list
+                    (let ((*action-log* (cons +in-eval+
+                                              *action-log*)))
+                      ;; rebind, since we don't need to replay
+                      ;; intermediate actions if we can simulate
+                      ;; the complete evaluation of body
+                      ,@body)))))
+
+(defun call-with-log (fn &amp;rest args)
+  (let ((*replay*     ())
+        (*action-log* ()))
+    (apply fn args)))
+
+(defun capture-log ()
+  (reverse *action-log*))
+
+(defun replay-log (log fn &amp;rest args)
+  (let ((*replay*     log)
+        (*action-log* ()))
+    (apply fn args)))
+</pre>
+
+<p>With these, we can implement a simple backtracking search.</p>
+
+<pre class="example">
+(defparameter *search-states* ()
+  &quot;Stack of states to explore.&quot;)
+(defparameter *next-choices* ()
+  &quot;List of choices to take in the first uncommitted choice point&quot;)
+</pre>
+
+<pre class="example">
+(defun fail ()
+  (throw 'fail nil))
+
+(defun choose (&amp;rest choices)
+  (/log                  ; capture itself is non RT!
+    (when *next-choices* ; override the choices if we must
+      (shiftf choices *next-choices* nil))
+    (cond ((null choices)
+           (fail))
+          ((null (rest choices))
+           (first choices))
+          (t
+           (push (cons (rest choices) (capture-log))
+                 *search-states*)
+           ;; this call to choose still hasn't returned in the
+           ;; captured log, so will be entered when replayed.
+           (first choices)))))
+
+(defun execute-search (fn &amp;rest args)
+  (let ((*search-states* ())
+        (count           0))
+    (flet ((body ()
+             (incf count)
+             (catch 'fail
+               (multiple-value-list
+                (apply fn args)))))
+      (call-with-log #'body)
+      (values (loop while *search-states*
+                    for (*next-choice* . log) = (pop *search-states*)
+                    for values = (replay-log log #'body)
+                    when values collect values)
+              count))))
+</pre>
+
+<p>Finally, this can be used to stupidly search for pythagorean triples:</p>
+
+<pre class="example">
+(defun iota ()
+  (let ((n (/log
+             (format t &quot;How many integers? &quot;)
+             (parse-integer (read-line)))))
+    (loop for i below n collect i)))
+
+(defun pythagorean-triples ()
+  (let* ((nats (/log (iota)))
+         (x    (1+ (apply 'choose nats)))
+         (y    (1+ (apply 'choose nats)))
+         (z    (1+ (apply 'choose nats))))
+    (if (and (&lt; x y)
+             (= (* z z) (+ (* x x) (* y y))))
+        (values x y z)
+        (fail))))
+
+(execute-search #'pythagorean-triples)
+</pre>
+
+<p>This will prompt, once, for an integer, <code>n</code>, and then find all the <code>x</code>, <code>y</code>,
+<code>z</code> in <code>[1, n]</code> such that <code>z^2 = x^2 + y^2</code>. Note how the two
+non-referentially transparent operations, the IO and <code>choose</code>, are
+wrapped in <code>/log</code>. What happens if we replace the <code>/log</code> in <code>iota</code> with
+a <code>progn</code>? The program prompts for a number at every replay
+(continuation invocation). What about removing the <code>/log</code> around the
+call to <code>iota</code>? With <code>/log</code> still around the IO, <code>iota</code> is referentially
+transparent (but most probably not pure), so we can't easily see any
+difference. However, <code>/log</code> still ensures it is only called once,
+instead of at every replay, sensibly affecting how much the program
+conses.</p>
+
+<p>The logging code manipulates <em>actions</em>, not just return values. In fact,
+it already manipulates two types of actions: entering an expression,
+and returning from it. In general, it is possible to track arbitrary
+effects of the logged expressions (e.g., assignment to variables), as
+long as the effects can be replayed.</p>
+
+<p>In the context of suspending and serialising a computation's state
+between communications, this approach seems especially interesting.
+The disadvantages (slow replay of long journals, potential replay of
+expensive operations) can be worked around, by using continuations
+where they have the most to offer and by logging expensive operations
+when possible. More importantly, the model is simple to understand, as
+are the performance consequences and the way to address them. It also
+does not itself depend on serialising closures. Finally, it is hard to
+misuse! Only specific operations (those that affect global state or
+otherwise communicate with the outside world) have to be specially
+annotated for correctness; all the rest is an optimisation. The
+control flow isn't restructured, so third-party functions can be
+safely used, as long as they're referentially transparent... even
+higher-order functions!</p>
+
+    </div>
+<p>
+  posted at: 23:50 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/yet_another_way_to_fake_continuations.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

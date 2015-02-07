@@ -1,0 +1,1878 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Tue, 20 Dec 2011</h2>
+<div class="entry">
+  <a id="introducing-xecto-plumbing" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Xecto, a new project - the plumbing</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em"><a href="https://github.com/pkhuong/Xecto">Xecto</a> is another (SBCL-only) project of mine, available in its very preliminary state
+on github. It started out as a library for regular parallel operations on arrays (reduce,
+scan, map, etc), with the goal, not of hitting as close to peak performance
+as possible through whatever trick necessary, but rather to have a simple
+execution model, and thus a simple performance model as well. These days,
+I&#8217;d rather have a tool that can&#8217;t hit the theoretical peak performance, but
+has a simple enough performance model that I can program close to the
+tool&#8217;s peak, than a tool that usually gives me excellent performance through
+ill-explained voodoo (and sometimes suffers from performance glass jaw
+issues).
+</p><!--l. 23--><p style="text-indent:1.5em">   I like to think of it as preferring to map operations to the BLAS instead of
+writing loops in C and hoping the compiler autovectorise everything correctly. When
+performance is really critical, smart people can study the problem and come
+up with a judicious mixture of high-level optimisations, specialised code
+generators and hand-rolled assembly (ATLAS, GotoBLAS, FFTW, MKL,
+etc). When performance isn&#8217;t that important, going for a tool that&#8217;s easy to
+understand at the expense of some runtime performance (e.g. by punting
+to more generic but heavily optimised libraries from the previous list) is
+probably a good engineering trade-off. It seems to me it&#8217;s only in a strange no
+man&#8217;s land of applications that must really run quickly, but don&#8217;t justify the
+development of a bespoke solution, that complex automagic optimisation
+shines.
+</p><!--l. 37--><p style="text-indent:1.5em">   Xecto represents the nth time I&#8217;ve written most of the components: work queues,
+task-stealing deques, futures, optimising simple array-processing loops, etc. I&#8217;m very
+aggressively fighting the <a href="http://c2.com/cgi/wiki?SecondSystemEffect">second system effect</a>, and going for a simple, often simplistic,
+design. My hope is that this will yield a robust parallel-processing library upon which
+others can build as well.
+</p><!--l. 45--><p style="text-indent:1.5em">   I&#8217;ll try to document the state of the project as it goes. There&#8217;s currently a basic
+working prototype: parallel processing infrastructure, arrays as vectors and shape
+metadata, a minimal loop nest optimiser, and parallel (task, data and SIMD)
+execution of vector operations. I&#8217;m now trying to go from prototype to useful
+code.
+</p><!--l. 51--><p style="text-indent:1.5em">   Note that Xecto is SBCL-only: I use atomic primitives a lot, and don&#8217;t care <em style="font-style:italic">that</em>
+<em style="font-style:italic">much </em>about portability (yet).
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>Parallel processing plumbing</h3>
+<!--l. 55--><p style="text-indent:0em">The base of the parallelisation infrastructure is a thread pool; spawning one thread
+for each task is a silly waste of resources and often leads to CPUs constantly
+switching context between threads.
+</p><!--l. 59--><p style="text-indent:1.5em">   The thread pool (<a href="https://github.com/pkhuong/Xecto/blob/master/thread-pool.lisp"><code style="font-family:monospace">thread-pool.lisp</code></a>) spawns a fixed number of worker threads
+ahead of time, and jobs are submitted via a queue of work units. A job can simply be
+a function or a symbol to call, but that&#8217;s not very useful: we usually want to know
+                                                                  
+
+                                                                  
+when the job is finished and what the result was.
+</p><!--l. 67--><p style="text-indent:1.5em">   A task structure (<a href="https://github.com/pkhuong/Xecto/blob/master/work-units.lisp"><code style="font-family:monospace">work-units.lisp</code></a>) can be used for that. The <code style="font-family:monospace">function </code>slot of
+the structure will be called, with the task as its single argument. With inheritance,
+we can add a slot to hold the result, and another to wait for status changes
+(<a href="https://github.com/pkhuong/Xecto/blob/master/status.lisp"><code style="font-family:monospace">status.lisp</code></a>). <code style="font-family:monospace">status.lisp </code>implements a simple way to wait on a status, optimised
+for the common case when tasks are completed before the program waits on them: a
+status slot usually only stores status symbols, but waiters upgrade it to
+a reference to a structure with a mutex/waitqueue pair for more efficient
+waiting.
+</p><!--l. 80--><p style="text-indent:1.5em">   We often have a large number of small independent work units that represent a
+larger, logical, work units. A bulk task structure (<code style="font-family:monospace">work-units.lisp</code>) implements that
+case. A vector of subtasks is provided, and a function is called for each subtask; when
+all the subtasks have finished executing, a cleanup function is called. In the case of
+vector processing (and in many others), there is a certain locality between adjacent
+work units. The work queue exploits that by allowing multiple threads to work on the
+same bulk task, but ensuring that each thread tends to only execute its own range of
+subtasks.
+</p><!--l. 90--><p style="text-indent:1.5em">   Work units also often recursively generate additional work units. They could
+simply go through the regular work unit queue. In practice, however, it&#8217;s much more
+interesting to skip that and execute them on the same worker, in stack order
+(<a href="https://github.com/pkhuong/Xecto/blob/master/work-stack.lisp"><code style="font-family:monospace">work-stack.lisp</code></a>). We avoid some synchronisation overhead, and the LIFO
+evaluation order tends to improve <a href="http://en.wikipedia.org/wiki/Locality_of_reference">temporal locality</a>. If there were only private
+evaluation stacks, we could easily find ourselves with a lot of available tasks, but all
+assigned to a few workers. That&#8217;s why tasks can be <a href="http://en.wikipedia.org/wiki/Cilk#Work-stealing">stolen</a> by idle workers when the
+queue is empty.
+</p><!--l. 104--><p style="text-indent:1.5em">   Finally, tasks also have dependencies: we want to only start executing a given
+task after all its dependencies have completed their own execution.
+</p><!--l. 108--><p style="text-indent:1.5em">   The thread pool supports recursive waiting: work units can wait for other work
+units to complete. The worker thread will then continue executing tasks (on its
+stack first, then from the shared queue or by stealing) until the criterion (all
+dependencies fully executed) is met. This can waste a lot of stack space compared to
+implementations like Cilk that can steal and release waiting stack frames when the
+dependencies have all executed. However, the implementation is simple, and the
+space overhead is reasonable: a quadratic increase, in the worst case, I believe. If the
+serial program&#8217;s stack usage is decent (e.g. polylogarithmic in the input), it shouldn&#8217;t
+be an issue.
+</p><!--l. 119--><p style="text-indent:1.5em">   There&#8217;s also some machinery to move the dependency logic in the thread pool and
+eliminate the disadvantages of recursive waiting. Dependencies are registered between
+futures (<a href="https://github.com/pkhuong/Xecto/blob/master/futures.lisp"><code style="font-family:monospace">futures.lisp</code></a>, <a href="https://github.com/pkhuong/Xecto/blob/master/parallel-futures.lisp"><code style="font-family:monospace">parallel-futures.lisp</code></a>), and, when a future&#8217;s last
+dependency has just finished executing, it&#8217;s marked for execution (on the current
+worker&#8217;s stack). Because of my needs for vector processing, futures are bulk tasks
+with a function that&#8217;s called before executing the subtasks, and anoter one
+after.
+</p><!--l. 131--><p style="text-indent:1.5em">   It&#8217;s nothing special, and a lot of things is clearly suboptimal, but it&#8217;s mostly
+decent and can be improved again later.
+                                                                  
+
+                                                                  
+</p><!--l. 134--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>General-purpose parallel processing primitives</h3>
+<!--l. 135--><p style="text-indent:0em">The code that I mention in the previous section is already sufficient for a few
+common parallel processing primitives (<a href="https://github.com/pkhuong/Xecto/blob/master/parallel-primitives.lisp"><code style="font-family:monospace">parallel-primitives.lisp</code></a>). Xecto doesn&#8217;t
+use them, but they&#8217;re still pretty useful.
+</p><!--l. 141--><p style="text-indent:0em">
+</p>
+   <h4><span>2.1   </span> <a id="x1-30002.1"></a>Promises, <code style="font-family:monospace">parallel:let</code></h4>
+<!--l. 142--><p style="text-indent:0em">These are simple tasks that are always pushed on the worker&#8217;s stack if possible, or on
+the current parallel execution context otherwise.
+</p><!--l. 145--><p style="text-indent:1.5em">   <code style="font-family:monospace">parallel:promise </code>takes a function and a list of arguments, and pushes/enqueues
+a task that call the function with these arguments, and saves the results.
+</p><!--l. 149--><p style="text-indent:1.5em">   <code style="font-family:monospace">parallel:promise-value </code>will wait for the promise&#8217;s value, while
+<code style="font-family:monospace">parallel:promise-value* </code>will recursively wait on chains of promises.
+</p><!--l. 153--><p style="text-indent:1.5em">   <code style="font-family:monospace">parallel:let </code>uses promises to implement something like <a href="http://dreamsongs.com/Qlisp.html">Qlisp</a>&#8217;s <code style="font-family:monospace">qlet</code>. The
+syntax is the same as <code style="font-family:monospace">let </code>(except for bindings without value forms), and the bound
+values are computed in parallel. A binding clause for <code style="font-family:monospace">:parallel </code>defines a predicate
+value: if the value is true, the clauses are evaluated in parallel (the default), otherwise
+it&#8217;s normal serial execution.
+</p><!--l. 161--><p style="text-indent:1.5em">   This, along with the fact that waiting in workers doesn&#8217;t stop parallel
+execution, means that we can easily parallelise a recursive procedure like
+quicksort.
+</p><!--l. 165--><p style="text-indent:1.5em">   All of the following code is a normal quicksort.
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(deftype index () 
+  &#8216;(mod ,most-positive-fixnum)) 
+ 
+(declaim (inline selection-sort partition find-pivot)) 
+(defun partition (vec begin end pivot) 
+  (declare (type (simple-array fixnum 1) vec) 
+           (type index begin end) 
+           (type fixnum pivot) 
+           (optimize speed)) 
+  (loop while (&gt; end begin) 
+        do (if (&lt;= (aref vec begin) pivot) 
+               (incf begin) 
+               (rotatef (aref vec begin) 
+                        (aref vec (decf end)))) 
+        finally (return begin))) 
+ 
+(defun selection-sort (vec begin end) 
+  (declare (type (simple-array fixnum 1) vec) 
+           (type index begin end) 
+           (optimize speed)) 
+  (loop for dst from begin below end 
+        do 
+           (let ((min   (aref vec dst)) 
+                 (min-i dst)) 
+             (declare (type fixnum min) 
+                      (type index min-i)) 
+             (loop for i from (1+ dst) below end 
+                   do (let ((x (aref vec i))) 
+                        (when (&lt; x min) 
+                          (setf min   x 
+                                min-i i)))) 
+             (rotatef (aref vec dst) (aref vec min-i))))) 
+ 
+(defun find-pivot (vec begin end) 
+  (declare (type (simple-array fixnum 1) vec) 
+           (type index begin end) 
+           (optimize speed)) 
+  (let ((first  (aref vec begin)) 
+        (last   (aref vec (1- end))) 
+        (middle (aref vec (truncate (+ begin end) 2)))) 
+    (declare (type fixnum first last middle))                                                                                                                                     
+    (when (&gt; first last) 
+      (rotatef first last)) 
+    (cond ((&lt; middle first) 
+           first 
+           (setf middle first)) 
+          ((&gt; middle last) 
+           last) 
+          (t 
+           middle))))</pre>
+<!--l. 217--><p style="text-indent:0em">
+</p><!--l. 219--><p style="text-indent:1.5em">   Here, the only difference is that the recursive calls happen via <code style="font-family:monospace">parallel:let</code>.
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-2" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun pqsort (vec) 
+  (declare (type (simple-array fixnum 1) vec) 
+           (optimize speed)) 
+  (labels ((rec (begin end) 
+             (declare (type index begin end)) 
+             (when (&lt;= (- end begin) 8) 
+               (return-from rec (selection-sort vec begin end))) 
+             (let* ((pivot (find-pivot vec begin end)) 
+                    (split (partition vec begin end pivot))) 
+               (declare (type fixnum pivot) 
+                        (type index  split)) 
+               (cond ((= split begin) 
+                      (let ((next (position pivot vec 
+                                            :start    begin 
+                                            :end      end 
+                                            :test-not #&#8217;eql))) 
+                        (assert (&gt; next begin)) 
+                        (rec next end))) 
+                     ((= split end) 
+                      (let ((last (position pivot vec 
+                                            :start    begin 
+                                            :end      end 
+                                            :from-end t 
+                                            :test-not #&#8217;eql))) 
+                        (assert last) 
+                        (rec begin last))) 
+                     (t 
+                      (parallel:let ((left  (rec begin split)) 
+                                     (right (rec split end)) 
+                                     (:parallel (&gt;= (- end begin) 512))) 
+                        (declare (ignore left right)))))))) 
+    (rec 0 (length vec)) 
+    vec))</pre>
+<!--l. 255--><p style="text-indent:0em">
+</p><!--l. 257--><p style="text-indent:1.5em">   We will observe that, mostly thanks to the coarse grain of parallel recursion (only
+for inputs of size 512 or more), the overhead compared to the serial version is
+tiny.
+</p><!--l. 261--><p style="text-indent:1.5em">   We can test the performance (and scaling) on random vectors of fixnums. I also
+compared with SBCL&#8217;s heapsort to make sure the constant factors were decent, but
+the only reasonable conclusion seems to be that our heapsort is atrocious on largish
+vectors.
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-3" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun shuffle (vector) 
+  (declare (type vector vector)) 
+  (let ((end (length vector))) 
+    (loop for i from (- end 1) downto 0 
+          do (rotatef (aref vector i) 
+                      (aref vector (random (+ i 1))))) 
+    vector)) 
+ 
+(defun test-pqsort (nproc size) 
+  (let ((vec (shuffle (let ((i 0)) 
+                        (map-into (make-array size 
+                                              :element-type &#8217;fixnum) 
+                                  (lambda () 
+                                    (incf i))))))) 
+    (parallel-future:with-context (nproc) ; create an independent thread 
+      (time (pqsort vec)))                ; pool 
+    (loop for i below (1- (length vec)) 
+          do (assert (&lt;= (aref vec i) (aref vec (1+ i)))))))</pre>
+<!--l. 285--><p style="text-indent:0em">
+</p><!--l. 287--><p style="text-indent:1.5em">   Without parallelism (<code style="font-family:monospace">:parallel </code>is <code style="font-family:monospace">nil</code>), we find
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-4" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">* (test-pqsort 1 (ash 1 25)) 
+ 
+Evaluation took: 
+  6.245 seconds of real time 
+  6.236389 seconds of total run time (6.236389 user, 0.000000 system) 
+  99.86% CPU 
+  17,440,707,947 processor cycles 
+  0 bytes consed</pre>
+<!--l. 297--><p style="text-indent:0em">
+</p><!--l. 299--><p style="text-indent:1.5em">   With the <code style="font-family:monospace">parallel </code>clause above, we instead have
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-5" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">* (test-pqsort 1 (ash 1 25)) 
+ 
+Evaluation took: 
+  6.420 seconds of real time 
+  6.416401 seconds of total run time (6.416401 user, 0.000000 system) 
+  99.94% CPU 
+  17,930,818,675 processor cycles 
+  45,655,456 bytes consed</pre>
+<!--l. 309--><p style="text-indent:0em">
+</p><!--l. 311--><p style="text-indent:1.5em">   All that parallel processing bookkeeping and additional indirection conses up 45
+MB, but the net effect on computation time is negligible. Better: on my workstation,
+I observe nearly linear scaling until 4-5 threads, and there is still some acceleration
+by going to 8 or even 11 threads.
+</p><!--l. 317--><p style="text-indent:0em">
+</p>
+   <h4><span>2.2   </span> <a id="x1-40002.2"></a>Futures</h4>
+<!--l. 318--><p style="text-indent:0em">These are very similar to the futures I described above: they are created
+(<code style="font-family:monospace">parallel:future</code>) with a vector of dependencies, a callback, and, optionally, a
+vector of subtasks (each subtask is a function to call) and a cleanup function.
+</p><!--l. 323--><p style="text-indent:1.5em">   <code style="font-family:monospace">parallel:future-value[*] </code>will wait until the future has finished executing, and
+the <code style="font-family:monospace">* </code>variant recursively forces chains of futures.
+</p><!--l. 327--><p style="text-indent:1.5em">   <code style="font-family:monospace">parallel:bind </code>binds, similarly to <code style="font-family:monospace">let</code>, variables to the value of future values (if
+not a future, the value is used directly), but waits by going through the work queue.
+When the first form in the body is <code style="font-family:monospace">:wait</code>, the macro waits for the body to finish
+executing; otherwise, the future is returned directly.
+</p><!--l. 333--><p style="text-indent:1.5em">   These aren&#8217;t very useful directly, but are needed for parallel <code style="font-family:monospace">dotimes</code>.
+</p><!--l. 336--><p style="text-indent:0em">
+</p>
+   <h4><span>2.3   </span> <a id="x1-50002.3"></a><code style="font-family:monospace">parallel:dotimes</code></h4>
+<!--l. 337--><p style="text-indent:0em">Again, the syntax for <code style="font-family:monospace">parallel:dotimes </code>is very similar to that of <code style="font-family:monospace">dotimes</code>. The only
+difference is the lack of implicit block and tagbody: the implicit block doesn&#8217;t make
+sense in a parallel setting, and I was too lazy for tagbody (but it could easily be
+added).
+</p><!--l. 343--><p style="text-indent:1.5em">   The body will be executed for each integer from 0 below the count value. There&#8217;s
+no need to adapt the iteration count to the number of threads: the macro generates
+code to make sure the number of subtasks is at most the square of the worker count,
+                                                                  
+
+                                                                  
+and the thread pool ensures that adjacent subtasks tend to be executed by the
+same worker. When all the iterations have been executed, the result value is
+computed, again by a worker thread (which allows, e.g., pushing work units
+recursively).
+</p><!--l. 352--><p style="text-indent:1.5em">   Again, when the first form in the body is <code style="font-family:monospace">:wait</code>, the macro inserts code to wait
+for the future&#8217;s completion; otherwise, the future is returned directly.
+</p><!--l. 356--><p style="text-indent:1.5em">   In other words, this macro implements a parallel for:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-6" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(parallel:dotimes (i (length vector) vector) 
+  :wait 
+  (setf (aref vector i) (f i)))</pre>
+<!--l. 361--><p style="text-indent:0em">
+</p><!--l. 363--><p style="text-indent:0em">
+</p>
+   <h4><span>2.4   </span> <a id="x1-60002.4"></a>map, reduce, etc.</h4>
+<!--l. 364--><p style="text-indent:0em">Given <code style="font-family:monospace">parallel:dotimes</code>, it&#8217;s easy to implement <code style="font-family:monospace">parallel:map</code>, <code style="font-family:monospace">parallel:reduce</code>
+and <code style="font-family:monospace">parallel:map-group-reduce </code>(it&#8217;s something like map-reduce).
+</p><!--l. 368--><p style="text-indent:1.5em">   These are higher-order functions, and can waste a lot of performance executing
+generic code; inline them (or ask for high speed/low-space optimisation) to avoid
+that.
+</p><!--l. 372--><p style="text-indent:0em">
+</p>
+   <h5><span>2.4.1   </span> <a id="x1-70002.4.1"></a><code style="font-family:monospace">parallel:map</code></h5>
+<!--l. 374--><p style="text-indent:0em"><code style="font-family:monospace">(parallel:map type function sequence &amp;key (wait t)) </code>coerces the argument
+sequence to a simple vector, and uses <code style="font-family:monospace">parallel:dotimes </code>to call the function on each
+value. If <code style="font-family:monospace">type </code>is <code style="font-family:monospace">nil</code>, it&#8217;s only executed for effect, otherwise the result is stored in a
+temporary simple vector and coerced to the right type. If <code style="font-family:monospace">wait</code>, the value is returned,
+otherwise a future is returned.
+</p><!--l. 381--><p style="text-indent:0em">
+</p>
+   <h5><span>2.4.2   </span> <a id="x1-80002.4.2"></a><code style="font-family:monospace">parallel:reduce</code></h5>
+<!--l. 382--><p style="text-indent:0em"><code style="font-family:monospace">(parallel:reduce function sequence seed &amp;key (wait t) key) </code>agains coerces
+to a simple vector and then does it via <code style="font-family:monospace">parallel:dotimes</code>. It also exploits the
+<code style="font-family:monospace">work-queue:worker-id </code>to perform most of the reduction in thread-local
+accumulators, only merging them at the very end. <code style="font-family:monospace">function </code>should be associative
+and commutatiev, and <code style="font-family:monospace">seed </code>a neutral element for the function. <code style="font-family:monospace">key</code>, if provided,
+implements a fused map/reduce step. Again, <code style="font-family:monospace">wait </code>determines whether the reduced
+value or a future is returned.
+                                                                  
+
+                                                                  
+</p><!--l. 392--><p style="text-indent:0em">
+</p>
+   <h5><span>2.4.3   </span> <a id="x1-90002.4.3"></a><code style="font-family:monospace">parallel:map-group-reduce</code></h5>
+<!--l. 394--><p style="text-indent:0em"><code style="font-family:monospace">parallel:map-group-reduce </code>implements a hash-based map/group-by/reduce, or
+closer to google&#8217;s map/reduce, a mapcan/group-by/reduce. Again, it is implemented
+with thread-local accumulators and <code style="font-family:monospace">parallel:dotimes</code>.
+</p><!--l. 399--><p style="text-indent:1.5em">   <code style="font-family:monospace">(map-group-reduce sequence map reduce &amp;key group-test group-by) </code>maps
+over the sequence to compute a <code style="font-family:monospace">map</code>ped value and a group-by value. The latter is the
+<code style="font-family:monospace">map </code>function&#8217;s second return value if <code style="font-family:monospace">group-by </code>is <code style="font-family:monospace">nil</code>, and <code style="font-family:monospace">group-by</code>&#8217;s value for the
+current input otherwise. All the values given the same (according to <code style="font-family:monospace">group-test</code>)
+group-by keys are reduced with the <code style="font-family:monospace">reduce </code>function, and, finally, a vector of conses is
+returned: the <code style="font-family:monospace">car </code>are the group-by values, and the <code style="font-family:monospace">cdr </code>the associated reduced
+values.
+</p><!--l. 409--><p style="text-indent:1.5em">   When <code style="font-family:monospace">&amp;key master-table </code>is true, a hash table with the same associations is
+returned as a second value, and when it&#8217;s instead <code style="font-family:monospace">:quick</code>, a simpler to compute
+version of that table is returned (the value associated with each key is a cons, as in
+the primary return value).
+</p><!--l. 415--><p style="text-indent:1.5em">   When <code style="font-family:monospace">&amp;key fancy </code>is true, we have something more like the original map/reduce.
+<code style="font-family:monospace">map </code>is passed a value to process and a binary function: the first argument is the
+group-by key, and the second the value.
+</p><!--l. 420--><p style="text-indent:1.5em">   The function can be used, for instance, to process records in a vector.
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-7" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(parallel-future:with-context (4) 
+  (parallel:map-group-reduce rows #&#8217;row-age #&#8217;+ 
+                             :group-by #&#8217;row-first-name 
+                             :group-test #&#8217;equal)) 
+=&gt; #(("Bob" . 40) ("Alice" . 35) ...)</pre>
+<!--l. 428--><p style="text-indent:0em">
+</p><!--l. 430--><p style="text-indent:1.5em">   This uses up to four threads to sum the age of rows for each first name,
+comparing them with <code style="font-family:monospace">equal</code>.
+</p><!--l. 433--><p style="text-indent:1.5em">   A more classic example, counting the occurrences of words in a set of documents,
+would use the <code style="font-family:monospace">:fancy </code>interface and look like:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-8" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun count-words (documents) 
+  (parallel:map-group-reduce documents 
+                             (lambda (document accumulator) 
+                               (map nil (lambda (word) 
+                                          (funcall accumulator word 1)) 
+                                    document)) 
+                             #&#8217;+ 
+                             :group-test #&#8217;equal 
+                             :fancy t))</pre>
+<!--l. 445--><p style="text-indent:0em">
+</p><!--l. 447--><p style="text-indent:0em">
+</p>
+   <h4><span>2.5   </span> <a id="x1-100002.5"></a>Multiple-producer single-consumer queue</h4>
+<!--l. 448--><p style="text-indent:0em"><a href="https://github.com/pkhuong/Xecto/blob/master/mpsc-queue.lisp">mpsc-queue.lisp</a> is a very simple (56 LOC) lock-free queue for multiple producers
+(enqueuers), but only a single consumer (dequeuer). It&#8217;s a really classic construction
+that takes a lock-free stack and reverses it from time to time to pop items in queue
+order. This (building a queue from stacks) must be one of the very few uses for those
+CS trick questions hiring committees seem to adore.
+</p><!--l. 456--><p style="text-indent:1.5em">   It&#8217;s not related at all to the rest of Xecto, but it&#8217;s cute.
+</p><!--l. 458--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-110003"></a>Next</h3>
+<!--l. 459--><p style="text-indent:0em">I think the next step will be generating the vector-processing inner loops in C, and
+selecting the most appropriate one to use. Once that&#8217;s working, the arrays could be
+extended to more types than just <code style="font-family:monospace">double-float</code>, and allocated on the foreign
+heap.
+</p><!--l. 464--><p style="text-indent:1.5em">   In the meantime, I hope the parallel primitives can already be useful.
+Please have some fun and enjoy the fruits of <a href="http://random-state.net/log/sbcl-threading-news.html">Nikodemus&#8217;s work on threads in
+SBCL</a>.
+</p><!--l. 469--><p style="text-indent:1.5em">   P.S. The organisation of the code probably looks a bit weird. I&#8217;m trying
+something out: a fairly large number of tiny internal packages that aren&#8217;t meant to be
+<code style="font-family:monospace">:use</code>d. </p> 
+
+
+    </div>
+<p>
+  posted at: 02:10 | <a href="http://www.pvk.ca/Blog/Lisp/Xecto" title="path">/Lisp/Xecto</a> | <a href="http://www.pvk.ca/Blog/Lisp/Xecto/introducing-xecto-plumbing.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Thu, 15 Dec 2011</h2>
+<div class="entry">
+  <a id="modular-struct-initialisation" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Initialising structure objects modularly</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">I use <code style="font-family:monospace">defstruct </code>a lot, even when execution speed or space usage isn&#8217;t an issue:
+they&#8217;re better suited to static analysis than <code style="font-family:monospace">standard-object</code>s and that makes code
+easier to reason about, both for me and SBCL. In particular, I try to exploit
+read-only and typed slots as much as possible.
+</p><!--l. 17--><p style="text-indent:1.5em">   Structures also allow single-inheritance &#8211; and Christophe has a branch to allow
+multiple subclassing &#8211; but don&#8217;t come with a default protocol like CLOS&#8217;s
+<code style="font-family:monospace">make-instance</code>/<code style="font-family:monospace">initialize-instance</code>. Instead, we can only provide default value
+forms for each slot (we can also define custom constructors, but they don&#8217;t carry over
+to subtypes).
+</p><!--l. 23--><p style="text-indent:1.5em">   What should we do when we want to allow inheritance but need complex
+initialisation which would usually be hidden in a hand-written constructor
+function?
+</p><!--l. 27--><p style="text-indent:1.5em">   I&#8217;ll use the following as a completely artificial example. The key parts are that I
+have typed and read-only slots, that the initialisation values depend on arguments,
+and that we also have some post-processing that needs a reference to the
+newly-constructed structure (finalization is a classic).
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defstruct (foo 
+            (:constructor %make-foo)) 
+  (x (error "Missing arg") :type cons 
+                           :read-only t) 
+  (y (error "Missing arg") :read-only t)) 
+ 
+(defun make-foo (x y) 
+  ;; non-trivial initial values 
+  (multiple-value-bind (x y) (%frobnicate x y) 
+    (let ((foo (%make-foo :x x :y y))) 
+      ;; post-processing 
+      (%quuxify foo) 
+      foo)))</pre>
+<!--l. 47--><p style="text-indent:0em">
+</p><!--l. 49--><p style="text-indent:1.5em">   The hand-written constructor is a good, well-known, way to hide the complexity,
+as long as we don&#8217;t want to allow derived structure types. But what if we do want
+inheritance?
+</p><!--l. 53--><p style="text-indent:1.5em">   One way to work around the issue is to instead have an additional slot for
+arbitrary extension data. I&#8217;m not a fan.
+</p><!--l. 56--><p style="text-indent:1.5em">   Another way is to move the complexity from <code style="font-family:monospace">make-foo </code>into <code style="font-family:monospace">initialize-foo</code>,
+which mutates an already-allocated instance of <code style="font-family:monospace">foo </code>(or a subtype). I&#8217;m even less
+satisfied by this approach than by the previous one. It means that I lose read-only
+slots, and, when I don&#8217;t have sane default values, typed slots as well. I also have to
+track whether or not each object is fully initialised, adding yet more state to take
+into account.
+</p><!--l. 64--><p style="text-indent:1.5em">   For now, I&#8217;ve settled on an approach that parameterises <em style="font-style:italic">allocation</em>. Instead of
+calling <code style="font-family:monospace">%make-foo </code>directly, an allocation function is received as an argument. The
+hand-written constructor becomes:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-2" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun make-foo (x y 
+                 &amp;optional (allocator &#8217;%make-foo) 
+                 &amp;rest     arguments) 
+  ;; the &amp;rest list avoids having to build (a chain of) 
+  ;; closures in the common case 
+  (multiple-value-bind (x y) (%frobnicate x y) 
+    ;; allocation is parameterised 
+    (let ((foo (apply allocator :x x :y y arguments))) 
+      (%quuxify foo) 
+      foo)))</pre>
+<!--l. 79--><p style="text-indent:0em">
+</p><!--l. 81--><p style="text-indent:1.5em">   This way, I can define a subtype and still easily initialize it:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-3" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defstruct (bar 
+            (:constructor %make-bar) 
+            (:include foo)) 
+  z) 
+ 
+(defun make-bar (x y z) 
+  (make-foo x y &#8217;%make-bar :z z))</pre>
+<!--l. 90--><p style="text-indent:0em">
+</p><!--l. 92--><p style="text-indent:1.5em">   The pattern is nicely applied recursively as well:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-4" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun make-bar (x y z 
+                 &amp;optional (allocator &#8217;%make-bar) 
+                 &amp;rest     arguments) 
+  (apply &#8217;make-foo x y allocator :z z arguments))</pre>
+<!--l. 98--><p style="text-indent:0em">
+</p><!--l. 100--><p style="text-indent:1.5em">   Consing-averse people will note that the <code style="font-family:monospace">&amp;rest </code>arguments are only used for
+<code style="font-family:monospace">apply</code>. SBCL (and many other implementations, most likely) handles this case
+specially and doesn&#8217;t even allocate a list: the arguments are used directly on the call
+stack.
+</p><!--l. 105--><p style="text-indent:1.5em">   I&#8217;m sure others have encountered this issue. What other solutions are there? How
+can the pattern of parameterising allocation be improved or generalised?
+</p> 
+
+
+    </div>
+<p>
+  posted at: 18:29 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/modular-struct-initialisation.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Sun, 13 Nov 2011</h2>
+<div class="entry">
+  <a id="finalizing_foreign_pointers_just_late_enough" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Finalizing foreign pointers just late enough</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">SBCL exposes a low-level type, <code style="font-family:monospace">system-area-pointer</code>s (SAPs), which are roughtly
+equivalent to <code style="font-family:monospace">void * </code>pointers in C. Since it&#8217;s so low level, we allow ourselves a lot of
+tricks to ensure performance. In particular, SAPs may be represented as raw
+addresses in machine registers. In order to simplify the implementation of this fairly
+useful optimization, they are given the same leeway as numbers with respect to <code style="font-family:monospace">EQ</code>:
+SAPs that represent the same address, even from multiple evaluations of the same
+bindings or value, are not guaranteed to be <code style="font-family:monospace">EQ</code>. When SAPs are compiled to
+machine registers, this lets us simply re-create a type-generic heap value as
+needed.
+</p><!--l. 23--><p style="text-indent:1.5em">   CFFI chose to directly expose SAPs in its user-facing interface. Finalizing SAPs is
+obviously a no-no: multiple references to the same (semantically) SAP can randomly
+be transformed into references to an arbitrary number of (physically) different
+objects.
+</p><!--l. 28--><p style="text-indent:1.5em">   If you want to finalize potentially-strange system-provided types, it&#8217;s probably
+better to wrap them in a read-only structure, and finalize that structure; for
+example:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defstruct (wrapper 
+            (:constructor make-wrapper (pointer))) 
+  (pointer nil :read-only t)) 
+ 
+(defun gced-foreign-alloc (type &amp;rest rest) 
+  (let* ((ptr (apply #&#8217;foreign-alloc type rest)) 
+         (wrapper (make-wrapper ptr))) 
+    (tg:finalize wrapper 
+                 (lambda () 
+                   (foreign-free ptr)))))</pre>
+<!--l. 43--><p style="text-indent:0em"> </p> 
+
+
+    </div>
+<p>
+  posted at: 00:48 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/finalizing_foreign_pointers_just_late_enough.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Mon, 15 Aug 2011</h2>
+<div class="entry">
+  <a id="bug-nobody-cares-about" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>An issue nobody cares about</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+                                                                  
+
+                                                                  
+   <pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">CL-USER&gt; (values (truncate (ash 1 60) pi)) 
+366986312910250176 
+CL-USER&gt; (values (truncate (+ 4 (ash 1 60)) pi)) 
+366986312910250176</pre>
+<!--l. 16--><p style="text-indent:0em">
+</p><!--l. 18--><p style="text-indent:1.5em">   Obviously, it&#8217;s just <a href="http://download.oracle.com/docs/cd/E19957-01/806-3568/ncg_goldberg.html">another floating-point issue</a>.
+</p><!--l. 22--><p style="text-indent:1.5em">   It&#8217;s also an extremely minor optimisation obstable: when only the first return
+value is needed, it can be faster to implement the division exactly with machine
+integers than to convert to FP, divide, and convert back to an integer. Unfortunately,
+doing so would be <em style="font-style:italic">too </em>exact: we would have different results for equivalent
+programs depending on the level of optimisation (or the constant-ness of the
+divisor).
+</p><!--l. 30--><p style="text-indent:1.5em">   Plus, who does that, or cares about that operation? </p> 
+
+
+    </div>
+<p>
+  posted at: 15:55 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/bug-nobody-cares-about.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Fri, 29 Jul 2011</h2>
+<div class="entry">
+  <a id="accelerated_gradient_method" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>An implementation of (one of) Nesterov's accelerated gradient method</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">I&#8217;m a PhD student at Universit&#233; de Montr&#233;al. Contrary to what I suppose
+most people would expect from the contents of this blog, I don&#8217;t (officially)
+work on compilers. Instead, I chose to focus on mathematical optimisation;
+specifically, large-scale combinatorial optimisation. Although I sometimes
+wonder if I made the right choice, the basic rationale is that I&#8217;m hoping to
+contribute to both the compilers and optimisation worlds by bringing them
+closer.
+</p><!--l. 19--><p style="text-indent:1.5em">   Sketching algorithms makes up a large fraction of my work, and, lately, <a href="http://matlisp.sourceforge.net/">Matlisp</a>
+has been very useful. If you work with algorithms that depend on numerical tools like
+the BLAS, LAPACK, FFTs, or even just special function like <code style="font-family:monospace">erf </code>or <code style="font-family:monospace">gamma</code>, you too
+might like it. In addition to foreign function wrappers and a couple <a href="http://trac.common-lisp.net/f2cl/">f2cl</a>ed routines,
+Matlisp includes a nice reader macro for matrices, and a few convenience functions to
+manipulate them. Plus, it&#8217;s reasonably efficient: it doesn&#8217;t try to roll its own
+routines, can use platform-specific libraries for BLAS and LAPACK, and
+passes Lisp vectors without copying. It doesn&#8217;t look like it was written with
+threads in mind, unfortunately, but it&#8217;s always been good enough for me so
+far.
+</p><!--l. 33--><p style="text-indent:1.5em">   The latest project in which I&#8217;ve used Matlisp is the <a href="http://discontinuity.info/~pkhuong/agm.lisp">prototype implementation</a> of
+an <a href="http://www.ecore.be/DPs/dp_1191313936.pdf">accelerated gradient method for composite functions [PDF]</a>). The sequel will more
+or less closely follow the code in my implementation.
+</p><!--l. 40--><p style="text-indent:1.5em">   I think the program makes a useful, small and self-contained example of how
+Matlisp can be used; if you need to minimise something that fits in the method&#8217;s
+framework, it might even work well.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>An accelerated gradient method for composite functions</h3>
+<!--l. 45--><p style="text-indent:0em">
+</p>
+   <h4><span>1.1   </span> <a id="x1-20001.1"></a>The theory</h4>
+<!--l. 46--><p style="text-indent:0em">In his paper on gradient methods for composite functions, Nesterov describes a
+family of efficient algorithms to minimise convex functions of the form
+</p>
+   <center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method0x.png" alt="&#981; (x) = f(x)+ &#936;(x)&#10;"></img></center>
+<!--l. 49--><p style="text-indent:0em"> where <em style="font-style:italic">f </em>is a &#8220;nice&#8221; black box, and &#936; not as nice, but better-known.
+</p><!--l. 53--><p style="text-indent:1.5em">   Here, &#8220;efficient&#8221; means that, in addition to being a gradient method (so each
+iteration is fairly inexpensive computationally), the method converges at a rate of
+<span><img src="http://www.pvk.ca/Blog/resources/cmsy10-4f.png" alt="O"></img></span>(<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method1x.png" alt="1k2" align="middle"></img>), where <em style="font-style:italic">k </em>is the number of iterations.
+                                                                  
+
+                                                                  
+</p><!--l. 58--><p style="text-indent:1.5em">   <em style="font-style:italic">f </em>is nice because it must be convex, continuous and differentiable, with a
+Lipschitz-continuous gradient (continuous and also not too variable). Fortunately, the
+Lispchitz constant itself may not be known a priori. On the other hand, we only
+assume that we have access to oracles to compute its value and gradients at arbitrary
+points.
+</p><!--l. 64--><p style="text-indent:1.5em">   &#936; simply has to be convex. However, in addition to value and <a href="http://en.wikipedia.org/wiki/Subderivative#The_subgradient">(sub)gradient</a>
+oracles, we also assume the existence of an oracle to solve problems of the form (with
+<em style="font-style:italic">s,a &gt; </em>0)
+</p>
+   <center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method2x.png" alt="argmin sx&#8242;x+ b&#8242;x+ a&#936;(x)&#10;    x  2&#10;"></img></center>
+<!--l. 68--><p style="text-indent:0em">
+</p><!--l. 70--><p style="text-indent:1.5em">   &#936; can, for instance, be used to express domain constraints or barriers. In the
+former case, the last oracle amounts to solving a projection problem.
+</p><!--l. 74--><p style="text-indent:0em">
+</p>
+   <h4><span>1.2   </span> <a id="x1-30001.2"></a>The programming interface</h4>
+<!--l. 75--><p style="text-indent:0em">My implementation exposes four generic functions to implement one&#8217;s own <em style="font-style:italic">f </em>and
+&#936;.
+</p><!--l. 78--><p style="text-indent:1.5em">   <code style="font-family:monospace">value </code>and <code style="font-family:monospace">grad </code>both take a function description as the first argument, and a
+point (a Matlisp column vector) as the second argument. They return, respectively,
+the value and the gradient of the function at that point.
+</p><!--l. 83--><p style="text-indent:1.5em">   <code style="font-family:monospace">project </code>takes a &#936; function description, a distance function description and the
+multiplicative factor factor <em style="font-style:italic">a </em>as arguments; the distance function <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method3x.png" alt="s&#10;2" align="middle"></img><em style="font-style:italic">x</em><span>&#8242;</span><em style="font-style:italic">x </em>+ <em style="font-style:italic">b</em><span>&#8242;</span><em style="font-style:italic">x </em>is
+represented by a <code style="font-family:monospace">distance </code>struct with three slots: <code style="font-family:monospace">n </code>(the size of the vectors), <code style="font-family:monospace">s </code>and <code style="font-family:monospace">b</code>.
+It returns the minimiser of <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method4x.png" alt="s&#10;2" align="middle"></img><em style="font-style:italic">x</em><span>&#8242;</span><em style="font-style:italic">x </em>+ <em style="font-style:italic">b</em><span>&#8242;</span><em style="font-style:italic">x </em>+ <em style="font-style:italic">a</em>&#936;(<em style="font-style:italic">x</em>).
+</p><!--l. 90--><p style="text-indent:1.5em">   An additional generic function <code style="font-family:monospace">map-gradient </code>is also exposed to solve problems of
+the type arg min<sub><em style="font-size:70%; font-style:italic">x</em></sub><em style="font-style:italic">g</em><span>&#8242;</span>(<em style="font-style:italic">x</em><span>-</span><em style="font-style:italic">y</em>) + <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method5x.png" alt="L&#10;2-" align="middle"></img><span>&#8741;</span><em style="font-style:italic">x</em><span>-</span><em style="font-style:italic">y</em><span>&#8741;</span><sup><span style="font-size:70%">2</span></sup> + &#936;(<em style="font-style:italic">x</em>), but the default method re-formulates
+this expression in terms of <code style="font-family:monospace">project</code>.
+</p><!--l. 96--><p style="text-indent:1.5em">   Computing the minimiser of a distance function (without any &#936; term) is a
+common operation, so it&#8217;s exposed as <code style="font-family:monospace">distance-min</code>.
+</p><!--l. 99--><p style="text-indent:1.5em">   The rest of the code isn&#8217;t really complicated, but the best explanation is probably
+the original paper (n.b. although the definitions always come before their use, the
+distance separating them may be surprisingly large).
+</p><!--l. 104--><p style="text-indent:1.5em">   Hooks are available to instrument the execution of the method and, e.g., count
+the number of function or gradient evaluations, or the number of projections. It
+should be obvious how to use them.
+</p><!--l. 108--><p style="text-indent:0em">
+                                                                  
+
+                                                                  
+</p>
+   <h4><span>1.3   </span> <a id="x1-40001.3"></a>Example implementations of &#936;</h4>
+<!--l. 109--><p style="text-indent:0em">
+</p>
+   <h5><span>1.3.1   </span> <a id="x1-50001.3.1"></a><code style="font-family:monospace">:unbounded </code>function</h5>
+<!--l. 110--><p style="text-indent:0em">The simplest &#936; is probably &#936;(<em style="font-style:italic">x</em>) = 0. The accelerated gradient method is then a
+gradient method for regular differentiable convex optimisation.
+</p><!--l. 114--><p style="text-indent:1.5em">   <code style="font-family:monospace">value </code>and <code style="font-family:monospace">grad </code>are trivial.
+</p><!--l. 116--><p style="text-indent:1.5em">   <code style="font-family:monospace">project </code>isn&#8217;t much harder: a necessary and sufficient condition for minimising
+<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method6x.png" alt="s&#10;2" align="middle"></img><em style="font-style:italic">x</em><span>&#8242;</span><em style="font-style:italic">x </em>+ <em style="font-style:italic">b</em><span>&#8242;</span><em style="font-style:italic">x </em>is <em style="font-style:italic">sx</em><sup><span style="font-size:70%">*</span></sup> + <em style="font-style:italic">b </em>= 0, so <em style="font-style:italic">x</em><sup><span style="font-size:70%">*</span></sup> = <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method7x.png" alt="-1&#10; s" align="middle"></img><em style="font-style:italic">b</em>.
+</p><!--l. 119--><p style="text-indent:0em">
+</p>
+   <h5><span>1.3.2   </span> <a id="x1-60001.3.2"></a><code style="font-family:monospace">:non-negative </code>function</h5>
+<!--l. 120--><p style="text-indent:0em">To constrain the feasible space to non-negative vectors, we only have to let &#936;(<em style="font-style:italic">x</em>) = 0
+if <em style="font-style:italic">x </em><span>&#8805; </span>0 (for every component), and &#936;(<em style="font-style:italic">x</em>) = <span>&#8734; </span>otherwise.
+</p><!--l. 124--><p style="text-indent:1.5em">   Again, <code style="font-family:monospace">value </code>and <code style="font-family:monospace">grad </code>are trivial: <code style="font-family:monospace">project </code>will ensure the method only works
+with non-negative <em style="font-style:italic">x</em>, and any <a href="http://en.wikipedia.org/wiki/Subderivative#The_subgradient"><em style="font-style:italic">sub</em>gradient</a> suffices.
+</p><!--l. 128--><p style="text-indent:1.5em">   As for <code style="font-family:monospace">project</code>, a little algebra shows that it&#8217;s equivalent to finding the feasible <em style="font-style:italic">x</em>
+that minimises the distance with <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method8x.png" alt="-1&#10; s" align="middle"></img><em style="font-style:italic">b </em>(that&#8217;s actually true for any &#936; that represents
+contraints). For the non-negative orthant, we only have to clamp each negative
+component of <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method9x.png" alt="--1&#10; s" align="middle"></img><em style="font-style:italic">b </em>to 0:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun clamp (matrix) 
+  (map-matrix! (lambda (x) 
+                 (declare (type double-float x)) 
+                 (max x 0d0)) 
+               matrix)) 
+ 
+(defmethod project ((psi (eql :non-negative)) distance Ak) 
+  (declare (type distance distance) 
+           (ignore Ak)) 
+  (clamp (distance-min distance)))</pre>
+<!--l. 144--><p style="text-indent:0em">
+</p><!--l. 146--><p style="text-indent:0em">
+</p>
+   <h4><span>1.4   </span> <a id="x1-70001.4"></a>A sample &#8220;nice&#8221; function <em style="font-style:italic">f</em>: linear least squares</h4>
+<!--l. 147--><p style="text-indent:0em">The linear least squares problem consists of finding a vector <em style="font-style:italic">x </em>that minimizes (the
+multiplication by half is just to get a nicer derivative)
+</p>
+   <center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method10x.png" alt="1&#8741;Ax - b&#8741;2&#10;2&#10;"></img></center>
+<!--l. 150--><p style="text-indent:0em">
+</p><!--l. 152--><p style="text-indent:1.5em">   This kind of problem can come up when fitting a line or a hyperplane to a set of
+observations.
+</p><!--l. 155--><p style="text-indent:1.5em">   <code style="font-family:monospace">value </code>is straightforward:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defmethod value ((lls linear-least-square) x) 
+  ;; A set of convenient matrix operation is available 
+  (let ((diff (m- (m* (lls-A lls) x) 
+                  (lls-b lls)))) 
+    (* .5d0 (ddot diff diff)))) ; ddot ~= a call to MATLISP:DOT</pre>
+<!--l. 162--><p style="text-indent:0em">
+</p><!--l. 164--><p style="text-indent:1.5em">   A little algebra shows that the gradient can be computed with
+</p>
+   <center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method11x.png" alt=" &#8242;      &#8242;&#10;A Ax - A b&#10;"></img></center>
+<!--l. 165--><p style="text-indent:0em">
+</p><!--l. 167--><p style="text-indent:1.5em">   The constructor <code style="font-family:monospace">make-lls </code>precomputes <em style="font-style:italic">A</em><span>&#8242;</span><em style="font-style:italic">A </em>and <em style="font-style:italic">A</em><span>&#8242;</span>, so we get
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defmethod grad ((lls linear-least-square) x) 
+  ;; we can also call BLAS routines directly 
+  (axpy! -1 (lls-Atb lls) 
+         (m* (lls-AtA lls) x)))</pre>
+<!--l. 173--><p style="text-indent:0em">
+</p><!--l. 175--><p style="text-indent:1.5em">   LAPACK has built-in functions to solve that problem, for example <code style="font-family:monospace">gelsy </code>(that&#8217;s
+on my puny macbook air):
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">;; Create an LLS instance with 2000 rows (observations) 
+;; and 400 columns (variables). 
+AGM&gt; (defparameter *lls* (make-random-lls 2000 400)) 
+*LLS* 
+AGM&gt; (time (gelsy (lls-a *lls*) (lls-b *lls*) (* 1000 (expt 2d0 -52)))) 
+Evaluation took: 
+  0.829 seconds of real time 
+  0.827092 seconds of total run time (0.806912 user, 0.020180 system) 
+  [ Run times consist of 0.036 seconds GC time, and 0.792 seconds non-GC time. ] 
+  99.76% CPU 
+  1,323,883,144 processor cycles 
+  6,425,552 bytes consed 
+ 
+#&lt;REAL-MATRIX  400 x 1 
+   -2.20134E-2 
+    1.92827E-2 
+   -7.19030E-3 
+   -4.01685E-2 
+     : 
+    7.19374E-3 &gt; 
+400 
+AGM&gt; (value *lls* *) 
+66.5195278164384d0</pre>
+<!--l. 201--><p style="text-indent:0em">
+</p><!--l. 203--><p style="text-indent:1.5em">   Although we have very solid specialised methods to solve least squares problems,
+it makes for a nice non-trivial but easily-explained example.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">;; 400 variables, with an LLS instance for f and 
+;; a default Psi of :unbounded 
+AGM&gt; (time (solve (make-agm-instance 400 *lls*))) 
+Evaluation took: 
+  32.426 seconds of real time 
+  31.266698 seconds of total run time (31.003772 user, 0.262926 system) 
+  [ Run times consist of 0.799 seconds GC time, and 30.468 seconds non-GC time. ] 
+  96.43% CPU 
+  51,779,907,728 processor cycles 
+  795,491,552 bytes consed 
+ 
+66.51952785790199d0 
+#&lt;REAL-MATRIX  400 x 1 
+   -2.20108E-2 
+    1.92838E-2 
+   -7.19136E-3 
+   -4.01690E-2 
+     : 
+    7.19797E-3 &gt; 
+[...]</pre>
+<!--l. 227--><p style="text-indent:0em">
+</p><!--l. 229--><p style="text-indent:1.5em">   Pretty horrible, even more so when we add the <span>&#8776; </span>0<em style="font-style:italic">.</em>9 seconds it takes to
+precompute <em style="font-style:italic">A</em><span>&#8242; </span>and <em style="font-style:italic">A</em><span>&#8242;</span><em style="font-style:italic">A</em>.
+</p><!--l. 232--><p style="text-indent:1.5em">   Here&#8217;s an interesting bit:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">;; Use the optimal value as the starting point 
+AGM&gt; (time (solve (make-agm-instance 400 *lls* :x0 (second /)))) 
+Evaluation took: 
+  0.043 seconds of real time 
+  0.043683 seconds of total run time (0.043445 user, 0.000238 system) 
+  102.33% CPU 
+  69,793,776 processor cycles 
+  1,525,136 bytes consed 
+ 
+66.51952785758927d0 
+#&lt;REAL-MATRIX  400 x 1 
+   -2.20108E-2 
+    1.92838E-2 
+   -7.19136E-3 
+   -4.01690E-2 
+     : 
+    7.19795E-3 &gt; 
+[...]</pre>
+<!--l. 252--><p style="text-indent:0em">
+</p><!--l. 254--><p style="text-indent:1.5em">   This method naturally exploits warm starts close to the optimal solution&#8230;useful
+when you have to solve a lot of similar instances.
+</p><!--l. 257--><p style="text-indent:1.5em">   Another interesting property is shown here:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">AGM&gt; (time (solve (make-agm-instance 400 *lls*) 
+                  :min-gradient-norm 1d0)) 
+Evaluation took: 
+  1.961 seconds of real time 
+[...] 
+66.52381619339305d0 ; delta: 1/2.3e2 
+[...] 
+AGM&gt; (time (solve (make-agm-instance 400 *lls*) 
+                  :min-gradient-norm 1d-1)) 
+Evaluation took: 
+  7.328 seconds of real time 
+[...] 
+66.51957600391108d0 ; delta: 1/2.1e4 
+[...] 
+AGM&gt; (time (solve (make-agm-instance 400 *lls*) 
+                  :min-gradient-norm 1d-2)) 
+Evaluation took: 
+  19.275 seconds of real time 
+[...] 
+66.51952840584295d0 ; delta: 1/1.7e6 
+[...] 
+AGM&gt; (time (solve (make-agm-instance 400 *lls*) 
+                  :min-gradient-norm 1d-4)) 
+Evaluation took: 
+  31.146 seconds of real time 
+[...] 
+66.51952785790199d0 ; delta: 1/2.4e7 
+</pre>
+<!--l. 287--><p style="text-indent:0em">
+</p><!--l. 289--><p style="text-indent:1.5em">   The run time (and the number of iteration or function/gradient evaluation) scales
+nicely with the precision.
+</p><!--l. 292--><p style="text-indent:0em">
+</p>
+   <h4><span>1.5   </span> <a id="x1-80001.5"></a>Efficiency</h4>
+<!--l. 293--><p style="text-indent:0em">The implementation wasn&#8217;t written with efficiency in mind, but rather to rapidly get
+a working prototype. However, nearly all the cost is incurred by calls to the BLAS. If
+performance were an issue, I&#8217;d mostly focus on minimising consing and copies by
+reusing storage and calling (destructive versions of) BLAS functions to fuse
+                                                                  
+
+                                                                  
+operations. </p> 
+
+
+    </div>
+<p>
+  posted at: 00:19 | <a href="http://www.pvk.ca/Blog/Lisp/Math" title="path">/Lisp/Math</a> | <a href="http://www.pvk.ca/Blog/Lisp/Math/accelerated_gradient_method.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Tue, 21 Jun 2011</h2>
+<div class="entry">
+  <a id="flow_sensitive_analysis_in_sbcl" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>SBCL's flow sensitive analysis pass</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">As I noted <a href="http://www.pvk.ca/Blog/Lisp/constraint-sets.html">a year and a half ago</a>, the constraint propagation pass in SBCL can slow
+compilation down a lot (<a href="https://bugs.launchpad.net/bugs/394206">lp#394206</a>, <a href="https://bugs.launchpad.net/bugs/792363">lp#792363</a>). To a large extent, I feel like that
+issue has been fixed in HEAD, but the lack of documentation on that pass made
+progress slower than it could have been. So, this post is a half-organised version of
+my notes, before I forget it all.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>What constraint propagation does</h3>
+<!--l. 22--><p style="text-indent:0em">The constraint propagation pass is executed as part of the <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/main.lisp;h=84bfea7f25b3b33eee7be2a52a564de46e168c8d;hb=HEAD#l469">IR1 optimisation loop</a>,
+which operates on Lisp-level basic blocks. It&#8217;s only concerned with propagating
+information between &#8220;real&#8221; variables (<a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l1095">LAMBDA-VARiable</a>), variables that have a
+name and can be set and referred to multiple times, as opposed to temporaries
+(<a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l58">LVARs</a>).
+</p><!--l. 31--><p style="text-indent:1.5em">   The distinction is useful because there are (usually) much fewer full-blown
+variables than temporaries, and only the former directly benefit from exploiting
+previously executed type checks and predicates to deduct information (flow
+sensitivity).
+</p><!--l. 36--><p style="text-indent:1.5em">   Instead of handling all the operation found in basic blocks, constraint propagation
+only consider a few key operations, and otherwise exploits the type information
+previously derived in a bottom-up manner (i.e. propagating the types of arguments
+to result types) by the other IR1 passes. The latter, inversely, only have access to the
+results of constraint propagation through the type derived for each <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l1177">REFerence</a> to a
+lambda-var.
+</p><!--l. 46--><p style="text-indent:1.5em">   So, constraint propagation goes through each basic block, updating its state (set
+of known true constraints) when it encounters <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l1289">BIND</a> nodes (LET bindings, more or
+less), references to a lambda-var, <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l1322">CAST</a> nodes ([usually] checked type assertions),
+<a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l1218">CSET</a> nodes (assignment), or branches on a few key predicates (EQL, <em style="font-style:italic">&lt;</em>, <em style="font-style:italic">&gt; </em>or
+TYPEP, mostly).
+</p><!--l. 56--><p style="text-indent:1.5em">   As would be expected, the state at the end of each basic block is propagated to its
+successors, join points take the intersection of their precedessors&#8217; states, and entry
+points are initialised with empty states... and this is all executed iteratively until
+convergence.
+</p><!--l. 62--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>What constraint propagation isn&#8217;t</h3>
+<!--l. 63--><p style="text-indent:0em">It <em style="font-style:italic">feels </em>a lot like an abstract interpretation algorithm. However, a major difference is
+that constraint propagation doesn&#8217;t converge on a <em style="font-style:italic">least </em>fixed point. Take the
+following trivial example:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">CL-USER&gt; (lambda () 
+           (let ((x 0.0)) 
+             (dotimes (i 10 x) 
+               (setf x (/ x 2.0))))) 
+#&lt;FUNCTION (LAMBDA ()) {10048E20C9}&gt; 
+CL-USER&gt; (sb-kernel:%simple-fun-type *) 
+(FUNCTION NIL (VALUES NUMBER &amp;OPTIONAL))</pre>
+<!--l. 76--><p style="text-indent:0em">
+</p><!--l. 78--><p style="text-indent:1.5em">   It&#8217;s obvious to us that <code style="font-family:monospace">X </code>will always be a single float. Unfortunately, while SBCL&#8217;s
+type analyses converge to a fixed point, they&#8217;re not always seeded with an
+underapproximation of a least fixed point.
+</p><!--l. 83--><p style="text-indent:1.5em">   When there are assignments to a variable, the type of that variable is initialised
+with its declared type (T if none), and, after that initial type has been used to
+derive the type of the values that could be assigned to it, the union of these
+types is taken (and of the initially bound value). In the example above,
+the return type of <code style="font-family:monospace">(/ [T] [single-float]) </code>is <code style="font-family:monospace">NUMBER</code>. Once we have an
+over-approximation of the least fixed point, we shouldn&#8217;t expect to tighten it back
+much.
+</p><!--l. 92--><p style="text-indent:1.5em">   In a proper abstract interpretation pass, <code style="font-family:monospace">X </code>would be initialised with the bottom
+type or the singleton type <code style="font-family:monospace">(EQL 0.0) </code>(or some approximation thereof), and
+iteratively widened with the derived type of the division and of its initialisation
+value, up to convergence. That would easily deduce that <code style="font-family:monospace">X </code>is always 0.0, or, at least,
+a single-float.
+</p><!--l. 99--><p style="text-indent:1.5em">   It&#8217;s also not like any SSA variant. Yes, <a href="http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.3.6773">Continuation-passing Style is equivalent to
+Static single assignment form</a>. One key part of that equivalence is that both styles
+rename variables at join points (via arguments to the continuation or phi functions).
+IR1 does mention continuations, but these continuations don&#8217;t perform the essential
+renaming of variables. That is the very reason why we have to use constraint sets
+to represent what we know about a variable&#8217;s contents <em style="font-style:italic">at a given program</em>
+<em style="font-style:italic">point</em>.
+</p><!--l. 109--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-30003"></a>How constraint propagation does it</h3>
+<!--l. 110--><p style="text-indent:0em">
+</p>
+                                                                  
+
+                                                                  
+   <h4><span>3.1   </span> <a id="x1-40003.1"></a>Constraints</h4>
+<!--l. 111--><p style="text-indent:0em">At the heart of the pass are constraint sets (<a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l134">CONSETs</a>) that are updated as the
+analysis walks through a basic block. Each <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l56">constraint</a> in a conset represent a small
+fact that is known to be true about a given lambda-var: that its contents are (or are
+not) of a certain type, are greater or less than values of a given type, EQL to a
+constant, or EQL to another variable.
+</p><!--l. 120--><p style="text-indent:1.5em">   As a pun, EQL constraint can also link a lambda-var and an lvar: as combinations
+(function calls) work with lvars, these special constraints are used to translate
+information about a combination&#8217;s arguments to information about lambda-vars
+(which is what constraint propagation handles).
+</p><!--l. 126--><p style="text-indent:1.5em">   EQL constraints are special. When two variables are EQL, it&#8217;s essential for good
+performance to extend that EQLness to all the variables that are EQL to either of
+them (i.e. compute the transitive closure of the EQL relation). This is useful because,
+when something is true of a variable (e.g. it&#8217;s TYPEP FIXNUM), it&#8217;s also true of all
+the variables EQL to it.
+</p><!--l. 133--><p style="text-indent:1.5em">   However, we only do that for one of the operands in a non-EQL constraint
+between variables, and not at all for EQL constraints involving constants (overly
+eager constant propagation can hurt since our codegen doesn&#8217;t handle repeated
+references to constraints that well) or lvars (these aren&#8217;t really constraints, but rather
+pure bookkeeping information punned as constraints).
+</p><!--l. 140--><p style="text-indent:0em">
+</p>
+   <h4><span>3.2   </span> <a id="x1-50003.2"></a>Propagation</h4>
+<!--l. 141--><p style="text-indent:0em">To begin propagation, entry points are initialised with empty constraint sets (we
+know nothing about the inputs), and the consets are updated by walking down the
+basic blocks in execution order, in <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l915">CONSTRAINT-PROPAGATE-IN-BLOCK</a>:
+</p>
+     <ul><li>BIND nodes represent things like LET bindings. If we have a useful (more
+     precise than T) type for the bound value, the new variable is (currently)
+     of that type. Also, if the bound value is a lambda-var&#8217;s current value, then
+     the newly introduced variable is EQL to it.
+     </li>
+     <li>REF nodes are references to a lambda-var. The LVAR that receives that
+     value is EQL to the lambda-var. Additionally, if we&#8217;re on the last iteration,
+     it&#8217;s useful to store all that we know about the referenced variable at that
+     program point for other IR1 passes to exploit.
+     </li>
+     <li>CAST nodes are type checks. If the check fails, execution will not continue,
+     so we can simply assume that the check is successful, and propagate the
+     type to the lambda-var at the end of the chain of casts (if any).
+                                                                  
+
+                                                                  
+     </li>
+     <li>CSET nodes represent assignments. The most important thing to do is
+     forget all that is known about the assigned variable at that program point:
+     after the assignment, it&#8217;s bound to a brand new value. Still, before that,
+     if we want a lot of propagation, it&#8217;s useful to propagate some information
+     that&#8217;s always true of that variable to EQL nodes. For now, it only makes
+     sense to propagate the fact that, if the assigned variable is known to always
+     be of a given type, all the variables that are currently EQL to it are
+     also of that type. Then, as with bind nodes, it&#8217;s useful sense to add type
+     constraints from the new value, and to add EQL constraints if applicable.</li></ul><!--l. 174--><p style="text-indent:1.5em">   Finally, if the block ends with a conditional branch, it&#8217;s useful to look at the
+predicate guiding the branch to propagate different constraints to the consequent and
+alternative successors.
+</p><!--l. 178--><p style="text-indent:1.5em">   If the predicate is simply a reference to a variable, then it&#8217;s known to be NIL in
+the alternative, and something else in the consequent.
+</p><!--l. 181--><p style="text-indent:1.5em">   If it&#8217;s a function call, only a few functions are interpreted: </p>
+     <ul><li>TYPEP-like  functions  result  in  constraints  to  the  effect  that  a  given
+     lambda-var is or is not of a given type.
+     </li>
+     <li>EQ and EQL result in additional EQL constraints (between variables, or
+     to a constant) in the consequent, and the reverse constraints (not EQL)
+     in the alternative
+     </li>
+     <li><em style="font-style:italic">&lt; </em>and <em style="font-style:italic">&gt; </em>are used to derive tighter bounds on numeric types. However,
+     we do not track relationships between variables (except for EQLity and
+     non-EQLity), and only note that a given variable is less or greater than a
+     value of some type.
+     </li>
+     <li>A  few  other  type  predicates  also  result  in  TYPEP  constraints,  when
+     specially marked for the compiler.</li></ul><!--l. 196--><p style="text-indent:1.5em">   Once a basic block has been constraint propagated through, the information is
+used by its successors. Basic blocks are processed in such an order that at least one of
+its predecessors have been propagated through before itself. The analysis is run with
+an initial conset made of the intersection of the consets (that have already been
+computed) at the end of its predecessors, taking care to use the right one if some
+predecessor ends in a conditional branch (<a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l1051">COMPUTE-BLOCK-IN</a>). And, that&#8217;s
+repeated on blocks for which the initial conset might have changed until we hit a
+fixed point.
+</p><!--l. 207--><p style="text-indent:1.5em">   Once that&#8217;s done, we&#8217;re only interested in storing all the flow-sensitive
+information we have about each variable in the relevant REFerences to it. So,
+constraint propagation is executed one last time (otherwise we only have the consets
+                                                                  
+
+                                                                  
+at the beginning and end of each basic block), and, when a ref node is encountered,
+the set of constraints related to the referenced variables is extracted and converted
+into a type, in <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l803">CONSTRAIN-REF-TYPE</a>.
+</p><!--l. 216--><p style="text-indent:0em">
+</p>
+   <h3><span>4   </span> <a id="x1-60004"></a>What&#8217;s been and what could be done</h3>
+<!--l. 217--><p style="text-indent:0em">We currently represent consets as bitsets. Without too much surprise, the only
+operation that is horrible with bitsets is iterating through the members of a given set.
+Fortunately, we only used this in a few functions, and it seems like bitsets are still the
+best option, when supplemented with a few indices.
+</p><!--l. 223--><p style="text-indent:1.5em">   The heaviest timesink was <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l292">FIND-CONSTRAINT</a>: constraints are hash-consed so
+that equivalent constraints are always EQ. It used to be we&#8217;d perform a linear
+search over the set of constraints associated with a given variable to find
+constraints. We now use hash tables in each variable to speed the search
+up.
+</p><!--l. 230--><p style="text-indent:1.5em">   The other major slowdowns were related to functions that need to iterate through
+the intersection of the current set of constraints and certain subsets of the constraints
+associated with a given variable (e.g. all the EQL constraints for a given variable in
+the current constraint set). Instead of iterating through the intersection of two
+bitvectors, we represent each subset of the constraints associated with each variable
+as vectors of constraints (the hash-consing step already ensures there won&#8217;t be any
+duplicate). Now, we only have to iterate through these vectors and check for
+membership in a bitset.
+</p><!--l. 240--><p style="text-indent:1.5em">   These simple changes are enough to bring compile times for a couple test cases
+down from hundreds of seconds to a few seconds or less.
+</p><!--l. 243--><p style="text-indent:1.5em">   There are definitely more low-hanging fruits in this area, be it for more precise
+analyses (converging to a proper least fixed point), stronger interaction with the rest
+of the IR1 passes or quicker compilation. Hopefully, this post can serve as
+a high level guide to would-be <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD"><code style="font-family:monospace">src/compiler/constraint.lisp</code></a> hackers.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 15:45 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/flow_sensitive_analysis_in_sbcl.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Fri, 01 Apr 2011</h2>
+<div class="entry">
+  <a id="introducing_pipes" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Introducing Pipes, a lightweight stream fusion EDSL</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 6--><p style="text-indent:0em">Fusion is cool. It lets us write bulk data processing programs modularly, with each
+pass or computation separate from the rest, while retaining the efficiency of
+code that executes all the passes simultaneously rather than building large
+intermediate values. In the last couple years, most of the attention has been
+coming from the Haskell crowd (e.g. <a href="http://www.cse.unsw.edu.au/~dons/streams.html">Data.List.Stream</a>), but Lisper aren&#8217;t
+immune to that siren&#8217;s call. In the late 80&#8217;s, Richard Waters worked on
+<a href="http://series.sourceforge.net/">SERIES</a>, a Common Lisp package to transform &#8220;obviously synchronizable series
+expressions&#8221; into buffer-less loops. That package is still available, and even lightly
+maintained.
+</p><!--l. 20--><p style="text-indent:1.5em">   I believe that, while the goal is noble, the approach taken in SERIES is too
+magical; I&#8217;d argue that it&#8217;s even more true of stream fusion in GHC.
+</p><!--l. 24--><p style="text-indent:1.5em">   SERIES goes through a lot of trouble to makes it transformation work on code
+expressed as regular CL, and even across function definitions. The problem is,
+SERIES can only handle a subset of CL, so users can be surprised when a seemingly
+minor refactoring suddenly breaks their code.
+</p><!--l. 30--><p style="text-indent:1.5em">   GHC&#8217;s fusion stuff has the virtue of using the language itself to handle the dirty
+work of looking just like regular Haskell. Unfortunately, it also depends on
+inlining and on rewrite rules (well, one), which don&#8217;t warn when they can&#8217;t be
+applied.
+</p><!--l. 35--><p style="text-indent:1.5em">   So, instead, I believe that we should be using an EDSL. It&#8217;s embedded, so it&#8217;s
+easy to use with the host language (both around and inside the DSL). It&#8217;s also
+domain specific, so it should be clear what the language does and doesn&#8217;t handle,
+and, in the worst case, the implementation can warn the user instead of silently
+reverting to slowness.
+</p><!--l. 42--><p style="text-indent:1.5em">   The design space is huge, but I think <a href="https://github.com/pkhuong/Pipes">Pipes</a> is a decent point. I haven&#8217;t been able
+to spend even one minute on it since a hackathon during the holidays; I hope
+someone else will be able to work on Pipes a bit.
+</p>
+   <h3><a id="x1-1000"></a>The idea behing Pipes</h3>
+<!--l. 49--><p style="text-indent:0em">The simplest fusion schemes attempt to handle cases like
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(mapcar f (mapcar g list)) -&gt; (mapcar (compose f g) list)</pre>
+<!--l. 52--><p style="text-indent:0em">
+</p><!--l. 54--><p style="text-indent:1.5em">   These cases are simple because each operation has at most one consumer (output)
+and one producer (input), and produces exactly one output value for each input
+value. The obvious ways to generalize allow arbitrarily many output values per input
+values, multiple consumers, or multiple producers.
+</p><!--l. 60--><p style="text-indent:1.5em">   Most common are transformations that handle an arbitrary number of output
+values per input values (or even arbitrary types!). <code style="font-family:monospace">foldr </code>fusion is probably the prime
+example. I like to think of these rules as based on a specialised CPS conversion:
+instead of consing a list up, producers call their continuations on each item that
+would have been in that list.
+</p><!--l. 67--><p style="text-indent:1.5em">   I&#8217;m not sure I can find examples of schemes that handle multiple consumers in the
+literature. We don&#8217;t see them as often in code as multiple producers, and they&#8217;re
+hard to handle with rewrite rules. Still, it&#8217;s not hard to treat those cases with
+a dedicated code generator: just compile a &#8220;push&#8221; dataflow engine. Such
+a compiler could easily be extended to allow many outputs (or none) per
+input.
+</p><!--l. 74--><p style="text-indent:1.5em">   Multiple producers are much more common, if only because <code style="font-family:monospace">zipWith </code>is a
+standard list operation. Stream fusion achieves that, and a lot more: concatenated
+and nested streams, mostly. It can also handle functions like <code style="font-family:monospace">filter </code>easily, by
+inserting &#8220;skip&#8221; values in the stream. In fact, it can allow functions to yield an
+arbitrary number of output values per input. That&#8217;s compatible with what a &#8220;pull&#8221;
+dataflow engine can achieve.
+</p><!--l. 82--><p style="text-indent:1.5em">   SERIES is somewhere else in the solution space. It allows multiple producers and
+consumers, but not, as far as I can tell, more than one output per input (it too uses
+&#8220;skip&#8221; values to implement functions like <code style="font-family:monospace">filter</code>). It achieves that by compiling to a
+loop that advances the state of each node in the dataflow graph exactly once per
+iteration. Thus, the amount of implicit buffering is constant (one output value for
+each node), and the loop&#8217;s body is generated by a simple traversal of the
+graph.
+</p><!--l. 91--><p style="text-indent:1.5em">   Pipes is mostly a &#8220;push&#8221; engine that handles multiple consumers, but uses a type
+system to recognize cases similar to what SERIES handles, and then allows multiple
+producers as well. It&#8217;s a different design choice than stream fusion, but I believe
+that it&#8217;s essential to allow multiple consumers instead of forcing users to
+build temporary values <em style="font-style:italic">and then traverse them multiple times</em>. Like SERIES,
+it compiles to a loop whose body corresponds to a traversal of the graph.
+However, instead of advancing each node exactly once per iteration, some
+subgraphs can advance multiple times per iteration, or even compile to nested
+loops.
+</p><!--l. 102--><p style="text-indent:1.5em">   I&#8217;ve been trying to find a good tradeoff for almost 5 years now, and it I feels like
+there&#8217;s a rule here, something like &#8220;arbitrary outputs per input, multiple consumers,
+                                                                  
+
+                                                                  
+multiple producers: choose two.&#8221; Stream fusion chooses multiple producers and
+arbitrary output, SERIES multiple producers and consumers, and Pipes multiple
+consumers and arbitrary output, plus a dash of multiple producers in certain cases.
+The fact that it almost manages to get that third feature is what I originally found
+exciting about that design.
+</p><!--l. 111--><p style="text-indent:0em">
+</p>
+   <h3><a id="x1-2000"></a>That&#8217;s it for now</h3>
+<!--l. 112--><p style="text-indent:0em">Frankly, I&#8217;m pretty much rediscovering my own code, but I remember thinking that it
+was almost ready for people to start playing with it. Again, it can be downloaded at
+<a href="https://github.com/pkhuong/Pipes">https://github.com/pkhuong/Pipes</a>.
+</p><!--l. 117--><p style="text-indent:1.5em">   Here&#8217;s a simple example:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">CL-USER&gt; 
+(lambda (x y) 
+  (declare (type (simple-array double-float 1) x y) 
+           (optimize speed (sb-c::insert-array-bounds-checks 0))) 
+  (pipes (let* ((x (- (from-vector x) (from-vector y))) 
+                ; x is bound to the difference at each iteration 
+                (_ sum-x (scan + x 0d0 double-float)) 
+                ; sum-x is bound to the final sum at the end of 
+                ; the loop 
+                (_ sum-x^2 (scan + (* x x) 0d0 double-float)) 
+                (_ min   (scan min x 
+                               double-float-positive-infinity 
+                               double-float)) 
+                (_ max   (scan max x 
+                               double-float-negative-infinity 
+                               double-float)))) 
+    (values (length x) sum-x sum-x^2 min max))) 
+#&lt;FUNCTION (LAMBDA (X Y)) {1004B7BAB9}&gt; 
+CL-USER&gt; 
+(funcall * 
+         (map-into (make-array 10 :element-type &#8217;double-float) 
+                   (let ((x 0d0)) 
+                     (lambda () 
+                       (incf x)))) 
+         (map-into (make-array 10 :element-type &#8217;double-float) 
+                   (let ((x 0d0)) 
+                     (lambda () 
+                       (decf x))))) 
+10 
+110.0d0 
+1540.0d0 
+2.0d0 
+20.0d0 
+CL-USER&gt; (disassemble **) 
+; disassembly for (LAMBDA (X Y)) 
+; 04125107:       488B4AF9         MOV RCX, [RDX-7]           ; no-arg-parsing entry point 
+;      10B:       488B5FF9         MOV RBX, [RDI-7] 
+;      10F:       4C8BC3           MOV R8, RBX 
+;      112:       488BF1           MOV RSI, RCX 
+;      115:       4839D9           CMP RCX, RBX 
+;      118:       488BCE           MOV RCX, RSI                                                                                                                                     
+;      11B:       490F4FC8         CMOVNLE RCX, R8 ; find the min length 
+;      11F:       488BD9           MOV RBX, RCX 
+;      122:       31C9             XOR ECX, ECX 
+;      124:       660F57E4         XORPD XMM4, XMM4 
+;      128:       660F57ED         XORPD XMM5, XMM5 
+;      12C:       F20F101554020000 MOVSD XMM2, [RIP+596] 
+;      134:       F20F101D54020000 MOVSD XMM3, [RIP+596] 
+;      13C:       EB46             JMP L3 
+;      13E:       90               NOP 
+;      13F:       90               NOP 
+;      140: L0:   F20F104C0A01     MOVSD XMM1, [RDX+RCX+1] 
+;      146:       F20F10740F01     MOVSD XMM6, [RDI+RCX+1] 
+;      14C:       F20F5CCE         SUBSD XMM1, XMM6 
+;      150:       F20F58E1         ADDSD XMM4, XMM1 
+;      154:       660F28F1         MOVAPD XMM6, XMM1 
+;      158:       F20F59F1         MULSD XMM6, XMM1 
+;      15C:       F20F58EE         ADDSD XMM5, XMM6 
+;      160:       660F2FD1         COMISD XMM2, XMM1 
+;      164:       0F8A52010000     JP L14 
+;      16A:       0F834C010000     JNB L14 ; rest of cmp/movapd 
+;      170: L1:   660F2FD9         COMISD XMM3, XMM1 
+;      174:       0F8A2D010000     JP L12 
+;      17A:       0F8627010000     JBE L12 ; same 
+;      180: L2:   4883C108         ADD RCX, 8 
+;      184: L3:   4839D9           CMP RCX, RBX 
+;      187:       7CB7             JL L0 
+[...]</pre>
+<!--l. 187--><p style="text-indent:0em">
+</p><!--l. 189--><p style="text-indent:1.5em">   This subtracts two vectors element-wise, and returns the sum of the differences,
+the sum of the squared differences, and the minimum and maximum differences. It&#8217;s
+definitely not the best example, as it doesn&#8217;t explicitly exploit the freedom to
+compute many outputs per input, but it&#8217;s something that I&#8217;ve had to write by hand
+before.
+</p><!--l. 195--><p style="text-indent:1.5em">   If you want to play with <a href="https://github.com/pkhuong/Pipes">Pipes</a> and have questions, ping me on <code style="font-family:monospace">#lisp</code>.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 21:20 | <a href="http://www.pvk.ca/Blog/Lisp/Pipes" title="path">/Lisp/Pipes</a> | <a href="http://www.pvk.ca/Blog/Lisp/Pipes/introducing_pipes.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Tue, 28 Dec 2010</h2>
+<div class="entry">
+  <a id="accumulating_data_in_vectors" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Another way to accumulate data in vectors</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">From time to time, some #lisp-ers debate whether it&#8217;s faster to accumulate a
+sequence of values using <code style="font-family:monospace">cons</code>/<code style="font-family:monospace">nreverse</code>, or <code style="font-family:monospace">cons</code>/<code style="font-family:monospace">(setf cdr)</code>. To me, if that&#8217;s an
+issue, you simply shouldn&#8217;t use a linked list; as <a href="http://factor-language.blogspot.com/">Slava</a> once wrote, &#8220;single linked lists
+are simply the wrong data structure in 99% of cases.&#8221; A vector won&#8217;t be much or any
+slower to build, and traversing a long vector is often far quicker than traversing an
+equally long linked list, if only because the vector uses half as much space (and thus
+memory bandwidth). The obvious question is then: how should we accumulate data
+in vectors? <span style="font-size:90%">(clearly, building a linked list and coercing it to a vector, as SBCL sometimes</span>
+<span style="font-size:90%">does, isn&#8217;t ideal)</span>
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>The simplest way</h3>
+<!--l. 26--><p style="text-indent:0em">Obviously, the ideal way is to know the size of the final vector (or a reasonable
+overapproximation) ahead of time. The whole vector can then be preallocated, and, if
+needed, trimmed a posteriori. In terms of memory accesses, this pretty much achieves
+the lower bound of exactly one access per vector element. It&#8217;s also rarely
+applicable.
+</p><!--l. 32--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>The usual way</h3>
+<!--l. 33--><p style="text-indent:0em">The usual way to approach the problem of an unknown vector size is to begin with
+an underapproximation of the final size, and grow the vector geometrically (and copy
+from the old one) when needed. That&#8217;s the approach usually shown in textbooks, and
+almost necessarily used by <code style="font-family:monospace">std::vector</code>.
+</p><!--l. 39--><p style="text-indent:1.5em">   Unless the initial guess is very accurate (or too high), this method has a
+noticeable overhead in terms of memory access per vector element. Asymptotically,
+the best case is when the last grow is exactly the size of the final vector. For
+instance, when growing temporary vectors by powers of two, this happens when
+the final vector size is also a power of two. Then, in addition to the one
+write per element, half are copied once, a quarter once again, etc., for a
+total of <span>&#8776; </span>2 writes per element. The worst case is when the final vector has
+exactly one more element; for powers of two, all but one vector element are
+then copied once, half of that once again, etc., resulting in <span>&#8776; </span>3 writes per
+element.
+</p><!--l. 51--><p style="text-indent:1.5em">   C programs can often do much better by using <code style="font-family:monospace">realloc </code>(or even <code style="font-family:monospace">mremap</code>)
+to avoid copies. High level languages can, in principle, do as well by also
+hooking in the memory allocator. C++&#8217;s <code style="font-family:monospace">std::vector</code>, however, can&#8217;t exploit
+either: it must go through constructors and <code style="font-family:monospace">operator= </code>(or <code style="font-family:monospace">std::swap</code>, or
+<code style="font-family:monospace">std::move</code>). A variant of <code style="font-family:monospace">realloc </code>that fails instead of moving the data could be
+useful in those situations; I don&#8217;t know of allocators that provide such a
+                                                                  
+
+                                                                  
+function.
+</p><!--l. 60--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-30003"></a>A lazier way</h3>
+<!--l. 61--><p style="text-indent:0em">Another way to build a vector incrementally is to postpone copying to a single
+contiguous vector until the very end. Instead, a sequence of geometrically larger
+temporary vectors can be accumulated, and only copied once to a final vector of
+exactly the right size. Since the temporary vectors grow geometrically, there aren&#8217;t
+too many of them (proportional to the logarithm of the final vector size), and the
+sequence can be represented simply, as a linked list, a flat preallocated vector, or a
+vector that&#8217;s copied when resized.
+</p><!--l. 70--><p style="text-indent:1.5em">   This yields, in all cases, exactly one write and one copy per element, and
+<span><img src="http://www.pvk.ca/Blog/resources/cmsy10-4f.png" alt="O"></img></span>(lg <em style="font-style:italic">n</em>) bookkeeping operations for the sequence, for a total of <span>&#8776; </span>2 writes per
+element.
+</p><!--l. 74--><p style="text-indent:0em">
+</p>
+   <h3><span>4   </span> <a id="x1-40004"></a>Testing the hypothesis</h3>
+<!--l. 75--><p style="text-indent:0em">I used my trusty X5660 to test all three implementations, in C, when building a
+vector of around 2<sup><span style="font-size:70%">24</span></sup><code style="font-family:monospace">unsigned </code>elements (enough to overflow the caches). The table
+below summarizes the results, in cycles per vector element (median value of 256).
+The row for 2<sup><span style="font-size:70%">24</span></sup><span>- </span>1 and 2<sup><span style="font-size:70%">24</span></sup> elements represent the best case for the usual growable
+vector, 2<sup><span style="font-size:70%">24</span></sup> + 1 the worst case, and 2<sup><span style="font-size:70%">24</span></sup><span>&#8901;</span><img src="http://www.pvk.ca/Blog/resources/accumulating_data_in_vectors0x.png" alt="3&#10;2" align="middle"></img> an intermediate value (usual case). The
+relative values were similar with implementations in SBCL, both on a X5660 and on
+a Core 2.
+</p>
+   <div style="margin-top:0.5em; margin-bottom:0.5em; text-align:center" align="center"> <table id="TBL-1" cellspacing="0" cellpadding="0" rules="groups" style="margin-right:auto; border-right:solid black 0.4pt; margin-left:auto; border-left:solid black 0.4pt"><colgroup id="TBL-1-1g"><col id="TBL-1-1"></col></colgroup><colgroup id="TBL-1-2g"><col id="TBL-1-2"></col><col id="TBL-1-3"></col><col id="TBL-1-4"></col></colgroup><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-1-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-1-1" align="left">size (n)</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-2" align="center">preallocate (c/n)</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-3" align="center">grow (c/n)</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-4" align="center">lazy (c/n)</td>
+</tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-2-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-2-1" align="left">2<sup><span style="font-size:70%">24</span></sup><span>- </span>1 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-2" align="center">     7.52        </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-3" align="center">  13.39    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-4" align="center">  15.01   </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-3-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-3-1" align="left">2<sup><span style="font-size:70%">24</span></sup></td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-2" align="center">     7.55        </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-3" align="center">  13.39    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-4" align="center">  15.29   </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-4-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-4-1" align="left">2<sup><span style="font-size:70%">24</span></sup> + 1 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-2" align="center">     7.55        </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-3" align="center">  19.63    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-4" align="center">  13.91   </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-5-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-5-1" align="left">2<sup><span style="font-size:70%">24</span></sup><span>&#8901;</span><img src="http://www.pvk.ca/Blog/resources/accumulating_data_in_vectors1x.png" alt="3&#10;2" align="middle"></img></td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-2" align="center">     7.54        </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-3" align="center">  15.51    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-4" align="center">  15.35   </td></tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-6-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-6-1" align="left"> </td> </tr></table></div>
+<!--l. 96--><p style="text-indent:1.5em">   The numbers for preallocated vectors are reassuringly stable, at 7.5 cycles per
+vector element (2 cycles per byte). The usual way to grow a vector ends up
+using a bit less than twice as many cycles in the best cases, almost exactly
+twice in the usual case, and nearly three times as many cycles in the worst
+case. In contrast, lazy copying consistently uses twice as many cycles as
+the preallocated vector. These figures fit nicely with the theoretical cost in
+memory accesses. The main discrepancy is that growable vectors seem to do
+slightly better than expected for the best cases; this is probably due to the
+data caches, which significantly accelerate copying the first few temporary
+vectors.
+                                                                  
+
+                                                                  
+</p><!--l. 108--><p style="text-indent:0em">
+</p>
+   <h3><span>5   </span> <a id="x1-50005"></a>Conclusion</h3>
+<!--l. 109--><p style="text-indent:0em">The usual way to implement growable vectors has issues with performance on vectors
+slightly longer than powers of two; depending on the computation:bandwidth cost
+ratio, a task could become 50% slower when the number of outputs crosses a power of
+two. Lazy copying, on the other hand, has very similar performance in most cases,
+without the glass jaw around powers of two. The effect is even more important
+when copying is more expensive, be it due to copy constructors, or to slower
+implementations of <code style="font-family:monospace">memcpy </code>(e.g. SBCL).
+</p><!--l. 119--><p style="text-indent:1.5em">   I&#8217;ve been working on a library for SERIES-style fusion of functional sequence
+operations, lately (in fact, that&#8217;s what lead me to benchmark lazy copying), and
+decided to spend the time needed to implement accumulation of values with
+lazily-copied vectors. The cost is mostly incurred by myself, while there isn&#8217;t any
+difference in the interface, and the user notices, at worst, a slight slowdown compared
+to the usual implementation. For instance,
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(pipes (let ((x (from-vector x))) 
+         (to-vector (remove-if-not (plusp x) x))))</pre>
+<!--l. 129--><p style="text-indent:0em"> will accumulate only the strictly positive values in <code style="font-family:monospace">x</code>, without any unexpected major
+slowdown around powers of two.
+</p><!--l. 133--><p style="text-indent:1.5em">   Growable vectors are often provided by (standard) libraries, and used by
+programmers without giving explicit thought to their implementation. Glass jaws
+should probably be avoided as much as possible in this situation, even at the cost of
+additional code off the hot path and a little pessimisation in the best cases.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 00:49 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/accumulating_data_in_vectors.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Sat, 04 Dec 2010</h2>
+<div class="entry">
+  <a id="concurrency_with_mvars" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Concurrency with MVars</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em"><span style="font-size:90%">[Updated twice to improve readability on planet lisp, and again to remove some useless</span>
+<span style="font-size:90%">package qualifiers.]</span>
+</p><!--l. 14--><p style="text-indent:1.5em">   I originally intended to remind users of condition variables (waitqueues) in SBCL
+that <code style="font-family:monospace">condition-wait </code>can return spuriously. In other words, you&#8217;re likely misusing
+condition variables if your program isn&#8217;t correct with (basically) the following
+definition of <code style="font-family:monospace">condition-wait</code>:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun condition-wait (queue mutex) 
+  (declare (ignore queue)) 
+  (sb-thread:release-mutex mutex) 
+  ;; sleep and/or assume a fair mutex 
+  (sb-thread:get-mutex mutex))</pre>
+<!--l. 26--><p style="text-indent:0em">
+</p><!--l. 28--><p style="text-indent:1.5em">   One way to almost always use condition variables correctly is to insert calls to
+<code style="font-family:monospace">condition-wait </code>in a busy-polling loop. I was going to code up a rough example
+of how to do that for coroutines, but it seemed better to exploit MVars
+instead.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>MVars</h3>
+<!--l. 34--><p style="text-indent:0em">(The code for this section is available at <a href="http://discontinuity.info/~pkhuong/mvar.lisp">http://discontinuity.info/&#732;pkhuong/mvar.lisp</a>.)
+</p><!--l. 36--><p style="text-indent:1.5em">   The <a href="http://haskell.org/ghc/docs/6.12.2/html/libraries/base-4.2.0.1/Control-Concurrent-MVar.html">GHC docs</a> describe MVars as &#8220;(pronounced &#8221;em-var&#8221;) is a synchronising
+variable, used for communication between concurrent threads. It can be thought of as
+a a [sic] box, which may be empty or full.&#8221; Another way to see them is as bounded
+(one-element) message queues.
+</p><!--l. 42--><p style="text-indent:1.5em">   To use MVars, we need to be able to create one (<code style="font-family:monospace">make</code>), consume a value (<code style="font-family:monospace">take</code>)
+and put one in the queue (<code style="font-family:monospace">put</code>). It&#8217;s also useful to expose a type (<code style="font-family:monospace">mvar</code>) and a type
+test (<code style="font-family:monospace">mvar-p</code>).
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defpackage "MVAR" 
+    (:use "CL" "SB-THREAD") 
+  (:export "MVAR" "MVAR-P" "MAKE" "VALUE" "TAKE" "PUT")) 
+ 
+(in-package "MVAR")</pre>
+<!--l. 53--><p style="text-indent:0em">
+</p><!--l. 55--><p style="text-indent:1.5em">   To implement an MVar, we obviously need some way to denote emptyness, a
+mutable box, and a mutex to protect against concurrent accesses.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defconstant +empty+ &#8217;+empty+) 
+ 
+(defstruct (mvar 
+             (:constructor %make-mvar)) 
+  (mutex      (make-mutex)     :type mutex 
+   :read-only t) 
+  ;; signaled when reads are possible 
+  (read-cvar  (make-waitqueue) :type waitqueue 
+   :read-only t) 
+  ;; signaled when writes are possible 
+  (write-cvar (make-waitqueue) :type waitqueue 
+   :read-only t) 
+  (value  +empty+))</pre>
+<!--l. 72--><p style="text-indent:0em">
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun make (&amp;optional (value +empty+)) 
+  (%make-mvar :value value))</pre>
+<!--l. 77--><p style="text-indent:0em">
+</p><!--l. 79--><p style="text-indent:1.5em">   The two condition variables (waitqueues) are used to reduce busy-looping.
+It would also be possible to only have a single condition variable for both
+reads and writes, but that would result in even more spurious wake-ups.
+Instead, the code can use <code style="font-family:monospace">condition-notify </code>to only wake a single waiter at a
+time.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun take (mvar) 
+  (declare (type mvar mvar)) 
+  (let ((mutex (mvar-mutex mvar)) 
+        (cvar  (mvar-read-cvar mvar))) 
+    (with-mutex (mutex) 
+      (loop for value = (mvar-value mvar) 
+            do (cond ((eq value +empty+) 
+                      (condition-wait cvar mutex)) 
+                     (t 
+                      (setf (mvar-value mvar) +empty+) 
+                      (condition-notify (mvar-write-cvar mvar)) 
+                      (return value)))))))</pre>
+<!--l. 98--><p style="text-indent:0em">
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun put (mvar new-value) 
+  (declare (type mvar mvar)) 
+  (assert (not (eq new-value +empty+))) 
+  (let ((mutex (mvar-mutex mvar)) 
+        (cvar  (mvar-write-cvar mvar))) 
+    (with-mutex (mutex) 
+      (loop for value = (mvar-value mvar) 
+            do (cond ((eq value +empty+) 
+                      (setf (mvar-value mvar) new-value) 
+                      (condition-notify (mvar-read-cvar mvar)) 
+                      (return new-value)) 
+                     (t 
+                      (condition-wait cvar mutex)))))))</pre>
+<!--l. 114--><p style="text-indent:0em">
+</p><!--l. 116--><p style="text-indent:1.5em">   Finally, tiny <code style="font-family:monospace">setf </code>wrappers never hurt:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(declaim (inline value (setf value))) 
+(defun value (mvar) 
+  (take mvar)) 
+ 
+(defun (setf value) (value mvar) 
+  (put mvar value))</pre>
+<!--l. 124--><p style="text-indent:0em">
+</p><!--l. 126--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>Implementing coroutines with MVars</h3>
+<!--l. 127--><p style="text-indent:0em">(The code for this section is available at <a href="http://discontinuity.info/~pkhuong/coroutine.lisp">http://discontinuity.info/&#732;pkhuong/coroutine.lisp</a>.)
+</p><!--l. 129--><p style="text-indent:1.5em">   Coroutines are like functions, except that they allow multiple returns and (re-)
+entries. Users should be able to create coroutines (<code style="font-family:monospace">coroutine</code>), <code style="font-family:monospace">yield </code>values from
+coroutines, and grab the <code style="font-family:monospace">next </code>values from a coroutine.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defpackage "COROUTINE" 
+    (:use "CL" "SB-THREAD" "SB-EXT") 
+  (:export "COROUTINE" "YIELD" "NEXT" "+DEAD+")) 
+ 
+(in-package "COROUTINE")</pre>
+<!--l. 140--><p style="text-indent:0em">
+</p><!--l. 142--><p style="text-indent:1.5em">   To implement that, <code style="font-family:monospace">coroutine</code>s only need a thread and two <code style="font-family:monospace">mvar</code>, one for
+arguments and another for return values:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defstruct (coroutine 
+             (:constructor %make-coroutine (thread in out))) 
+  (thread nil :type thread    :read-only t) 
+  (in     nil :type mvar:mvar :read-only t) 
+  (out    nil :type mvar:mvar :read-only t))</pre>
+<!--l. 150--><p style="text-indent:0em">
+</p><!--l. 152--><p style="text-indent:1.5em">   <code style="font-family:monospace">next </code>simply has to <code style="font-family:monospace">put </code>fresh argument values, and <code style="font-family:monospace">take </code>return values:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun next (coroutine &amp;rest values) 
+  (mvar:put (coroutine-in coroutine) values) 
+  (values-list (mvar:take (coroutine-out coroutine))))</pre>
+<!--l. 159--><p style="text-indent:0em">
+</p><!--l. 161--><p style="text-indent:1.5em">   <code style="font-family:monospace">yield </code>shouldn&#8217;t be used outside coroutines, so it&#8217;s defined as a stub and a
+compiler macro:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun yield (&amp;rest values) 
+  (declare (ignore values)) 
+  (error "~S used outside ~S" &#8217;yield &#8217;coroutine)) 
+ 
+(define-compiler-macro yield (&amp;whole whole &amp;rest values) 
+  (declare (ignore values)) 
+  (warn "~S used outside ~S" &#8217;yield &#8217;coroutine) 
+  whole)</pre>
+<!--l. 172--><p style="text-indent:0em">
+</p><!--l. 174--><p style="text-indent:1.5em">   Finally, coroutines are just threads with a local <code style="font-family:monospace">yield </code>function.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defconstant +dead+ &#8217;+dead+) 
+ 
+(defmacro coroutine (&amp;body body) 
+  (let ((_in    (gensym "IN")) 
+        (_out   (gensym "OUT")) 
+        (_block (gensym "BLOCK"))) 
+    &#8216;(make-coroutine 
+      (lambda (,_in ,_out) 
+        "IN is the input MVAR and OUT the output MVAR." 
+        (lambda () 
+          (block ,_block 
+            (flet ((yield (&amp;rest values) 
+                     (mvar:put ,_out values) 
+                     (let ((in (mvar:take ,_in))) 
+                       (when (eq in +dead+) 
+                         (return-from ,_block)) 
+                       (values-list in)))) 
+              ;; signal that initialization is complete 
+              (yield) 
+              (locally 
+                  ,@body))) 
+          (mvar:put ,_out (list +dead+))))))) 
+ 
+(defun make-coroutine (builder) 
+  (let* ((in     (mvar:make)) 
+         (out    (mvar:make)) 
+         (thread (make-thread (funcall builder in out))) 
+         (coroutine (%make-coroutine thread in out))) 
+    ;; the coroutine thread and the finalizer don&#8217;t hold references 
+    ;; to the coroutine struct, so finalize isn&#8217;t useless. 
+    (finalize coroutine 
+              (lambda () 
+                (mvar:put in +dead+) 
+                (join-thread thread))) 
+    ;; return the coroutine and the first yielded values 
+    (multiple-value-call #&#8217;values 
+      coroutine 
+      (values-list (mvar:take out)))))</pre>
+<!--l. 215--><p style="text-indent:0em">
+                                                                  
+
+                                                                  
+</p><!--l. 217--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-30003"></a>Same-fringe with coroutines</h3>
+<!--l. 218--><p style="text-indent:0em">A classic toy application of coroutines (or, actually generators, since information only
+flows out of coroutines) is the same fringe problem. We can implement that by first
+enumerating the leaves of a cons tree:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun leaves (tree) 
+  (coroutine 
+    (labels ((walk (tree) 
+               (cond ((consp tree) 
+                      (walk (car tree)) 
+                      (walk (cdr tree))) 
+                     (t 
+                      (yield tree))))) 
+      (walk tree))))</pre>
+<!--l. 232--><p style="text-indent:0em">
+</p><!--l. 234--><p style="text-indent:1.5em">   Then, we only have to read the leaves from the input trees:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun same-fringe (tree1 tree2) 
+  (loop with leaves1 = (leaves tree1) 
+        with leaves2 = (leaves tree2) 
+        for leaf1 = (next leaves1) 
+        for leaf2 = (next leaves2) 
+        do 
+     (cond ((and (eq leaf1 +dead+) 
+                 (eq leaf2 +dead+)) 
+            (return t)) 
+           ((not (eql leaf1 leaf2)) 
+            (return nil)))))</pre>
+<!--l. 247--><p style="text-indent:0em"> </p> 
+
+
+    </div>
+<p>
+  posted at: 17:22 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/concurrency_with_mvars.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Mon, 12 Apr 2010</h2>
+<div class="entry">
+  <a id="type_lower_bound" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>The type-lower-bound branch</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">Nikodemus was intrigued by the <a href="http://repo.or.cz/w/sbcl/pkhuong.git/shortlog/refs/heads/type-lower-bound">type-lower-bound</a> branch I pushed on <code style="font-family:monospace">repo.or.cz </code>a
+few weeks ago. It&#8217;s a convenience hack that wound up being slightly more intricate
+and interesting than planned: a user was complaining that there was no nice way to
+muffle <em style="font-style:italic">some </em>optimisation notes. Take
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(lambda (x) 
+  (declare (type integer x) 
+           (optimize speed)) 
+  (1+ x)) 
+ 
+; in: LAMBDA (X) 
+;     (1+ X) 
+; ==&gt; 
+;   (+ X 1) 
+; 
+; note: forced to do GENERIC-+ (cost 10) 
+;       unable to do inline fixnum arithmetic (cost 1) because: 
+;       The first argument is a INTEGER, not a FIXNUM. 
+;       The result is a (VALUES INTEGER &amp;OPTIONAL), not a (VALUES FIXNUM &amp;REST T). 
+;       unable to do inline fixnum arithmetic (cost 2) because: 
+;       The first argument is a INTEGER, not a FIXNUM. 
+;       The result is a (VALUES INTEGER &amp;OPTIONAL), not a (VALUES FIXNUM &amp;REST T). 
+;       etc.</pre>
+<!--l. 36--><p style="text-indent:0em">
+</p><!--l. 38--><p style="text-indent:1.5em">   If the user already knows that the best they can do is declare that <code style="font-family:monospace">x </code>is an
+<code style="font-family:monospace">integer</code>, there is no way to muffle only the notes that amount to wishing that the
+type of <code style="font-family:monospace">x </code>was more precisely known.
+</p><!--l. 43--><p style="text-indent:1.5em">   My first (failed) attempt tagged <em style="font-style:italic">variables </em>as hopeless (any note mentioning these
+variables&#8217; types would then be muffled). I forgot why I couldn&#8217;t make it
+work, but I believe it&#8217;s because invisible copies are very common, so that
+transforms manipulated <code style="font-family:monospace">lvar</code>s that were mere untagged copies of the tagged
+variable.
+</p><!--l. 49--><p style="text-indent:1.5em">   Luckily, we have a well-established mechanism to make properties flow across
+copies: the type (propagation) system. Again, my first attempt was to create a type
+for hopelessly vague types. However, types must implement all three set operations
+(negation, intersection and union), and making that work with such an ad hoc type
+wasn&#8217;t an attractive prospect.
+</p><!--l. 56--><p style="text-indent:1.5em">   This is where type <em style="font-style:italic">lower </em>bounds come in. In CL, types, as exposed through
+declarations, are always upper bounds: they are treated as conservative
+approximations of the set of values the annotated form, variable, etc. can take. The
+conservativeness is necessary because the exact static type is generally undecidable.
+In other words, the meaning of <code style="font-family:monospace">(the integer x) </code>is that <code style="font-family:monospace">x </code>can evaluate to
+any integer; it could actually only ever evaluate to a <code style="font-family:monospace">fixnum </code>(or any other
+subset of <code style="font-family:monospace">integer</code>s), which is what the note in the original example asks
+for.
+                                                                  
+
+                                                                  
+</p><!--l. 66--><p style="text-indent:1.5em">   If we had a way to also denote lower bounds (e.g. that <code style="font-family:monospace">x </code>can take <code style="font-family:monospace">(not fixnum)</code>
+values) on the exact static type of forms, compiler notes could be tested
+against these lower bounds to determine when the programmer knows that
+the declared or derived type cannot be improved enough for a transform
+to fire. In the original example, this would amount to declaring that <code style="font-family:monospace">x</code>&#8217;s
+exact static type is between <code style="font-family:monospace">fixnum </code>(exclusively) and <code style="font-family:monospace">integer </code>(inclusively),
+or, equivalently, that <code style="font-family:monospace">x </code>will always be an <code style="font-family:monospace">integer</code>, and will sometimes not
+be a <code style="font-family:monospace">fixnum</code>. The note is then obviously moot, and can be muffled by the
+compiler.
+</p><!--l. 77--><p style="text-indent:1.5em">   Unlike ad hoc &#8220;hopeless&#8221; types, intersection and union of lower bound types
+(really, range of types, since lower bound types are always accompanied by an upper
+bound) are straightforward and theoretically sound. The only issue is with type
+negation. Since this is all for convenience, I decided to just punt and drop the lower
+bound before negating.
+</p><!--l. 84--><p style="text-indent:1.5em">   The branch, as pushed on <code style="font-family:monospace">repo.or.cz</code>, seems to be working. In order to keep
+changes to a minimum, regular types are treated as having an implicit lower bound of
+<code style="font-family:monospace">nil</code>, and range types (with a non-trivial lower bound) are aggressively converted to
+regular types. This gives the muffling effect for some interesting simple cases, and
+reverts to the old behaviour very quickly. There are probably hidden bugs (both in
+the code and in the design), but since they could only be triggered by using the
+extension, I&#8217;m not <em style="font-style:italic">too </em>worried.
+</p>
+   <h3><a id="x1-1000"></a>N.B. This isn&#8217;t actually useful for compilation speed</h3>
+<!--l. 94--><p style="text-indent:0em">I originally thought type lower bounds could be useful to improve compilation speed:
+by keeping around both lower and upper bounds, we are able to overapproximate
+types even in the presence of type negation. Once I implemented a quick prototype,
+<a href="http://repo.or.cz/w/sbcl/pkhuong.git/shortlog/refs/heads/ir1-widening">ir1-widening</a>, I realised we don&#8217;t need lower bounds at all: we only have to make sure
+we only ever approximate types once we&#8217;re sure they&#8217;ll never be negated.
+Actually, what would be even more useful is a way to compute approximate
+unions and intersections quickly, instead of widening types after the fact.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 20:44 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/type_lower_bound.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

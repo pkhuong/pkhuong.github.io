@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>SWAR implementation of (some #'zerop ...) - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Wed, 03 Sep 2008</h2>
+<div class="entry">
+  <a id="SWAR-some-zerop" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>SWAR implementation of (some #'zerop ...)</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>SWAR (SIMD Within A Register) codes can portably express short-vector
+parallelism for operations on small packed data (e.g. byte or even
+nybble vectors).  A trivial application of the technique is when we
+test whether any bit in a word is set (equal to 1) by comparing the
+whole word against 0. Obviously, that also work to test whether any
+field (of arbitrary width) is not filled with 0. <a href="http://cobweb.ecn.purdue.edu/~hankd/SWAR/over.html">This document</a>, from
+1997, provides a fairly clear and complete overview.</p>
+
+<p>Just like testing whether any bit is set, it is easy to find whether
+some bit is <em>not</em> set (it's simply the opposite of whether every bit
+in the word is set).  Things are more complex when the data
+are wider than a single bit (but obviously narrower than a full
+word).  I found a short implementation (and barely tested it), but
+it might be possible to do even shorter.  Skip to the series of
+asterisks if you want to solve that puzzle (to efficiently find
+whether any field in a sequence of data, itself packed into a single
+word, is 0) yourself.</p>
+
+<p>To simplify the description, I'll assume that we're working with
+4-bit-wide fields.  It should be clear how the code can be adapted to
+other widths or even mixed widths.</p>
+
+<p>Let <code>x = aaaabbbbccccdddd...</code> be the input.</p>
+
+<p>1. <code>x&apos; = x &#124; (x &gt;&gt; 1)</code>.
+The first bit in each field is now, for our purposes, noise. However,
+some of the remaining 3 bits are now non-zero iff some the original 4
+were.</p>
+
+<p>2. <code>ones = x' &amp; ~0x8888...</code>. The noise bits are masked out.</p>
+
+<p>3. <code>borrow = 0x8888... - ones</code>. The first bit of each field
+in <code>borrow</code> is 0 iff some of the 3 other bits in <code>ones</code> aren't (iff some
+of the 4 bits in <code>x</code> weren't).</p>
+
+<p>4. <code>result = borrow &amp; 0x8888...</code> is zero iff the first bit
+of every field in <code>borrow</code> is 0 (iff every field in <code>x</code> was non-null).</p>
+
+<p>And, finally, that is easy to test for, a word at a time. In the end,
+it takes 5 (hopelessly serial) operations (<code>&gt;&gt;</code>, <code>|</code>, <code>&amp;</code>, <code>-</code> and <code>&amp;</code>) and a
+conditional branch.</p>
+
+<p><code>****</code> Testing whether any field in a word is filled with 0 may seem
+incredibly obscure.  Apart from <code>(some #'zerop
+[packed-unboxed-vector])</code>, what use is there for such code sequences?
+One trick is to exploit <code>xor</code>.  <code>xor</code> lets us compare multiple fields at a
+time: a field is 0 in <code>a xor b</code> iff the corresponding fields in <code>a</code> and <code>b</code>
+are identical (bit for bit).  Now that we can determine when at least
+one pair of fields is equal, it's simple to implement, e.g., default
+<code>FIND</code> on specialised vectors without having to test each datum
+separately (until the very end, when we know that one of the pairs is
+equal, but not which).  As usual, a full implementation, capable of
+dealing with <code>:start</code>, <code>:end</code> and displaced vectors is a lot more work.</p>
+
+    </div>
+<p>
+  posted at: 02:07 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/SWAR-some-zerop.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>0x7FDE623822FC16E6 : a magic constant for double float reciprocal - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Wed, 16 Mar 2011</h2>
+<div class="entry">
+  <a id="software-reciprocal" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>0x7FDE623822FC16E6 : a magic constant for double float reciprocal</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 18--><p style="text-indent:0em"><em style="font-style:italic">EDIT: I never expected this post to garner so much interest. Just to be clear, using</em>
+<em style="font-style:italic">the constant is a very bad idea in almost every situation I can think of. Even</em>
+<em style="font-style:italic">instructions like </em><code style="font-family:monospace; font-style:italic">RCPSS </code><em style="font-style:italic">should only be used by people who are convinced that the</em>
+<em style="font-style:italic">tradeoffs are worth it (or don&#8217;t have any other choice). Subtracting from the constant</em>
+<em style="font-style:italic">above is even worse, and handles even fewer corner cases.</em>
+</p><!--l. 20--><p style="text-indent:1.5em">   I&#8217;ve been working on a specialised discrete optimisation algorithm, and <code style="font-family:monospace">perf </code>tells
+me that it&#8217;s spending around 25% of its time on one (double float) division
+instruction: the algorithm has to repeatedly compute <em style="font-style:italic">x</em><sup><span style="font-size:70%">-</span><span style="font-size:70%">1</span></sup> for a couple hundred
+thousand values in a vector. If the denominator was constant, it would be simple to
+speed that up. Unfortunately, the only shortcut for reciprocals seems to consist of
+computing an approximation and refining it with a couple <a href="http://en.wikipedia.org/wiki/Division_(digital)#Newton.E2.80.93Raphson_division">Newton-Raphson
+steps</a>.
+</p><!--l. 29--><p style="text-indent:1.5em">   Surprisingly, it&#8217;s still possible to achieve significant speed-ups when as many as 3
+refinement steps are used: a division unit takes a lot of space, so, unlike
+multiplications and additions, hardware divisions can rarely be executed in parallel.
+I.e., each division takes a couple cycles (around 7-14, according to <a href="http://www.agner.org/optimize/instruction_tables.pdf">Agner
+Fog&#8217;s tables [PDF]</a>), and must wait for the previous division to be fully
+computed. Since I&#8217;m dividing a large number of values one after the other,
+I&#8217;m looking for good throughput more than latency, and it can be useful
+to perform more operations, as long as they&#8217;re executed in parallel or in a
+pipeline.
+</p><!--l. 41--><p style="text-indent:1.5em">   The textbook way to compute an approximation of the reciprocal is
+probably to use hardware support. On <code style="font-family:monospace">x86[-64]</code>, that would be <code style="font-family:monospace">RCPSS</code>, which
+computes a 12 bit approximation for the reciprocal of a single float. For
+my use case, I also have to convert to and from doubles (<code style="font-family:monospace">CVTSD2SD </code>and
+<code style="font-family:monospace">CVTSS2SD</code>). My Westmere machine can dispatch one of these instructions per
+cycle.
+</p><!--l. 48--><p style="text-indent:1.5em">   But then again, it seems like it would be possible to do something like the classic
+<a href="http://en.wikipedia.org/wiki/Fast_inverse_square_root">fast inverse square root</a>. Simply taking the opposite value of the exponent field gives
+us a decent approximation: double floats on x86 (and on most other machines) are
+represented as
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left"> sign : exponent : significand 
+ 1 bit: 11 bits  : 52 bits (and implicit leading 1)</pre>
+<!--l. 57--><p style="text-indent:0em"> The exponent is signed, but represented as unsigned numbers with a positive bias:
+an exponent of 0 is represented by 1022, and -1 by 1021, 1 by 1023, etc.
+The maximal biased value for a normal number is 2046 (2047 is used for
+infinities and NaNs). So, to get the opposite value of the exponent, it suffices to
+subtract it from 2046. That gives us a single bit of precision which, while
+sufficient to guarantee convergence of the Newton-Raphson steps, is far from
+useful.
+</p><!--l. 66--><p style="text-indent:1.5em">   Instead, it would be interesting to also exploit the significand to get a couple more
+bits of precision from a subtraction like to-double(<em style="font-style:italic">a </em><span>-</span> from-double(<em style="font-style:italic">x</em>)). The
+Newton-Raphson steps can diverge when the initial guess is too large, so the constant
+<em style="font-style:italic">a </em>should be of the form 2046 <span>&#8901; </span>2<sup><span style="font-size:70%">52</span></sup><span>- </span><em style="font-style:italic">b</em>, where <em style="font-style:italic">b </em><span><img src="http://www.pvk.ca/Blog/resources/cmsy10-32.png" alt="&#8712;"></img></span>[0<em style="font-style:italic">,</em>2<sup><span style="font-size:70%">52</span></sup><span>- </span>1]. I graphed the
+maximal error on a range of inputs (2<sup><span style="font-size:70%">17</span></sup> equidistant values between 0 and 3),
+and it looks unimodal (decreasing until it hits the global minimum, then
+increasing).
+</p><!--l. 75--><p style="text-indent:1.5em">   <img src="http://www.pvk.ca/Blog/resources/overview.png" alt="PIC"></img></p><!--l. 77--><p style="text-indent:1.5em">   <img src="http://www.pvk.ca/Blog/resources/zoom.png" alt="PIC"></img></p><!--l. 79--><p style="text-indent:1.5em">   I want to minimise a function that seems unimodal, but isn&#8217;t (a priori)
+differentiable and is fairly expensive to compute. That seemed like a perfect
+application for the <a href="http://en.wikipedia.org/wiki/Golden_section_search">golden section search</a> (to avoid any problem with floating point
+rounding errors, I used an exhaustive search once the range was down to a
+couple thousand values). I waited a couple seconds, and my REPL spit out
+<code style="font-family:monospace">0x7FDE623822FC16E6 </code>for the best value of <em style="font-style:italic">a</em>: the max relative error after 3 steps
+is on the order of 4 <span>&#8901; </span>10<sup><span style="font-size:70%">-</span><span style="font-size:70%">11</span></sup> (<span>&#8776; </span>35 bit), and the average around 1 <span>&#8901; </span>10<sup><span style="font-size:70%">-</span><span style="font-size:70%">11</span></sup>.
+The convergence rate of the Newton-Raphson methods is quadratic, so the
+magic constant yields slightly more than 4(!!) bits of precision after a single
+subtraction.
+</p><!--l. 93--><p style="text-indent:1.5em">   In the end, going through <code style="font-family:monospace">RCPSS </code>is still faster, as the initial guess is almost 3
+times as precise, but on another machine without hardware support for approximate
+reciprocals, or on which the Newton-Raphson steps execute faster, it might be useful
+to keep <code style="font-family:monospace">0x7FDE623822FC16E6 </code>in mind. Granted, that doesn&#8217;t seem to often have been
+the case so far: I can&#8217;t find that constant or any value close to it on google.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 13:30 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/software-reciprocal.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>
