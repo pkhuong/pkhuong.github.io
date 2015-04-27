@@ -8,7 +8,7 @@ ssh_user       = "pkhuong@deneb.cddr.org"
 ssh_port       = "22"
 ## logs: /srv/www/vhosts/pvk.ca/logs/
 document_root  = "/srv/www/vhosts/pvk.ca/htdocs/"
-rsync_delete   = true
+rsync_delete   = false
 rsync_args     = ""
 deploy_default = "rsync"
 
@@ -59,7 +59,7 @@ task :generate do
   puts "## Generating Site with Jekyll"
   system "compass compile --css-dir #{source_dir}/stylesheets"
   system "jekyll build"
-  system "cd public/Blog; ln -s ../index.html ."
+  system "cd public/Blog; ln -s ../index.html . || echo 'Link exists'"
 end
 
 desc "Watch the site and regenerate when it changes"
