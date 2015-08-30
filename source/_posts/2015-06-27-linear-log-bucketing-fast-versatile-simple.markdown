@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Linear-log bucketing: fast, versatile, simple"
-date: 2015-06-27 17:05:00 -0400
+date: 2015-06-27 17:06:01 -0400
 comments: true
 categories: 
 ---
@@ -19,7 +19,7 @@ publicity.
 
 I'm sure the idea is old, but I first came across this strategy in
 [jemalloc](https://github.com/jemalloc/jemalloc)'s binning scheme for
-allocation sizes.  The basic idea is to simplify allocation and reduce
+allocation sizes.  The general idea is to simplify allocation and reduce
 external fragmentation by rounding allocations up to one of a few bin
 sizes.  The simplest scheme would round up to the next power of two,
 but experience shows that's extremely wasteful: in the worst case, an
@@ -28,15 +28,15 @@ for almost 100% space overhead!  Jemalloc further divides each
 power-of-two range into 4 bins, reducing the worst-case space overhead
 to 25%.
 
-This sub-power-of-two binning covers medium or large allocations.  We
+This sub-power-of-two binning covers medium and large allocations.  We
 still have to deal with small ones: the ABI forces alignment on every
 allocation, regardless of their size, and we don't want to have too
-many small bins (e.g., 1 byte, 2 bytes, 3 bytes, ..., 8 bytes).
+many small bins (e.g., 1 byte, 2 bytes, 3 bytes, …, 8 bytes).
 Jemalloc adds another constraint: bins are always multiples of the
 allocation quantum (usually 16 bytes).
 
 The sequence for bin sizes thus looks like: 16, 32, 48, 64, 80, 96,
-128, 150, 182, 256, 320, 384, ... (0 is special because malloc must
+112, 128, 160, 192, 224, 256, 320, 384, … (0 is special because malloc must
 either return NULL [bad for error checking] or treat it as a full
 blown allocation).
 
@@ -44,7 +44,9 @@ I like to think of this sequence as a special initial range with 4
 linearly spaced subbins (0 to 63), followed by power-of-two ranges
 that are again split in 4 subbins (i.e., almost logarithmic binning).
 There are thus two parameters: the size of the initial linear range,
-and the number of subbins per range.
+and the number of subbins per range.  We're working with integers, so
+we also know that the linear range is at least as large as the number
+of subbins (it's hard to subdivide 8 integers in 16 bins).
 
 Assuming both parameters are powers of two, we can find the bucket for
 any value with only a couple x86 instructions, and no conditional jump or
@@ -58,7 +60,7 @@ Common Lisp: my favourite programmer's calculator
 
 As always when working with bits, I first doodled in SLIME/SBCL: CL's
 bit manipulation functions are more expressive than C's, and a
-REPL always helps exploration.
+REPL helps exploration.
 
 Let `linear` be the \\(\log\sb{2}\\) of the linear range, and `subbin`
 the \\(\log\sb{2}\\) of the number of subbin per range, with 
@@ -76,8 +78,8 @@ I clearly need something like \\(\lfloor\log\sb{2} x\rfloor\\):
   (1- (integer-length x)))
 {% endcodeblock %}
 
-I'll also want to treat values smaller than `2**linear` mostly as
-though they roughly `2**linear` in size.  We'll do that with
+I'll also want to treat values smaller than `2**linear` as
+though they were about `2**linear` in size.  We'll do that with
 
     n-bits := (lb (logior x (ash 1 linear))) === (max linear (lb x))
 
@@ -86,7 +88,7 @@ We now want to shift away all but the top `subbin` bits of `x`
     shift := (- n-bits subbin)
     sub-index := (ash x (- shift))
 
-For a memory allocation, the problem is that the last rightward shift
+For a memory allocator, the problem is that the last rightward shift
 rounds *down*!  Let's add a small mask to round things up:
 
     mask := (ldb (byte shift 0) -1) ; that's `shift` 1 bits
@@ -103,7 +105,7 @@ Finally, we combine these two together by shifting `index` by
 
     index := (+ (ash range subbin) sub-index)
 
-Extra Extra! we can also find the maximum value for the bin with
+Extra! Extra! We can also find the maximum value for the bin with
 
     size := (logandc2 rounded mask)
 
@@ -150,7 +152,7 @@ range, and a linear progression over \\([0, 2\sp{4} = 16)\\).
     9
     40
 
-The sequence is exactly what we want: 0, 4, 8, 12, 16, 20, 24, 28, 32, 40, 48, ...!
+The sequence is exactly what we want: 0, 4, 8, 12, 16, 20, 24, 28, 32, 40, 48, …!
 
 The function is marginally simpler if we can round down instead of up.
 
@@ -193,14 +195,14 @@ The function is marginally simpler if we can round down instead of up.
     8
     32
 
-That's the same sequence of bucket sizes, but we round down in size
+That's the same sequence of bucket sizes, but rounded down in size
 instead of up.
 
 The same, in GCC
 ----------------
 
 {% codeblock "bin.c" %}
-static inline unsigned
+static inline unsigned int
 lb(size_t x)
 {
         /* I need an extension just for integer-length (: */
@@ -250,9 +252,9 @@ What's it good for?
 -------------------
 
 I first implementated this code to mimic's jemalloc binning scheme: in
-a memory allocator, a linear-logarithmic sequence gives us minimal
+a memory allocator, a linear-logarithmic sequence give us
 alignment and bounded space overhead (bounded internal fragmentation),
-while keeping the number of size classes down (controls external
+while keeping the number of size classes down (controlling external
 fragmentation).
 
 [High dynamic range histograms](http://hdrhistogram.org/) use the same
@@ -270,9 +272,17 @@ don't really care about sub millisecond precision, but wish to treat
 zero specially; that's all taken care of by the "round up" linear-log
 binning code.
 
-In general, if you think that dispatching on the bitwidth of a number
-would mostly work, except that you need more granularity for large
-values, and perhaps less for small ones, linear-logarithmic binning
-sequences may be useful.  They let you tune the granularity at both
-ends, and we know how to round values and map them to bins with simple
-functions that compile to fast and compact code!
+In general, if you ever think to yourself that dispatching on the
+bitwidth of a number would mostly work, except that you need more
+granularity for large values, and perhaps less for small ones,
+linear-logarithmic binning sequences may be useful.  They let you tune
+the granularity at both ends, and we know how to round values and map
+them to bins with simple functions that compile to fast and compact
+code!
+
+P.S. If a chip out there has fast int->FP conversion and slow bit
+scans(!?), there's another approach: convert the integer to FP,
+scale by, e.g., \\(1.0 / 16\\), add 1, and shift/mask to extract
+the bottom of the exponent and the top of the significand.  That's not
+slow, but unlikely to be faster than a bit scan and a couple
+shifts/masks.
