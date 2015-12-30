@@ -4,7 +4,7 @@ require "stringex"
 
 ## -- Rsync Deploy config -- ##
 # Be sure your public key is listed in your server's ~/.ssh/authorized_keys file
-ssh_user       = "pkhuong@deneb.cddr.org"
+ssh_user       = "pkhuong@capella.cddr.org"
 ssh_port       = "22"
 ## logs: /srv/www/vhosts/pvk.ca/logs/
 document_root  = "/srv/www/vhosts/pvk.ca/htdocs/"
