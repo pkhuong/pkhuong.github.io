@@ -7,7 +7,7 @@
             <input type="hidden" name="q" value="site:{{ site.url | shorthand_url }}" />
       {% endunless %}
       {% if site.adsense_cse_partner_ID %}
-        <form action="http://www.google.com" id="cse-search-box" target="_blank">
+        <form action="https://www.google.com" id="cse-search-box" target="_blank">
           <fieldset role="search">
             <input type="hidden" name="cx" value="{{ site.adsense_cse_partner_ID }}" />
             <input type="hidden" name="ie" value="UTF-8" />
