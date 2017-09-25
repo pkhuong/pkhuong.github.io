@@ -126,7 +126,7 @@ def pick_destinations(key, destinations, k=1):
 There are obvious micro-optimisations here (for example, computing
 the inverse of the score lets us precompute the reciprocal of each
 destination's weight), but that's all details.  The salient part to me
-is that space and time is still linear in the number of nodes,
+is that space and time are still linear in the number of nodes,
 regardless of the weights; consistent hashing instead needs space
 pseudolinear(!) in the weights, and is thus a bit slower than its
 \\(\mathcal{O}(\log n)\\) runtime would have us believe.
