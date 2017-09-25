@@ -97,7 +97,7 @@ regardless of what the lighter node hashes to, and that seems wrong.
 
 The [trick](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.414.9353&rep=rep1&type=pdf),
 as explained by [Jason Resch](http://www.snia.org/sites/default/files/SDC15_presentations/dist_sys/Jason_Resch_New_Consistent_Hashings_Rev.pdf)
-of Cleversafe, is to map our hashes from uniform in `[0, 1)` to
+at Cleversafe, is to map our hashes from uniform in `[0, 1)` to
 `[0, infty)` not as an exponential, but with `-weight / log(h)`.  If you
 simulate just using an exponential, you can quickly observe that it
 doesn't reweigh things correctly: while the mean is correctly scaled,
