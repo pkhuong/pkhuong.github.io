@@ -1,11 +1,14 @@
 ---
 layout: post
 title: "Relaxed revocable locks: mutual exclusion modulo preemption"
-date: 2017-06-05 00:25:31 -0400
+date: 2017-06-05 00:25:59 -0400
 publish: false
 comments: true
 categories: 
 ---
+
+_Update: there's a way to detect "running" status even across cores.
+ It's not pretty.  Search for `/proc/sched_debug`._
 
 The hard part about locking tends not to be the locking itself, but
 preemption.  For example, if you structure a memory allocator
@@ -22,10 +25,10 @@ number of CPUs);
 The first tweak isn't that bad; scaling the number of arenas, stats
 regions, etc. with the number of CPUs is better than scaling with the
 number of threads.  The second one really hurts performance: *each*
-allocation must acquire a lock with an atomic write.  Even if the
+allocation must acquire a lock with an interlocked write.  Even if the
 arena is (mostly) CPU-local, the atomic wrecks your pipeline.
 
-It would be nive to have locks that a thread can acquire once per
+It would be nice to have locks that a thread can acquire once per
 scheduling quantum, and benefit from ownership until the thread is
 scheduled out.  We could then have a few arenas per CPU (if only to
 handle migration), but amortise lock acquisition over the timeslice.
@@ -36,7 +39,7 @@ exact application in 2002
 and refer to older work for uniprocessors.  However, I think the best
 exposition of the idea is Harris and Fraser's
 [Revocable locks for non-blocking programming](http://dl.acm.org/citation.cfm?id=1065954),
-publisher in 2005 [(PDF)](https://pdfs.semanticscholar.org/21eb/486b4ef3b059d782ea1976b4ea5985e417df.pdf).  Harris and Fraser want revocable locks for
+published in 2005 [(PDF)](https://pdfs.semanticscholar.org/21eb/486b4ef3b059d782ea1976b4ea5985e417df.pdf).  Harris and Fraser want revocable locks for
 non-blocking multiwriter code; our problem is easier, but only marginally so.
 Although the history of revocable locks is pretty Solaris-centric, Linux
 is catching up.   Google, Facebook, and EfficiOS (LTTng) have been pushing for
@@ -76,25 +79,27 @@ Here's the relaxed revocable locks interface I propose:
    Threads acquire locks with normal compare-and-swap, but may bulk
    revoke every lock they own by advancing their generation counter.
 
-3. Threads may execute conditional stores.  Lock acquisition returns
-   an ownership descriptor (pair of thread state struct and generation
-   counter), and `rlock_store_64(descriptor, lock, dst, value)` stores
-   `value` in `dst` if the descriptor still owns the lock and the
-   ownership has not been cancelled.  
+3. Threads may execute any number of conditional stores per lock
+   acquisition.  Lock acquisition returns an ownership descriptor
+   (pair of thread state struct and generation counter), and
+   `rlock_store_64(descriptor, lock, dst, value)` stores `value` in
+   `dst` if the descriptor still owns the lock and the ownership has
+   not been cancelled.
 
-4. Threads may attempt to cancel another thread's ownership of a lock.
-   After `rlock_owner_cancel(descriptor, lock)` returns successfully,
-   the victim will not execute a conditional store under the notion
-   that it still owns `lock` with `descriptor`.
+4. Threads do not have to release lock ownership to let others make
+   progress: any thread may attempt to cancel another thread's
+   ownership of a lock.  After `rlock_owner_cancel(descriptor, lock)`
+   returns successfully, the victim will not execute a conditional
+   store under the notion that it still owns `lock` with `descriptor`.
 
 The only difference from Rseq is that `rlock_owner_cancel` may fail.
 In practice, it will only fail if a thread on CPU A attempts to cancel
-ownership for a thread on another CPU B.  That could happen after
-migration, but also when an administrative task iterates through every
-(pseudo-)per-CPU struct without changing its CPU mask.  Being able to
-iterate through all available pseudo-per-CPU data without migrating to
-the CPU is big win for slow paths; another advantage of not assuming
-strict per-CPU affinity.
+ownership for a thread that's currently running on another CPU B.
+That could happen after migration, but also when an administrative
+task iterates through every (pseudo-)per-CPU struct without changing
+its CPU mask.  Being able to iterate through all available
+pseudo-per-CPU data without migrating to the CPU is big win for slow
+paths; another advantage of not assuming strict per-CPU affinity.
 
 Rather than failing on migration, Rseq issues an asymmetric fence to
 ensure both its writes and the victim's writes are visible.  At best,
@@ -299,20 +304,15 @@ rlock_owner_cancel(union rlock_owner_seq owner,
         }
 
         if (victim_running(victim)) {
-                /* The victim isn't obviously scheduled out. */
+                /* The victim isn't obviously scheduled out;
 
-                /* See if we just got lucky. */
+                /* See if we must ensure visibility of our cancel. */
                 snapshot.bits = ck_pr_load_64(&victim->seq.bits);
                 if (snapshot.bits == owner.bits) {
-                        /* Nope, no change.  Send a signal to
-                         * guarantee the victim eventually observes
-                         * the cancellation (and recomputes its
-                         * current CPU).
-                         */
                         ensure_signal_sequence(victim, sequence);
                 }
 
-                return snapshot.bits != owner.bits;
+                return false;
         }
 
         if (ck_pr_load_ptr(&victim->critical_section) != evict) {
@@ -343,9 +343,12 @@ rlock_owner_cancel(union rlock_owner_seq owner,
                 return true;
         }
 
-        snapshot.bits = ck_pr_load_64(&victim->seq.bits);
-        return (snapshot.bits != owner.bits ||
-            ck_pr_load_ptr(&victim->critical_section) != evict);
+        /*
+         * We know the vitim was scheduled out before we signaled for
+         * cancellation.  We can see if the victim has released our
+         * critical section at least once since then.
+         */
+        return (ck_pr_load_ptr(&victim->critical_section) != evict);
 }
 {% endcodeblock %}
 
@@ -383,7 +386,7 @@ order the CAS, step 1, and our read of the critical section flag.
 That's not information that Linux exposes directly.  However, we can
 borrow a trick from `Rseq` and read `/proc/self/task/[tid]/stat`.  The
 contents of that file include whether the task is \(R\)unnable (or
-(S)leeping, waiting on (D)isk, etc.), and the CPU on which the task
+(S)leeping, waiting for (D)isk, etc.), and the CPU on which the task
 last executed.
 
 If the task isn't runnable, it definitely hasn't been running
@@ -392,9 +395,15 @@ the CPU the current thread is itself running on (and the current
 thread wasn't migrated in the middle of reading the stat file), it's
 not running now.
 
-If the task is runnable on another CPU, there's nothing we can do.
-Other proposals would fire an IPI; we instead ask the caller to
-allocate a few more pseudo-per-CPU structs.
+If the task is runnable on another CPU, we can try to look at
+`/proc/sched_debug`: each CPU has a `.curr->pid` line that tells us
+the PID of the task that's currently running (0 for none).  That file
+has a lot of extra information so reading it is *really* slow, but we
+only need to do that after migrations.
+
+Finally, the victim might really be running.  Other proposals would
+fire an IPI; we instead ask the caller to allocate a few more
+pseudo-per-CPU structs.
 
 Assuming we did get a barrier out of the scheduler, we hopefully
 observe that the victim's critical section flag is clear.  If that
@@ -414,7 +423,7 @@ section flag is set.  We must assume that it was scheduled out in
 the middle of a critical section.  We'll send a (POSIX) signal to the
 victim: the handler will skip over the critical section if the victim
 is still in one.  Once that signal is sent, we know that the first
-thing Linux will do is execute the handler when the victim resume
+thing Linux will do is execute the handler when the victim resumes
 execution.  If the victim is still not running after `tgkill`
 returned, we're good to go: if the victim is still in the critical
 section, the handler will fire when it resumes execution.
@@ -568,12 +577,12 @@ billion times takes 6.9 cycles per increment, which makes sense given
 that I use inline assembly loads and stores to prevent any compiler
 cleverness.
 
-The same loop with an atomic store (`xchg`) takes 36 cycles per
+The same loop with an interlocked store (`xchg`) takes 36 cycles per
 increment.
 
 Interestingly, an `xchg`-based spinlock around normal increments only
 takes 31.7 cycles per increment (0.44 IPC).  If we wish to back our
-spinlocks with futexes, we must unlock with an atomic write; releasing
+spinlocks with futexes, we must unlock with an interlocked write; releasing
 the lock with a compare-and-swap brings us to 53.6 cycles per
 increment (0.30 IPC)!  Atomics really mess with pipelining: unless
 they're separated by dozens or even hundreds of instructions, their
@@ -582,8 +591,9 @@ in-order, barely pipelined, execution.
 
 FWIW, 50ish cycles per transaction is close to what I see in
 microbenchmarks for Intel's RTM/HLE.  So, while the overhead of TSX is
-non-negligible (for very short critical sections) if you don't expect
-preemption, it should easily pay off for adaptive locks (or when you expect preemption, as shown by Dice and Harris in
+non-negligible for very short critical sections, it seems more than
+reasonable for adaptive locks (and TSX definitely helps when
+preemption happens, as shown by Dice and Harris in
 [Lock Holder Preemption Avoidance via Transactional Lock Elision](https://timharris.uk/papers/2016-lhp.pdf)).
 
 Finally, the figure that really matters: when incrementing with
@@ -596,36 +606,36 @@ In tabular form:
 
     | Method               | Cycle / increment | IPC  |
     |----------------------|-------------------|------|
-    | Vanilla              |  6.961            | 1.15 |
-    | xchg                 | 36.054            | 0.22 |
-    | FAS spinlock         | 31.710            | 0.44 |
-    | FAS-CAS lock         | 53.656            | 0.30 |
-    | Rlock, 1 thd         | 13.044            | 2.99 |
-    | Rlock, 4 thd / 1 CPU | 13.099            | 2.98 |
-    | Rlock, 256 / 1       | 13.952            | 2.96 |
-    | Rlock, 2 / 2         | 13.047            | 2.99 |
+    | Vanilla              |             6.961 | 1.15 |
+    | xchg                 |            36.054 | 0.22 |
+    | FAS spinlock         |            31.710 | 0.44 |
+    | FAS-CAS lock         |            53.656 | 0.30 |
+    | Rlock, 1 thd         |            13.044 | 2.99 |
+    | Rlock, 4 thd / 1 CPU |            13.099 | 2.98 |
+    | Rlock, 256 / 1       |            13.952 | 2.96 |
+    | Rlock, 2 / 2         |            13.047 | 2.99 |
 
 Six more cycles per write versus thread-private storage really isn't
-that bad… especially compared to 25-50 more cycles (in addition to
-indirect slowdowns from the barrier semantics) for atomic or locked
-operations.
+that bad (accessing TLS in a shared library might add as much
+overhead)… especially compared to 25-50 cycles (in addition to
+indirect slowdowns from the barrier semantics) with locked
+instructions.
 
 I also have a statistics-gathering mode that lets me vary the fraction
-of cycles spent in a critical section.  On my server, the frequency of
+of cycles spent in critical sections.  On my server, the frequency of
 context switches between CPU-intensive threads scheduled on the same
 CPU increases in steps until seven or eight threads; at that point,
-the frequency tops out at one switch per jiffy (250 Hz).  Scheduling
-aside, evictions follow the intuitive pattern (same logic used for
-sampling profiles).  The number of evictions is almost equal to the
-number of context switches, which is proportional to the runtime.
-However, the number of hard evictions (with the victim in a critical
-section) is proportional to the number of critical section executed:
-roughly one in five million critical section is preempted.  That's
-even less than the one in two million we'd expect from the number of
-cycles per critical section (around six cycles): that kind of makes
-sense with out of order execution, given that the critical section
-should easily flow through the pipeline and skip past timer
-interrupts.
+the frequency tops out at one switch per jiffy (250 Hz).  Apart from
+this scheduling detail, evictions act as expected (same
+logic as for sampled profiles).  The number of evictions is almost
+equal to the number of context switches, which is proportional to the
+runtime.  However, the number of hard evictions (with the victim in a
+critical section) is always proportional to the number of critical
+section executed: roughly one in five million critical section is
+preempted.  That's even less than the one in two million we'd expect
+from the ~six cycle per critical section: that kind of makes sense
+with out of order execution, given that the critical section should
+easily flow through the pipeline and slip past timer interrupts.
 
 Trade-offs
 ----------
@@ -641,32 +651,32 @@ only (or even mostly) incurred by the thread that triggers the IPIs:
 each CPU must stop what it's currently doing, flush the pipeline,
 switch to the kernel to handle the interrupt, and resume execution.  A
 scheme that relies on IPIs to handle events like thread migrations
-(rare, but happens at a non-negligible base rate) will scale badly to really
-large CPU counts, and, more importantly, may make it hard to
+(rare, but happens at a non-negligible base rate) will scale badly to
+really large CPU counts, and, more importantly, may make it hard to
 identify when the IPIs hurt overall system performance.
 
 The other important design decision is that rlocks uses signals
 instead of cross-modifying code.  I'm not opposed to cross-modifying
 code, but I cringe at the idea of leaving writable and executable
 pages lying around just for performance.  Again, we could `mprotect`
-around cross-modification, but `mprotect` triggers IPIs, and that
-we're trying to avoid.  Also, if we're going to `mprotect` in the
-common case, we might as well just `mmap` in different machine code;
-that's likely a bit faster than two `mprotect` and much safer (I would
-use the `mmap` approach for revocable multi-CPU locks à la Harris and
-Fraser).
+around cross-modification, but `mprotect` triggers IPIs, and that's
+exactly what we're trying to avoid.  Also, if we're going to
+`mprotect` in the common case, we might as well just `mmap` in
+different machine code; that's likely a bit faster than two `mprotect`
+and definitely safer (I would use this `mmap` approach for revocable
+multi-CPU locks à la Harris and Fraser).
 
 The downside of using signals is that they're more invasive than
 cross-modifying code.  If user code expects any (async) signal, its
 handlers must either mask the rlock signal away and not use rlocks, or
-call the rlock signal handler.  That's not transparent, but not
-exacting either.
+call the rlock signal handler… not transparent, but not exacting
+either.
 
-Rlocks really aren't that much code (560 LOC), and they're fairly
+Rlocks really aren't that much code (560 LOC), and that code is fairly
 reasonable (no mprotect or self-modification trick, just signals).
 After more testing and validation, I would consider merging them in
 [Concurrency Kit](http://concurrencykit.org/) for production use.
 
 Next step: either `mmap`-based strict revocable locks for non-blocking
-concurrent code, or a full implementation of pseudo-per-CPU based on
-relaxed rlocks.
+concurrent code, or a full implementation of pseudo-per-CPU data based
+on relaxed rlocks.
