@@ -1,10 +1,12 @@
 ---
 layout: post
 title: 'Rendezvous hashing: my baseline "consistent" distribution method'
-date: 2017-09-24 22:41:00 -0400
+date: 2017-09-24 22:41:05 -0400
 comments: true
 categories: 
 ---
+
+<small>_2017-10-15: Tweaked the hash merge function to actually deliver the claims (one-universality isn't enough)._</small>
 
 Whenever I mention a data or work distribution problem where I
 ideally want everything related to a given key to hit the same
@@ -48,7 +50,16 @@ Destination = namedtuple('Destination', ['host', 'hash'])
 
 
 def merge_hashes(x, y):
-    return ((x * 3) ^ y) % 2**64
+    """murmurhash3 mix.  Alternatively, ((x | 1) * (y | 1)) % 2**64 should
+    be fine.
+    """
+    acc = x ^ y
+    acc ^= acc >> 33
+    acc = (acc * 0xff51afd7ed558ccd) % 2**64
+    acc ^= acc >> 33
+    acc = (acc * 0xc4ceb9fe1a85ec53) % 2**64
+    acc ^= acc >> 33
+    return acc
 
 
 def pick_destinations(key, destinations, k=1):
