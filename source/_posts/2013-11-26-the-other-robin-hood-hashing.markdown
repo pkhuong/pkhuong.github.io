@@ -46,7 +46,7 @@ bank conflicts and is really quick.
 
 When I looked into Robin Hood hashing, I was interested in a
 degenerate variant in which probing sequences are linear.  This
-variant also seems the one others usually mean when they say "Robin
+variant also seems to be the one others usually mean when they say "Robin
 Hood hashing," nowadays.  The algorithms for inserts and lookups in
 Celis's dissertation still work: probe locations and distances just
 happen to be computed trivially.  However, the analysis doesn't hold
