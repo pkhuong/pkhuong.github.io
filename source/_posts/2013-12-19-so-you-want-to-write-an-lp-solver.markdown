@@ -45,8 +45,8 @@ work per iteration (which explains the edge of dual simplex: there's
 no primal analogue to <s>devex</s> normalised dual steepest edge
 pricing).  There's also presolving and crash basis construction, which
 can simplify a problem so much that it's solved without any simplex
-pivot.  Despite all this sophistication, only [recent theoretical
-advances](http://www.cs.yale.edu/homes/spielman/Research/SimplexStoc.pdf)
+pivot.  Despite all this sophistication, only 
+[recent theoretical advances](http://www.cs.yale.edu/homes/spielman/Research/SimplexStoc.pdf)
 protect against instances going exponential.
 
 <small>Sidenote: Vasek Chvatal's
@@ -95,7 +95,7 @@ e.g. with LAPACK's [xGGLSE](http://www.netlib.org/lapack/lug/node28.html).
 
 The problem with this direction is that it doesn't take into account
 the box constraints.  Once some component of _x_ is at its bound, we
-can't move past that wall, so we should try to avoid getting to close
+can't move past that wall, so we should try to avoid getting too close
 to any bound.
 
 Interior point methods add a logarithmic penalty on the distance
@@ -105,7 +105,8 @@ bound.  As long as _x_ isn't directly on the border of the box, we'll
 be able to make a non-trivial step forward without getting too close
 to that border.
 
-There's a similar interpretation for primal affine scaling methods,
+There's a similar interpretation for simpler primal affine scaling
+methods we'll implement here,
 but I prefer the original explanation.  These methods rescale the
 space in which we solve for _d_ so that _x_ is always far from its
 bounds; rescaling the direction back in the original space means that
@@ -116,7 +117,8 @@ invertible.
 
 <small>It's a primal method because we only manipulate primal
 variables; dual methods instead work with the dual variables
-associated with the linear constraints.</small>
+associated with the linear constraints. Primal-dual methods
+work on both sets of variables at once.</small>
 
 This sketch might be useful.  _x_ is close to the left-hand side
 bound, and, after projection in the nullspace, _d_
@@ -261,7 +263,7 @@ I will test the code on a couple LPs from
 [CUTEr](http://www.numerical.rl.ac.uk/cute/netlib.html) is OK).
 
 AFIRO is a tiny LP (32 variables by 28 constraints, 88 nonzeros).
-Good news: the program works on this trivial instance and finds the
+Good news\: the program works on this trivial instance and finds the
 optimum (the relative difference with the reference value is 7e-6).
 The first four "repair" iterations find a feasible solutions, and 11
 more iterations eventually get to the optimum.
@@ -311,7 +313,7 @@ iterations, 0.37 seconds total.
 AGG is more interesting, at 163x489 and 2541 nz; that one took 156
 iterations and 80 seconds (130% CPU, thanks to Apple's parallel BLAS).
 Finally, FIT1D is challenging, at 1026x25 and 14430 nz; that one took
-100 seconds and the final objective value was off .5%.
+100 seconds and the final objective value was off by .5%.
 
 All these instances are solved in a fraction of a second by
 state-of-the-art solvers.  The next steps will get us closer to a
@@ -324,10 +326,10 @@ The initial implementation resorted to DGGLSE for all least squares
 solves.  That function is much too general.
 
 I
-[changed the repair least squares to a GELSY](https://github.com/pkhuong/cholesky-is-magic/commit/ecb6b58362f5658eaa4184292022f4a6691384dd)
+[changed the repair phase's least squares to a GELSY](https://github.com/pkhuong/cholesky-is-magic/commit/ecb6b58362f5658eaa4184292022f4a6691384dd)
 (GELSD isn't nicely wrapped in matlisp yet).
 
-We can do the same for the optimisation constrained least squares.
+We can do the same for the optimisation phase's constrained least squares.
 Some doodling around with Lagrange multipliers shows that the solution
 of
 $$\min\sb{x} \|x-c\|\sb{2}\sp{2}$$
@@ -338,12 +340,12 @@ $$x = A\sp{t}(AA\sp{t})\sp{-1}Ac - c.$$
 
 This is a series of matrix-vector multiplications and a single linear
 solve,
-[which I first perform with GELSY](https://github.com/pkhuong/cholesky-is-magic/commit/d17d65e96686bc6334b5c524d54b1359ec1e1513):
-when we're nearly optimal, the system is really badly conditioned and
+[which I perform with GELSY for now](https://github.com/pkhuong/cholesky-is-magic/commit/d17d65e96686bc6334b5c524d54b1359ec1e1513): 
+we need the numerical stability because, when we're close to optimality, the system is really badly conditioned and
 regular linear solves just crash.
 
 Both linear algebra microoptimisations are in
-[this commit](https://github.com/pkhuong/cholesky-is-magic/commit/df036c9e37420df532739a66bc53eee82b209f26).  
+[this commit](https://github.com/pkhuong/cholesky-is-magic/commit/df036c9e37420df532739a66bc53eee82b209f26).
 
 ADLITTLE becomes about five times faster, and FIT1D now runs in 2.9
 seconds (instead of 100), but AGG eventually fails to make progress:
@@ -453,7 +455,7 @@ stored in the factor struct;
 This is really stupid: I'm not even dropping zero entries in the dense
 matrix.  Yet,
 [it suffices](https://github.com/pkhuong/cholesky-is-magic/commit/0095354735a35f11ccb8aaa6f41b8e6253ab87bd)
-to speed up AGG to 14 seconds!
+to speed up AGG from 26 to 14 seconds!
 
 It's clear that we need to preserve the constraint matrix _A_ in a
 sparse format.  CHOLMOD has a function to translate from the trivial
