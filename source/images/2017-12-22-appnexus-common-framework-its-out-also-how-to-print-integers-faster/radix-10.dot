@@ -1,0 +1,18 @@
+strict digraph {
+	"12345678 divmod 10" ->
+	"1234567 divmod 10" ->
+	"123456 divmod 10" ->
+	"12345 divmod 10" ->
+	"1234 divmod 10" ->
+	"123 divmod 10" ->
+	"12 divmod 10" ->
+	"1";
+
+	"12345678 divmod 10" -> "8";
+	"1234567 divmod 10" -> "7";
+	"123456 divmod 10" -> "6";
+	"12345 divmod 10" -> "5";
+	"1234 divmod 10" -> "4";
+	"123 divmod 10" -> "3";
+	"12 divmod 10" -> "2";
+}
