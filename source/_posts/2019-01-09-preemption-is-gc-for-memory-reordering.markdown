@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Preemption is GC for memory reordering"
-date: 2019-01-09 16:29:35 -0500
+date: 2019-01-09 16:29:37 -0500
 comments: true
 categories: 
 ---
@@ -325,7 +325,7 @@ return from interrupt handlers, [is a full barrier](https://www.felixcloutier.co
 We also know that interrupts happen at frequent and regular intervals,
 if only for the preemption timer (every 4-10ms on stock Linux/x86oid).
 
-[^model-ooe]: I actually prefer another, more intuitive, explanation that isn't backed by official documentation.The store buffer in x86-TSO doesn't actually exist in silicon: it represents the instructions waiting to be retired in the out-of-order execution engine. Precise interrupts seem to imply that even entering the interrupt handler flushes the OOE engine's state, and thus acts as full barrier that flushes the conceptual store buffer.
+[^model-ooe]: I actually prefer another, more intuitive, explanation that isn't backed by official documentation.The store buffer in x86-TSO doesn't actually exist in silicon: it represents the instructions waiting to be retired in the out-of-order execution engine. Precise interrupts seem to imply that even entering the interrupt handler flushes the OOE engine's state, and thus acts as a full barrier that flushes the conceptual store buffer.
 
 Regardless of the bound on store visibility, a waiter can flip the
 sleepers-are-present flag, spin on the control word for a while, and
@@ -652,9 +652,10 @@ equal to the watermark, we should wake up userspace by enqueueing in
 event in perf.  The enqueueing is conditional because perf has more
 overhead than a thread-local array, and because we want to minimise
 spurious wake-ups.  A high signal-to-noise ratio lets userspace set up
-its perf queue to wake up on every event and minimise update latency.
+the read end of the perf queue to wake up on every event and thus
+minimise update latency.
 
-[^ebpf]: I used raw eBPF instead of the C frontend because that frontend relies on a ridiculous amount of runtime code that parses an ELF file *when loading the eBPF snippet* to know what eBPF maps to setup and where to backpatch their `fd` number. I also find there's little advantage to the C frontend for the scale of eBPF programs (at most 4096 instructions, usually much fewer). I did use `clang` to generate a starting point, but it's not that hard to tighten 30 instructions in ways that a compiler  can't without knowing what part of the program's semantics is essential.
+[^ebpf]: I used raw eBPF instead of the C frontend because that frontend relies on a ridiculous amount of runtime code that parses an ELF file *when loading the eBPF snippet* to know what eBPF maps to setup and where to backpatch their `fd` number. I also find there's little advantage to the C frontend for the scale of eBPF programs (at most 4096 instructions, usually much fewer). I did use `clang` to generate a starting point, but it's not that hard to tighten 30 instructions in ways that a compiler can't without knowing what part of the program's semantics is essential. The `bpf` syscall can also [populate a string buffer with additional information](https://github.com/pkhuong/barrierd/blob/00dfded07b1ee86ab171757f2270e71849474d73/setup.c#L294) when loading a program. That's helpful to know that something was assembled wrong, or to understand why the verifier is rejecting your program.
 
 We now need a [single global daemon](https://github.com/pkhuong/barrierd)
 to attach the eBPF program to an arbitrary set of software tracepoints
@@ -787,7 +788,7 @@ time).  The rest is shown below.  `barrierd` is consistently much
 faster than `membarrier`, with a geometric mean speedup of 23.8x.  In
 fact, not only can we expect `barrierd` to finish before an
 unexpedited `membarrier` \\(99.99\%\\) of the time
-(\\(p<10\sp{-12}\\) according to a binomial test), but we can even expect `barrierd` to be 10x as
+(\\(p<10\sp{-12}\\) according to a binomial test), but we can even expect `barrierd` to be 10 times as
 fast \\(98.3-98.5\%\\) of the time (\\(p<10\sp{-12}\\)).  The gap is
 so wide that even the opportunistic virtual-time approach is faster
 than `membarrier` (geometric mean of 5.6x), but this time with a mere
