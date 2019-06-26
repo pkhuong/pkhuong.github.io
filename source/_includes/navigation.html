@@ -11,8 +11,8 @@
           <fieldset role="search">
             <input type="hidden" name="cx" value="{{ site.adsense_cse_partner_ID }}" />
             <input type="hidden" name="ie" value="UTF-8" />
-      {% endif %}
-            <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+            {% endif %}
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
           </fieldset>
         </form>
   {% endif %}
