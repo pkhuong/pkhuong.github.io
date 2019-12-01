@@ -1,10 +1,12 @@
 ---
 layout: post
 title: "A multiset of observations with constant-time sample mean and variance"
-date: 2019-11-30 23:51:38 -0500
+date: 2019-11-30 23:51:41 -0500
 comments: true
 categories: 
 ---
+
+<small>_Fixed notation issues in the "Faster multiset updates" section. Thank you Joonas._</small>
 
 Let's say you have a [multiset (bag)](https://en.wikipedia.org/wiki/Multiset) of "reals" (floats or rationals),
 where each value is a sampled observations.
@@ -35,12 +37,12 @@ in extreme cases, the difference might be negative
 More commonly, we'll lose precision
 when the sampled values are clustered around a large mean.
 For example, the sample standard deviation of `1e8` and `1e8 - 1`
-is `0.5`, same as for `0` and `1`.
+is `1`, same as for `0` and `1`.
 However, the expression above would evaluate that to `0.0`, even in double precision:
 while `1e8` is comfortably within range for double floats,
 its square `1e16` is outside the range where all integers are represented exactly.
 
-Knuth refers to a better behaved recurrence by Welford, where
+Knuth refers to a [better behaved recurrence by Welford](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.302.7503&rep=rep1&type=pdf), where
 a running sample mean is subtracted from each new observation
 before squaring.
 [John Cook has a `C++` implementation](https://www.johndcook.com/blog/standard_deviation/)
@@ -52,7 +54,7 @@ class StreamingVariance:
     def __init__(self):
         self.n = 0
         self.mean = 0
-        self.var_sum = 0  # variance of the sum (sum x_i^2)
+        self.var_sum = 0  # centered 2nd moment (~variance of the sum of observations)
 
     def observe(self, v):
         self.n += 1
@@ -83,7 +85,7 @@ we can re-evaluate `(v - old_mean) * (v - self.mean)` and
 subtract it from `self.var_sum`.
 
 Let \\(\hat{x}\sp{\prime}\\) be the sample mean after `observe(v)`.
-We can recover the initial sample mean \\(\hat{x}\\) from \\(v\\):
+We can derive the previous sample mean \\(\hat{x}\\) from \\(v\\):
 
 \\[(n - 1)\hat{x} = n\hat{x}\sp{\prime} - v \Leftrightarrow \hat{x} = \hat{x}\sp{\prime} + \frac{\hat{x}\sp{\prime} - v}{n-1}.\\]
 
@@ -364,7 +366,7 @@ And now things fail in new and excitingly numerical ways.
 
 This counter-example fails with the online variance returning `0.0` instead of `1e-8`.
 That's not unexpected:
-removing a (the square of) large value from a running sum
+removing (the square of) a large value from a running sum
 spells catastrophic cancellation.
 It's also not *that* bad for my use case,
 where I don't expect to observe very large values.
@@ -408,14 +410,15 @@ From stack to full multiset
 ---------------------------
 
 We have tested code to undo updates in Welford's classic streaming variance algorithm.
-However, inverting an update only works for LIFO edits,
+Unfortunately, inverting `push`es away only works for LIFO edits,
 and we're looking for arbitrary inserts and removals (and updates) to a multiset
 of observations.
 
-However, both the mean \\(\hat{x} = \sum\sb{x\in X} x/n\\) and the sum variance \\(\sum\sb{x\in X}(x - \hat{x})\sp{2}\\)
+However, both the mean \\(\hat{x} = \sum\sb{x\in X} x/n\\) and 
+the centered second moment \\(\sum\sb{x\in X}(x - \hat{x})\sp{2}\\)
 are order-independent:
 they're just sums over all observations.
-Disregarding round-off, we'll find the same mean and sum variance regardless
+Disregarding round-off, we'll find the same mean and second moment regardless
 of the order in which the observations were pushed in.
 Thus, whenever we wish to remove an observation from the multiset,
 we can assume it was the last one added to the estimates,
@@ -517,11 +520,13 @@ rescaling everything seems like a lot of numerical trouble.
 
 We should be able to do better.
 
-First, it's easy to maintain the mean after this update: \\(\hat{x}\sp{\prime} = \hat{x} + (\textrm{new} - \textrm{old})/n.\\)
+We're replacing the multiset of sampled observations \\(X\\) with
+\\(X\sp{\prime} = X \setminus \\{\textrm{old}\\} \cup \\{\textrm{new}\\}.\\)
+It's easy to maintain the mean after this update: \\(\hat{x}\sp{\prime} = \hat{x} + (\textrm{new} - \textrm{old})/n.\\)
 
 The update to `self.var_sum`, the sum of squared differences from the mean, is trickier.
-We start with \\(v = \sum\sp{x\in X} (x - \hat{x})\sp{2},\\)
-and we wish to find \\(v\sp{\prime} = \sum\sp{x\in X} (x - \hat{x}\sp{\prime})\sp{2}.\\)
+We start with \\(v = \sum\sb{x\in X} (x - \hat{x})\sp{2},\\)
+and we wish to find \\(v\sp{\prime} = \sum\sb{x\sp{\prime}\in X\sp{\prime}} (x\sp{\prime} - \hat{x}\sp{\prime})\sp{2}.\\)
 
 Let \\(\delta = \textrm{new} - \textrm{old}\\) and \\(\delta\sb{\hat{x}} = \delta/n.\\)
 We have
@@ -529,7 +534,7 @@ We have
 and
 \\[[(x - \hat{x}) - \delta\sb{\hat{x}}]\sp{2} = (x - \hat{x})\sp{2} - 2\delta\sb{\hat{x}} (x - \hat{x}) + \delta\sb{\hat{x}}\sp{2}.\\]
 
-We can refactor the sum, and find 
+We can reassociate the sum, and find 
 
 \\[\sum\sb{x\in X} (x - \hat{x}\sp{\prime})\sp{2} = \sum\sb{x\in X} (x - \hat{x})\sp{2} - 2\delta\sb{\hat{x}} \left(\sum\sb{x \in X} x - \hat{x}\right) + n \delta\sb{\hat{x}}\sp{2}\\]
 
@@ -537,10 +542,10 @@ Once we notice that \\(\hat{x} = \sum\sb{x\in X} x/n,\\)
 it's clear that the middle term sums to zero, and we find
 the very reasonable
 
-\\[v\sp{\prime} = \sum\sb{x\in X} (x - \hat{x})\sp{2} + n \delta\sb{\hat{x}}\sp{2} = v + \delta \delta\sb{\hat{x}}.\\]
+\\[v\sb{\hat{x}\sp{\prime}} = \sum\sb{x\in X} (x - \hat{x})\sp{2} + n \delta\sb{\hat{x}}\sp{2} = v + \delta \delta\sb{\hat{x}}.\\]
 
-This new accumulator \\(v\sp{\prime}\\) corresponds to the sum of the
-squared differences between the old observations and the new mean.
+This new accumulator \\(v\sb{\hat{x}\sp{\prime}}\\) corresponds to the sum of the
+squared differences between the old observations \\(X\\) and the new mean \\(\hat{x}\sp{\prime}\\).
 We still have to update one observation from `old` to `new`.
 The remaining adjustment to \\(v\\) (`self.var_sum`) corresponds to
 going from \\((\textrm{old} - \hat{x}\sp{\prime})\sp{2}\\)
@@ -550,12 +555,12 @@ where \\(\textrm{new} = \textrm{old} + \delta.\\)
 After a bit of algebra, we get
 \\[(\textrm{new} - \hat{x}\sp{\prime})\sp{2} = [(\textrm{old} - \hat{x}\sp{\prime}) + \delta]\sp{2} = (\textrm{old} - \hat{x}\sp{\prime})\sp{2} + \delta (\textrm{old} - \hat{x} + \textrm{new} - \hat{x}\sp{\prime}).\\]
 
-The adjusted \\(v\sp{\prime}\\) already includes
+The adjusted \\(v\sb{\hat{x}\sp{\prime}}\\) already includes
 \\((\textrm{old} - \hat{x}\sp{\prime})\sp{2}\\)
 in its sum, so we only have to add the last term
 to obtain the final updated `self.var_sum`
 
-\\[v\sp{\prime\prime} = v\sp{\prime} + \delta (\textrm{old} - \hat{x} + \textrm{new} - \hat{x}\sp{\prime}) = v + \delta [2 (\textrm{old} - \hat{x}) + \textrm{new} - \hat{x}\sp{\prime}].\\]
+\\[v\sp{\prime} = v\sb{\hat{x}\sp{\prime}} + \delta (\textrm{old} - \hat{x} + \textrm{new} - \hat{x}\sp{\prime}) = v + \delta [2 (\textrm{old} - \hat{x}) + \textrm{new} - \hat{x}\sp{\prime}].\\]
 
 That's our final implementation for `VarianceBag.update`,
 for which Hypothesis also fails to find failures.
@@ -614,7 +619,7 @@ of values with [Z3](https://github.com/Z3Prover/z3/wiki) in IPython.
     In [18]: s.check()
     Out[18]: unsat  # No counter example of size 3 for the updated variance
 
-Given this script, it's a small matter of programming to generalize
+Given this script, it's a small matter of programming to generalise
 from 3 values (`x`, `y`, and `z`) to any fixed number of values, and
 generate all small cases up to, e.g., 10 values.
 
@@ -690,13 +695,15 @@ with automated tests,
 and with some exhaustive checking of small inputs (to which I claim most bugs can be reduced).
 
 I'm now pretty sure the code works, but there's another more obviously correct way to solve that update problem.
-This [2008 report by Philippe Pébay](https://prod-ng.sandia.gov/techlib-noauth/access-control.cgi/2008/086212.pdf)
+This [2008 report by Philippe Pébay](https://prod-ng.sandia.gov/techlib-noauth/access-control.cgi/2008/086212.pdf)[^pebay2016]
 presents formulas to compute the mean, variance, and arbitrary moments
 in one pass,
 and shows how to combine accumulators,
 a useful operation in parallel computing.
 
-We could use these formulas to augment an arbitrary \\(k\\)-ary tree
+[^pebay2016]: There's also a [2016 journal article by Pébay and others](https://www.osti.gov/biblio/1426900) with numerical experiments, but I failed to implement their simpler-looking scalar update…
+
+We could use these formulas to [augment an arbitrary \\(k\\)-ary tree](http://blog.sigfpe.com/2010/11/statistical-fingertrees.html)
 and re-combine the merged accumulator as we go back up the (search)
 tree from the modified leaf to the root.
 The update would be much more stable (we only add and merge observations),
@@ -705,12 +712,12 @@ However, given the same time budget, and a *logarithmic* space overhead,
 we could also implement the constant-time update with arbitrary precision
 software floats, and probably guarantee even better precision.
 
-The constant-time update I just described demanded more effort to convince myself
+The constant-time update I described in this post demanded more effort to convince myself
 of its correctness, but I think it's always a better option than
 an augmented tree for serial code, especially if initial values
 are available to populate the accumulators with batch-computed
 mean and variance.
 I'm pretty sure the code works, and [it's up in this gist](https://gist.github.com/pkhuong/549106fc8194c0d1fce85b00c9e192d5).
-I'll be re-implementing all this in C++
-because that's the language used by the project that lead me to this problem,
-but anyone is free to steal that gist.
+I'll be re-implementing it in C++
+because that's the language used by the project that lead me to this problem;
+feel free to steal that gist.
