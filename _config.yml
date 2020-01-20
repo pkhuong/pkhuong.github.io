@@ -30,15 +30,21 @@ root: /
 permalink: /Blog/:year/:month/:day/:title/
 source: source
 destination: public
-plugins: plugins
+plugins:
+  - jekyll-paginate
+plugins_dir: plugins
 code_dir: downloads/code
 category_dir: Blog/categories
-markdown: rdiscount
-rdiscount:
-  extensions:
-    - autolink
-    - footnotes
-    - smart
+# markdown: rdiscount
+# rdiscount:
+#   extensions:
+#     - autolink
+#     - footnotes
+#     - smart
+markdown: kramdown
+kramdown:
+   math_engine: sskatex
+
 highlighter: pygments # default python pygments have been replaced by pygments.rb
 
 paginate: 1          # Posts per page on the blog index
