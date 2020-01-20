@@ -2,7 +2,7 @@
 require './plugins/backtick_code_block'
 require 'octopress-hooks'
 require 'jekyll-sitemap'
-require 'octopress-date-format'
+# require 'octopress-date-format'
 require './plugins/raw'
 require 'rubypants'
 

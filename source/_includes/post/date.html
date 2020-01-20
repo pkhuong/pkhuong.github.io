@@ -1,5 +1,16 @@
-{% if page.date %}{% capture time %}{{ page.date_time_html }}{% endcapture %}{% endif %}
-{% if post.date %}{% capture time %}{{ post.date_time_html }}{% endcapture %}{% endif %}
+{% if page.date %}{% assign time = page.date %}{% endif %}
+{% if post.date %}{% assign time = post.date %}{% endif %}
+
+{% assign d = time | date: "%-d" %}
+{% assign m = time | date: "%B" %}
+
+{% case m %}
+  {% when 'April' or 'May' or 'June' or 'July' %}{{ m }}
+  {% when 'September' %}Sept
+  {% else %}{{ time | date: "%b" }}
+  {% endcase %}
+{% case d %}{% when '1' or '21' or '31' %}{{ d }}st{% when '2' or '22' %}{{ d }}nd{% when '3' or '23' %}{{ d }}rd{% else %}{{ d }}th{% endcase %}, 
+{{ time | date: "%Y" }}
 
 {% if page.updated %}{% capture updated %}{{ page.date_time_updated_html }}{% endcapture %}{% endif %}
 {% if post.updated %}{% capture updated %}{{ post.date_time_updated_html }}{% endcapture %}{% endif %}

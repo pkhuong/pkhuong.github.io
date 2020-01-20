@@ -5,7 +5,8 @@
   <nav role="navigation">{% include navigation.html %}</nav>
   <div id="main">
     <div id="content">
-      {{ content | expand_urls: root_url }}
+      {% assign root_with_slash = site.root | append: '/' %}
+      {{ content | expand_urls: root_with_slash }}
     </div>
   </div>
   <footer role="contentinfo">{% include footer.html %}</footer>
