@@ -1,0 +1,395 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Hacking SSE Intrinsics in SBCL (part 1) - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Sun, 22 Mar 2009</h2>
+<div class="entry">
+  <a id="hacking_SSE_intrinsics-part_1" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Hacking SSE Intrinsics in SBCL (part 1)</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>I think I managed to add sane support for SSE values (octwords) and
+operations to SBCL this weekend (all that because of a discussion on
+PRNGs which lead to remembering that <a href="http://www.math.sci.hiroshima-u.ac.jp/~m-mat/MT/SFMT/">SFMT</a> wasn't too hard to
+implement, which lead to SSE intrinsics). It wasn't too hard, but
+clearly the path could have been better documented. The interesting
+part is the creation of a new primitive data type in the compiler;
+once that is done, we only have to define new VOPs. Note that since
+I'm only targetting x86-64, alignment isn't an issue: objects are
+aligned to 128 bit by default.</p>
+
+<p>The compiler has to be informed of the new data type at two levels:</p>
+
+<ul>
+<li>The front/middle -end, to create a new type (as in <code>CL:TYPEP</code>), and to
+define how to map from that type to the primitive type (which is
+more concerned about representation than semantics) used in
+the back-end;</li>
+
+<li>The back-end, which has to be informed about the existence of a new
+primitive type, and must also be modified to correctly map that
+primitive type to machine registers or stack locations, and to know
+how to move from one to the other or how to box such values in a
+GC-friendly object on the heap.</li>
+</ul>
+
+<p>Obviously the runtime was also be modified to be able to GC the new
+type of objects.</p>
+
+<p>I believe it makes more sense to do this by starting low-level, in the
+back-end, and then building things up to the front-end, so I'll try
+and explain it that way.</p>
+
+<h2>Hacking the machine definition</h2>
+
+<p class="first">SBCL's backend has a sort of type system at the <code>VOP</code> / <code>TN</code> level
+(virtual operations/registers). Two elements of type information are
+associated with each <code>TN</code>: the primitive type and the storage class. As
+its name implies, the primitive type is a low-level, C-style type
+(e.g. <code>SIMPLE-ARRAY-UNSIGNED-BYTE-64</code> or <code>DOUBLE-FLOAT</code>), which is almost
+entirely concerned with representation. Apart from bad puns, there is
+no subtyping; <code>COMPLEX</code> and <code>COMPLEX-DOUBLE-FLOAT</code> are disjoint
+types. However, that still leaves some leeway to the back-end. A
+<code>DOUBLE-FLOAT</code> may be stored in a FP register, on the stack, or as a
+boxed value. Thus, <code>TN</code> are also assigned a storage class before
+generating code.</p>
+
+<p>The first step was to define new storage classes for SSE values:
+<code>sse-reg</code> and <code>sse-stack</code> for SSE values in <code>XMM</code> registers and on the
+stack, respectively. That's done in <code>src/compiler/x86-64/vm.lisp</code>,
+<code>!define-storage-classes</code>:</p>
+
+<pre class="example">
+  (sse-stack stack :element-size 2 :alignment 2)
+
+[...]
+
+  (sse-reg float-registers
+           :locations #.(loop for i from 0 below 15 collect i)
+           :constant-scs ()
+           :save-p t
+           :alternate-scs (sse-stack))
+</pre>
+
+<p>The first form defines a new storage class (<code>SC</code>) that's stored on the
+stack (the storage <em>base</em>, <code>SB</code>), where each element takes two locations
+(in this case, 64 bit words) and requires an alignment of two
+locations. The second form defines a new storage class that uses the
+<code>float-registers</code> storage base, and may take any of the first 15
+locations in that <code>SB</code> (<code>xmm15</code> is reserved). Values in that <code>SC</code> must be
+saved to the stack when needed. The <code>sse-stack</code> <code>SC</code> is to be used when
+there aren't enough registers or when saving registers (e.g. for a
+call). Some more modifications were needed in the assembler to make it
+aware of the new <code>SC</code>, but that's a mostly orthogonal concern.</p>
+
+
+<h2>Adding a new primitive type</h2>
+
+<p class="first">That's enough to define a new primitive type in
+<code>src/compiler/generic/primtype.lisp</code>:</p>
+
+<pre class="example">
+(!def-primitive-type sse-value (sse-reg descriptor-reg))
+</pre>
+
+<p><code>sse-value</code> can be stored in <code>sse-reg</code> or <code>descriptor-reg</code> (as boxed
+values), or in any of their alternate <code>SC</code>.</p>
+
+
+<h2>Defining a new kind of primitive object</h2>
+
+<p class="first">I've defined a new primitive type that can be stored as a boxed
+value. However, I haven't yet defined how that boxed value should be
+represented. I allocated one of the unused widetags to
+<code>sse-values</code> in <code>src/compiler/generic/early-objdef.lisp</code>:</p>
+
+<pre class="example">
+  #!-x86-64
+  unused02
+  #!+x86-64
+  sse-value                         ; 01100010
+</pre>
+
+<p>That's not necessary, but I would then have to define my own
+typechecking <code>VOPs</code>, adapt the GC somehow, etc. It will define a new
+constant, <code>SB!VM::SSE-VALUE-WIDETAG</code>. I use it in the primitive object
+definition (<code>src/compiler/generic/objdef.lisp</code>):</p>
+
+<pre class="example">
+(define-primitive-object (sse-value
+                          :lowtag other-pointer-lowtag
+                          :widetag sse-value-widetag)
+  (filler) ; preserve the natural 128 bit alignment
+  (lo-value :c-type &quot;long&quot; :type (unsigned-byte 64))
+  (hi-value :c-type &quot;long&quot; :type (unsigned-byte 64)))
+</pre>
+
+<p>The macro will also define useful constants, e.g. <code>SSE-VALUE-SIZE</code>, as
+well as slot offsets for the low and high values. That information
+will be needed by the GC. Genesis only exports CL constants to C when
+the symbols are external to the package. Thus, I had to add some
+symbols to the export list for <code>SB!VM</code> in <code>./package-data-list.lisp-expr</code>:</p>
+
+<pre class="example">
+               #!+x86-64 &quot;SSE-VALUE&quot;
+               #!+x86-64 &quot;SSE-VALUE-P&quot; ; will be defined later on
+               #!+x86-64 &quot;SSE-VALUE-HI-VALUE-SLOT&quot;
+               #!+x86-64 &quot;SSE-VALUE-LO-VALUE-SLOT&quot;
+               #!+x86-64 &quot;SSE-VALUE-SIZE&quot;
+               #!+x86-64 &quot;SSE-VALUE-WIDETAG&quot;
+</pre>
+
+<p>and similarly for <code>SB!KERNEL</code>:</p>
+
+<pre class="example">
+               #!+x86-64
+               &quot;OBJECT-NOT-SSE-VALUE-ERROR&quot; ; so will this
+</pre>
+
+
+<h2>Adapting the GC</h2>
+
+<p class="first">I chose a very simple representation for <code>sse-values</code>: the header word
+will contain the right widetag, obviously, and the rest will encode
+the size of the object (in words). That's a common scheme in SBCL, and
+well supported by generic code everywhere. The garbage collector (a
+copying Cheney GC) has three important tables that are used to
+dispatch to the correct function given an object's widetag: <code>scavtab</code> to
+scavenge objects for pointers, <code>transother</code> to copy objects to the new
+space and <code>sizetab</code> to compute the size of an object. They're all
+initialised in <code>src/runtime/gc-common.c</code>, <code>gc_init_tables</code>. The
+representation is standard, so I only had to add pointers to
+predefined functions, <code>scav_unboxed</code>, <code>trans_unboxed</code> and <code>size_unboxed</code>:</p>
+
+<pre class="example">
+#ifdef SSE_VALUE_WIDETAG
+    scavtab[SSE_VALUE_WIDETAG] = scav_unboxed;
+#endif
+
+[...]
+
+#ifdef SSE_VALUE_WIDETAG
+    transother[SSE_VALUE_WIDETAG] = trans_unboxed;
+#endif
+
+[...]
+
+#ifdef SSE_VALUE_WIDETAG
+    sizetab[SSE_VALUE_WIDETAG] = size_unboxed;
+#endif
+</pre>
+
+
+<h2>Adding utility VOPs to the compiler</h2>
+
+<p class="first">That's enough code to be able to use the <code>sse-value</code> primitive type, use
+our new storage classes in <code>VOP</code> definitions, and pass boxed <code>sse-values</code>
+around without crashing the GC. The first <code>VOPs</code> to define are probably
+those that let the compiler move <code>sse-values</code> around, from an <code>sse-reg</code>,
+<code>sse-stack</code> or <code>descriptor-reg</code> to another. Not all <code>VOPs</code> in the cartesian
+product must be defined; the compiler can figure out how to piece
+together move <code>VOPs</code> to a certain extent.</p>
+
+<pre class="example">
+(define-move-fun (load-sse-value 2) (vop x y)
+  ((sse-stack) (sse-reg))
+  (inst movdqa y (ea-for-sse-stack x)))
+
+(define-move-fun (store-sse-value 2) (vop x y)
+  ((sse-reg) (sse-stack))
+  (inst movdqa (ea-for-sse-stack y) x))
+</pre>
+
+<p>are enough to define how to move between the stack and <code>xmm</code> registers
+(<code>ea-for-sse-stack</code> is a helper function that generates an effective
+address from an <code>sse-value</code> 's location in the compile-time stack
+frame).</p>
+
+<pre class="example">
+(define-vop (sse-move)
+  (:args (x :scs (sse-reg)
+            :target y
+            :load-if (not (location= x y))))
+  (:results (y :scs (sse-reg)
+               :load-if (not (location= x y))))
+  (:note &quot;sse move&quot;)
+  (:generator 0
+    (unless (location= y x)
+      (inst movdqa y x))))
+(define-move-vop sse-move :move (sse-reg) (sse-reg))
+</pre>
+
+<p>provides and registers code to move from one <code>xmm</code> register to another.</p>
+
+<pre class="example">
+(define-vop (move-from-sse)
+  (:args (x :scs (sse-reg)))
+  (:results (y :scs (descriptor-reg)))
+  (:node-var node)
+  (:note &quot;sse to pointer coercion&quot;)
+  (:generator 13
+     (with-fixed-allocation (y
+                             sse-value-widetag
+                             sse-value-size
+                             node)
+       (inst movdqa (make-ea :qword
+                             :base y
+                             :disp 1)
+             x))))
+(define-move-vop move-from-sse :move
+  (sse-reg) (descriptor-reg))
+
+(define-vop (move-to-sse)
+  (:args (x :scs (descriptor-reg)))
+  (:results (y :scs (sse-reg)))
+  (:note &quot;pointer to sse coercion&quot;)
+  (:generator 2
+    (inst movdqa y (make-ea :qword :base x :disp 1))))
+(define-move-vop move-to-sse :move (descriptor-reg) (sse-reg))
+</pre>
+
+<p>will be used to move from an <code>xmm</code> register to a boxed representation
+and vice-versa.</p>
+
+<p>Finally,</p>
+
+<pre class="example">
+(define-vop (move-sse-arg)
+  (:args (x :scs (sse-reg) :target y)
+         (fp :scs (any-reg)
+             :load-if (not (sc-is y sse-reg))))
+  (:results (y))
+  (:note &quot;SSE argument move&quot;)
+  (:generator 4
+     (sc-case y
+       (sse-reg
+        (unless (location= x y)
+          (inst movdqa y x)))
+       (sse-stack
+        (inst movdqa (ea-for-sse-stack y fp) x)))))
+(define-move-vop move-sse-arg :move-arg
+  (sse-reg descriptor-reg) (sse-reg))
+</pre>
+
+<p>defines how arguments are loaded before calling a function.</p>
+
+
+<h2>Creating a new CL type and associated functions</h2>
+
+<p class="first">Now that pretty much all the groundwork has been done in the backend,
+it's time to inform the frontend about the new data type. The system's
+built-in classes are defined in <code>src/code/class.lisp</code>, right after
+<code>(defvar *built-in-classes*)</code>. I only had to insert another sublist in
+the list of built-in classes.</p>
+
+<pre class="example">
+     (sb!vm:sse-value
+      :codes (#.sb!vm:sse-value-widetag))
+</pre>
+
+<p>That takes care of defining a new class for the middle-end, and of
+mapping the class's name, in the front-end, to the class object in the
+middle-end.</p>
+
+<p>SBCL tries pretty hard to always provide a safe language by default,
+so I have to make sure the type <code>sse-value</code> can be checked. First, a
+new error kind is defined in <code>src/code/interr.lisp</code>:</p>
+
+<pre class="example">
+(deferr object-not-sse-value-error (object)
+  (error 'type-error
+         :datum object
+         :expected-type 'sb!vm:sse-value))
+</pre>
+
+<p>The mapping from internal error number to a meaningful message is
+specified in <code>src/compiler/generic/interr.lisp</code>, <code>define-internal-errors:</code>
+<code>(object-not-sse-value &quot;Object is not of type SSE-VALUE.&quot;)</code>.
+Since I use a normal representation, I can use preexisting machinery
+to define the type checking <code>VOPs</code> in <code>src/compiler/generic/late-type-vops.lisp</code>:</p>
+
+<pre class="example">
+(!define-type-vops sse-value-p check-sse-value sse-value
+    object-not-sse-value-error
+  (sse-value-widetag))
+</pre>
+
+<p>That only creates a <code>VOP</code> for <code>sse-value-p</code>; we'd sometimes like to have a
+real function. That's created in <code>src/code/pred.lisp</code>, with
+<code>(def-type-predicate-wrapper sb!vm:sse-value-p)</code>. Moreover, when a <code>VOP</code>
+is defined as a translation for a function, that function must be
+<code>defknown</code> ed to the compiler. I do that in
+<code>src/compiler/generic/vm-fndb.lisp</code>, with
+<code>(defknown sb!vm:sse-value-p (t) boolean (foldable flushable))</code>.</p>
+
+<p><code>TYPEP</code> must also be informed to use that function. That's set up in
+<code>src/compiler/generic/vm-typetran.lisp</code>, with
+<code>(define-type-predicate sb!vm:sse-value-p sb!vm:sse-value)</code>.</p>
+
+
+<h2>Making the middle and the back meet</h2>
+
+<p class="first">The modifications above added a new primitive type to the back-end,
+along with some machinery to represent and manipulate values of
+that type. They also added a new built-in class to the front and
+middle -end and some type-checking code for that new class. The only
+thing left is to make sure the new class is mapped to the correct
+primitive type. The default is to map everything to the <em>primitive type</em>
+<code>T</code>, a boxed value. That's done at the bottom of
+<code>src/compiler/generic/primtype.lisp</code>, in <code>primitive-type-aux</code>. I only had
+to modify the case of translating built-in class(oids) to primitive
+types: <code>sse-value</code> are treated like <code>complex</code>, <code>function</code>, <code>system-area-pointer</code> or
+<code>weak-pointer.</code> The class <code>sse-value</code> is mapped to the primitive type
+<code>sse-value</code>. That way, a function that is <code>defknown</code> to, e.g., take an
+argument of type <code>sse-value</code> (the class) can be translated by a <code>VOP</code> that
+takes an argument of primitive type <code>sse-value</code>, which can be stored in
+an <code>sse-reg</code> (an <code>xmm</code> register).</p>
+
+
+<h2>Now what?</h2>
+
+<p class="first">We have the data type definitions. To make them useful we still have
+to define a lot of functions and <code>VOPs</code> (and <code>SSE</code> instructions). However,
+that's much closer to regular development and doesn't require as much
+digging around in the source. I'll leave that for another post.</p>
+
+
+
+    </div>
+<p>
+  posted at: 18:25 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/hacking_SSE_intrinsics-part_1.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

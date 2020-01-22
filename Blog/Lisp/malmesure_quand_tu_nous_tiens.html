@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Malmesure, quand tu nous tiens - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 07 Apr 2008</h2>
+<div class="entry">
+  <a id="malmesure_quand_tu_nous_tiens" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Malmesure, quand tu nous tiens</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>I would say that the most important thing I learned during my short
+stint in health science is that quality experiment plans are
+essential. It's true in the most empirical of (pseudo-)sciences, and
+also in that other pseudo-science, benchmarking. We have less problems
+with sample size and getting accurate numbers. The fundamental
+question still remains: are we really measuring what we believe we
+are?</p>
+
+<p>Leslie Polzer found the following results, comparing his <code>seqrnd</code> and my <code>random-shuffle</code>:</p>
+
+<blockquote>
+<pre class="example">
+Here are the results, comparing Paul Khuong's
+RANDOM-SHUFFLE with SEQRND.
+
+[...]
+
+(time (benchmark #'random-shuffle))
+(time (benchmark #'seqrnd))
+CLISP 2.41 (interpreted):
+Real time: 25.72314 sec.
+Run time: 10.665971 sec.
+Space: 86264000 Bytes
+GC: 164, GC time: 0.669959 sec.
+
+Real time: 72.53122 sec.
+Run time: 29.028109 sec.
+Space: 79356432 Bytes
+GC: 152, GC time: 0.5233 sec.
+
+Bottom line: RANDOM-SHUFFLE 3x faster,
+SEQRND slightly less space.
+CLISP 2.41 (compiled)
+
+Real time: 19.819485 sec.
+Run time: 8.232797 sec.
+Space: 86016072 Bytes
+GC: 164, GC time: 0.663291 sec.
+
+Real time: 28.287846 sec.
+Run time: 10.196001 sec.
+Space: 79108984 Bytes
+GC: 151, GC time: 0.519969 sec.
+
+Bottom line: RANDOM-SHUFFLE 1.35x faster,
+SEQRND slightly less space.
+SBCL 1.0.15:
+
+Evaluation took:
+13.861 seconds of real time
+5.013006 seconds of user run time
+0.126658 seconds of system run time
+[Run times include 0.074 seconds GC run time.]
+0 calls to %EVAL
+0 page faults and
+52,039,552 bytes consed.
+
+Evaluation took:
+4.639 seconds of real time
+2.263186 seconds of user run time
+0.026665 seconds of system run time
+[Run times include 0.009 seconds GC run time.]
+0 calls to %EVAL
+0 page faults and
+30,302,776 bytes consed.
+
+Bottom line: SEQRND 3x faster, SEQRND 3/5 space.
+</pre>
+</blockquote>
+
+<p>That's interesting: completely different results depending on the
+implementation. What's also interesting is the presence of a few
+obvious flaws in the experiment. Let's keep in mind what we want to
+decide: which of using a <code>EQ</code> hash-table or storing values in cons-cells
+in-place is more space or time efficient.</p>
+
+<p>First, the benchmark harness generates a list of random numbers for
+each run. That's pure noise. We could instead pass a copy of the same
+sequence for each iteration. It might introduce bias, but, looking at
+the sources, that seems unlikely. So, from</p>
+
+<pre class="example">
+(defun benchmark (fn)
+ (dotimes (x 1000)
+   (let ((seq (loop for i from 1 to 1000 collect (random i))))
+     (funcall fn seq))))
+</pre>
+we go to
+
+<pre class="example">
+(defparameter *random-sequence*
+  (loop repeat 1000
+        collect (random 1.0)))
+
+(defun test-shuffle (fn list n)
+  (dotimes (i n)
+    (funcall fn (copy-seq list))))
+</pre>
+
+<p>We can also see an immediate difference between <code>seqrnd</code> and
+<code>random-shuffle</code>: <code>seqrnd</code> generates single floats, <code>random-shuffle</code> double
+floats. Considering we'll not be shuffling millions of items, single
+floats should be good enough. Obviously, if we're to measure time
+efficiency, we want to turn optimisations on. Thus, we get these
+functions:</p>
+
+<pre class="example">
+(defvar *random-id-ht* nil)
+
+(defun initialize-memo ()
+  (setf *random-id-ht* (make-hash-table :test #'eq)))
+
+(declaim (sb-ext:maybe-inline consistent-random-id))
+(defun consistent-random-id (obj)
+  (declare (optimize speed))
+  (multiple-value-bind (val found-p) (gethash obj *random-id-ht*)
+    (if found-p val
+      (setf (gethash obj *random-id-ht*)
+            (random 1.0)))))
+
+(defun seqrnd (seq)
+  &quot;Randomize the elements of a sequence. Destructive on SEQ.&quot;
+  (declare (optimize speed)
+           (inline consistent-random-id))
+  (initialize-memo) ; need to clear between runs
+  (sort seq #'&gt; :key (lambda (x) (consistent-random-id x))))
+</pre>
+
+<pre class="example">
+(defun random-shuffle (sequence)
+  (declare (optimize speed))
+  (map-into sequence #'car
+            (sort (map 'vector (lambda (x)
+                                 (cons x (random 1.0)))
+                       sequence)
+                  #'&lt; :key #'cdr)))
+</pre>
+
+<p>For 1000 shuffles of the same 1000-element list, we find 1.82s for
+<code>seqrnd</code> and 4.11s for <code>random-shuffle</code>. From that, we could conclude that
+it is faster to use a hash table than to take the <code>car</code> of a cons. The
+question remains, are we really measuring the relative efficiency of
+the two methods? In the last test case, <code>random-shuffle</code> does most of
+its work on vectors, <code>seqrnd</code> on lists. As an experiment, let's shuffle
+a 1000-element vector. The figures are now reversed! <code>seqrnd</code> takes
+3.41s, and <code>random-shuffle</code> 1.47s. It seems rather unlikely that we are
+really measuring the effects of the two ways to associate random
+numbers to keys.</p>
+
+<p>Let's time sorts of lists and vectors, passing <code>(lambda (x) (sort x
+#'&lt; :key #'identity))</code> to <code>test-shuffle</code>. Sorting lists takes .436s,
+compared to 1.37s for vectors. At least part of the discrepancy
+between our two methods can be attributed to <code>SORT</code>. Why is there a
+difference? SBCL's <code>SORT</code> calls different routines depending on the
+sequence's type: lists are passed to a mergesort, vectors to an
+in-place heapsort. Their performance envelopes are wildly
+different. The heapsort is clearly ahead on large datasets, but it
+varies on smaller inputs.</p>
+
+<p>We have a hint that working with slightly different data structures
+can lead to large performance differences in third-party code. What
+effect can it have on <code>MAP-INTO</code>? Let's test with <code>(lambda (x) (map-into
+x #'identity x))</code>. Mapping into a list (1000 elements, 1000 times)
+takes 7.78s, 0.114s to a vector. The difference is enormous. The
+reason is simple. Quite clearly, <code>MAP-INTO</code> for lists sucks. How bad can
+it suck? <code>ELT</code> and <code>LENGTH</code> -using bad, surprisingly. SBCL's <code>MAP-INTO</code> is
+in need of some TLC if someone has the time.</p>
+
+<p>Since we seem to be primarily interested in shuffling medium-sized
+lists, we could add a special case for such inputs, to keep working on
+lists and avoid <code>MAP-INTO</code>, something like:</p>
+
+<pre class="example">
+(defun random-shuffle (sequence)
+  (declare (optimize speed))
+  (etypecase sequence
+    (list (mapcar #'car
+                  (sort (mapcar (lambda (x)
+                                  (cons x (random 1.0)))
+                                sequence)
+                        #'&lt; :key #'cdr)))
+    (t    (map-into sequence #'car
+                    (sort (map 'vector
+                               (lambda (x)
+                                 (cons x (random 1.0)))
+                               sequence)
+                          #'&lt; :key #'cdr)))))
+</pre>
+
+<p>With this specialised code, we find <code>random-shuffle</code> takes 0.839s for
+1000 shuffles of 1000-elements lists (1.82s for <code>seqrnd</code>). It also conses
+less, 64MB instead 81MB.</p>
+
+<p>What happens if we make it in-place? First, let's write a non-sucky
+equivalent to <code>MAP-INTO</code> (something like that could be patched in SBCL):</p>
+
+<pre class="example">
+(defun list-map-into (output function input)
+  (declare (optimize speed))
+  (let ((function (coerce function 'function))) ; FIXME: that's slightly wrong...
+    (loop for outs on output
+          for x in input
+          do (setf (car outs)
+                   (funcall function x))
+          finally (return output))))
+</pre>
+
+<p>We can then use it in <code>random-shuffle</code>, being careful that the conses
+passed to <code>SORT</code> can be reused <em>arbitrarily</em>.</p>
+
+<pre class="example">
+(defun random-shuffle (sequence)
+  (declare (optimize speed))
+  (etypecase sequence
+    (list
+     (let ((result
+            (sort (list-map-into sequence
+                                 (lambda (x)
+                                   (cons x (random 1.0)))
+                                 sequence)
+                  #'&lt; :key #'cdr)))
+       (list-map-into result #'car result)))
+    (t    (map-into sequence #'car
+                    (sort (map 'vector
+                               (lambda (x)
+                                 (cons x (random 1.0)))
+                               sequence)
+                          #'&lt; :key #'cdr)))))
+</pre>
+
+<p>Like memoisation, it could be argued that a good <code>MAP-INTO</code> should be
+part of every lisper's toolbox (... as part of the
+implementation). With this new <code>MAP-INTO</code> look-alike, 1000 <code>random-shuffle</code>
+of 1000-element lists takes 0.829s and conses 32MB (1.82s and 81MB for
+<code>seqrnd</code>).</p>
+
+<p>After some optimisations, guided by a better knowledge of our
+implementation's library, we see that the correct approach (that
+doesn't fail on sequences with repeated elements) is also faster and
+more space-efficient (1.47s, 64MB for <code>random-shuffle</code> of vectors and
+3.41s, 74MB for <code>seqrnd</code>). We can also observe the importance of
+understanding the performance of third-party, magic-pixie-dust-style
+code when trying to understand that of our own code, lest we be lead
+to misconclude.</p>
+
+    </div>
+<p>
+  posted at: 15:49 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/malmesure_quand_tu_nous_tiens.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

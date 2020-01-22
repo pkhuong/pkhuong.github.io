@@ -1,0 +1,414 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>What I look for in GSoC proposals - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2014/03/23/what-i-look-for-in-gsoc-proposals/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">What I look for in GSoC proposals</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Mar
+  
+23rd, 
+2014
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/03/23/what-i-look-for-in-gsoc-proposals/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>EDIT: Added a link to a <a href="/images/2014-03-23-what-i-look-for-in-gsoc-proposals/regalloc-abarch.pdf">solid proposal from last year (PDF)</a>.</p>
+
+<p>It’s already
+<a href="https://www.google-melange.com/gsoc/homepage/google/gsoc2014">Google Summer of Code</a>
+season; like spring, it’s slightly earlier this year.  For multiple
+reasons – including the accelerated schedule and my transition to
+having a Real Job – I did not manage to guide any of the students who
+sent in applications.  After an initial ranking, we’re left with a
+fair number of decent proposals for a Summer of
+<a href="http://sbcl.org/">SBCL</a>.  They’re of comparable quality, and all
+leave me a bit uneasy.  In this post, I’ll try to explain what I look
+for in GSoC proposals… or, really, in action plans in general.</p>
+
+<p>I care about the quality of GSoC plans for two reasons.  First,
+because it reassures me that the applicant understands the
+difficulties they’ll have to overcome to complete their project.
+Second, because, like TDD, a good plan makes it easier to feel when
+we’re making concrete progress.  To me, these two factors are
+necessary conditions for a good success rate.</p>
+
+<p>We’ll probably allow additional time to update the proposals we have
+already received, so hopefully this post can be immediately useful.  I
+have a single vote, and other mentors no doubt have different
+criteria.  I only hope that this post can give ideas to applicants
+looking to review their proposal.</p>
+
+<h1 id="why-software-development-cant-be-planned">Why? Software development can’t be planned!</h1>
+
+<p>This is a common objection to any form of planning for software
+projects.  I don’t understand where it comes from.</p>
+
+<p>Software development should be <em>easier</em> to plan than most endeavours:
+we have to deal with relatively few people, and, when we do, it’s
+rarely in an adversarial setting… and I’m willing to bet most of us
+can better forecast the behaviour of programs than that of people.
+There’s currently an electoral campaign in Québec, and I’m certain
+that, before the date was even announced, every single party had a
+precise plan for each day, at the riding, regional, and provincial
+levels.  Politicians can do it; why can’t software developers?</p>
+
+<p>Of course, there will be constant adjustments to the initial plan.
+The reason I think it’s important to spend time and thought on that
+plan isn’t to stick to it, but primarily because it forces us to
+systematically consider all sorts of potential issues, challenges,
+failure modes, etc.  This exercise becomes useful when problems crop
+up: rather than making decisions in the heat of the moment, we can
+rely on our past (well rested and composed) self’s research, notes, and
+ideas.</p>
+
+<p>I also find plans tend to become much more handwavy as we get farther
+in the future.  That’s a normal tendency.  I think we’re usually
+pretty good at short-term planning; most people can cook a meal
+without sitting down to figure out how they’ll cause awesome chemical
+reactions to occur without burning their house down.  It’s a different
+matter when it comes to month-long camping trips or feeding a thousand
+people.</p>
+
+<p>The difference is one of scale, and it’s exactly when we’re out of our
+comfort zone that mindful planning becomes useful.  I expect an action
+plan to be as thorough in its last week as in its first.  Most of it
+will be fiction, but, as I wrote above, the thinking involved in
+writing that fiction is what I’m after.</p>
+
+<h1 id="the-overall-structure-im-used-to">The overall structure I’m used to</h1>
+
+<p>There are tons of ways to describe a plan.  I like this one, but the
+main thing is what I have in mind when I read each section.  For
+instance, <a href="/images/2014-03-23-what-i-look-for-in-gsoc-proposals/regalloc-abarch.pdf">last year’s proposal for register allocation via graph colouring (PDF)</a> had:</p>
+
+<ol>
+  <li>the project’s aim, with a description of the high level goal (better
+register allocation) and of mechanisms to implement (new allocation
+heuristic, live range splitting and coalescing, etc.);</li>
+  <li>a plan section, describing each proposed step (find examples of bad
+allocation, write a new simple allocator, write a visualisation tool,
+…) in details;</li>
+  <li>a schedule at a 2-week granularity, with references to the detailed
+descriptions and deliverables for each step;</li>
+  <li>a list of risks and challenges in the project;</li>
+  <li>a short cv;</li>
+  <li>why the student felt motivated and suitable for the project.</li>
+</ol>
+
+<p>It’s a different structure than what I suggest below, but both mostly
+present the same information.  My wish is to feel confident that the
+student has done the work to have that information.</p>
+
+<p>First, a description of the goal.  SBCL offers
+<a href="http://www.sbcl.org/gsoc2014/ideas/">prefab proposals</a>, and it’s
+tempting to just copy-paste.  However, I feel much more confident in
+the intrinsic motivation of a student who’s made the project their
+own.  Many of our suggestions are skeletons for projects; it should be
+easy to come up with ways to extend and better specify them according
+to the student’s interests.  Others are already fleshed out; those
+are a bit harder, but even small variations on the initial theme
+are encouraging.  In all cases, if I don’t feel like the student owns
+the project, I probably won’t rank the proposal highly, and certainly
+won’t be inclined to mentor them.  The problem statement is a simple
+way to demonstrate one’s understanding of – and interest for – the
+project.</p>
+
+<p>Second, a review of the current environment.  What currently exists,
+in SBCL or elsewhere? Can we exploit interesting research or code?
+Has there been previous efforts, and how/why did they not pan out?
+Perhaps there’s a relevant post-mortem from a similar project that
+will help understand the problem domain.  What potential difficulties
+do we know of?  What don’t we know (known unknowns)?  How bad do we
+estimate unknown unknowns to be, and why?  What persons or resources
+could be helpful?  To a certain extent, this is simply demonstrating
+that one’s done their due diligence.  However, it also tells other
+people (e.g., potential mentors) how they can best work with the
+applicant.  This section should be a good resource to re-read when bad
+things happen.</p>
+
+<p>Third, the suggested course of action at a high level.  Not only what
+would happen in a perfect execution, but, ideally, ways to address (ahead
+of time or when/if they occur) some of the difficulties and unknowns
+listed in the previous section.</p>
+
+<p>Fourth, success indicators, a translation of the initial goal
+description into a few checkboxes.  Ideally, the criteria are
+falsifiable… much like an experiment, with the null hypothesis being
+project failure.  I find that checking even a few of these boxes gives
+me a good sense of closure on a project.</p>
+
+<p>Finally the calendar, to show how one might execute the third section
+and satisfy the success indicators in the fourth section.  The first
+few weeks are usually easy to envision, but proposals tend to become
+fuzzier with time.  I’m more confident in proposals that only use one
+or two -week periods, with <em>actions</em> and a few testable for each
+period.  Shorter periods make fuzziness more obvious, but, more
+importantly, they combine with the milestones to let us tell that
+we’re (or aren’t) getting traction.</p>
+
+<p>In the unfortunate case that we’re somehow not making the expected
+progress, frequent milestones means we can tell more quickly that
+something is off.  We only have to make up for a one week setback
+rather than for a month, i.e., one quarter of the GSoC program.  The
+odds of outright project failure are lower, and we don’t risk feeling
+(as) down for wasting a month of work.</p>
+
+<p>One thing that I find particularly scary in project calendars are
+“Magic Happens” steps.  This seems more common with longer planning
+periods.  Many proposals are quite detailed with respect to
+preliminary work and research, and to final integration and
+documentation.  The issue is that most of the work is stashed in a 3-5
+week interval during which the actual project becomes completed.  It’s
+not clear what the student will do to get there (or even who will do
+the work ;).  Planning each week individually makes such steps
+obvious.</p>
+
+<p>I know that it’s hard to determine how we’ll achieve a goal when
+we’ve never done something similar before.  But we can pretend.  I
+want to feel that an applicant has a clear idea how to execute the
+task they propose, if only in an artificial perfect world.  Otherwise,
+why should I believe they can do so in reality?</p>
+
+<h1 id="planning-is-fiction">Planning is fiction</h1>
+
+<p>That’s it. I’m told that writers should show rather than tell.  I feel
+the same about plans.  I like to be shown how goals could be achieved
+in ideal and less-than-ideal worlds rather than told when steps will
+be completed.  I think the most important point is that I don’t
+appreciate detailed plans because we should (or can) stick to them.
+Rather, I believe that the exercise of coming up with such a plan is
+an efficient way to ensure we can fruitfully respond to what’ll
+actually happen when we execute it.</p>
+
+<p>The regalloc proposal was one of the longest ones last year, but I
+felt confident that the student had a good idea of what challenges
+made the task non-trivial.  In the end, we followed only a small part
+of the plan: it’s hard to come up with a suite of bad regalloc
+examples, visualisation turned out not to scale to real code, and
+there was too little time to work on live range splitting.  However,
+every time there was a change, Alexandra had no problem determining
+how to adjust the schedule and figuring out the next step.  On my end,
+I could easily follow the modified schedule and see that we were
+making progress.</p>
+
+<p>This planning exercise is not easy, and it’s certainly not quick.
+(FWIW, I find it useful to get someone else, even without relevant
+experience, to look at the plan and ask questions.)  Action plans have
+helped me countless times: when I needed to react to problems; when I
+felt like I was running in circles but could tell <em>for sure</em> that I
+was making progress; when a project forcibly came to an end but I
+still had a sense of closure… Hopefully, they can do the same for SBCL
+GSoC students.</p>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Mar
+  
+23rd, 
+2014
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/Blog/2014/03/15/sbcl-the-ultimate-assembly-code-breadboard/" title="Previous Post: SBCL: the ultimate assembly code breadboard">&laquo; SBCL: the ultimate assembly code breadboard</a>
+      
+      
+        <a class="basic-alignment right" href="/Blog/2014/03/30/refactoring-with-lz77-compilation-is-compression/" title="Next Post: Refactoring with LZ77: compression is compilation (?)">Refactoring with LZ77: compression is compilation (?) &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2020 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2014/03/23/what-i-look-for-in-gsoc-proposals/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2014/03/23/what-i-look-for-in-gsoc-proposals/';
+      this.page.title = 'What I look for in GSoC proposals';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>

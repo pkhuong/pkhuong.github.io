@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Initialising structure objects modularly - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Thu, 15 Dec 2011</h2>
+<div class="entry">
+  <a id="modular-struct-initialisation" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Initialising structure objects modularly</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">I use <code style="font-family:monospace">defstruct </code>a lot, even when execution speed or space usage isn&#8217;t an issue:
+they&#8217;re better suited to static analysis than <code style="font-family:monospace">standard-object</code>s and that makes code
+easier to reason about, both for me and SBCL. In particular, I try to exploit
+read-only and typed slots as much as possible.
+</p><!--l. 17--><p style="text-indent:1.5em">   Structures also allow single-inheritance &#8211; and Christophe has a branch to allow
+multiple subclassing &#8211; but don&#8217;t come with a default protocol like CLOS&#8217;s
+<code style="font-family:monospace">make-instance</code>/<code style="font-family:monospace">initialize-instance</code>. Instead, we can only provide default value
+forms for each slot (we can also define custom constructors, but they don&#8217;t carry over
+to subtypes).
+</p><!--l. 23--><p style="text-indent:1.5em">   What should we do when we want to allow inheritance but need complex
+initialisation which would usually be hidden in a hand-written constructor
+function?
+</p><!--l. 27--><p style="text-indent:1.5em">   I&#8217;ll use the following as a completely artificial example. The key parts are that I
+have typed and read-only slots, that the initialisation values depend on arguments,
+and that we also have some post-processing that needs a reference to the
+newly-constructed structure (finalization is a classic).
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defstruct (foo 
+            (:constructor %make-foo)) 
+  (x (error "Missing arg") :type cons 
+                           :read-only t) 
+  (y (error "Missing arg") :read-only t)) 
+ 
+(defun make-foo (x y) 
+  ;; non-trivial initial values 
+  (multiple-value-bind (x y) (%frobnicate x y) 
+    (let ((foo (%make-foo :x x :y y))) 
+      ;; post-processing 
+      (%quuxify foo) 
+      foo)))</pre>
+<!--l. 47--><p style="text-indent:0em">
+</p><!--l. 49--><p style="text-indent:1.5em">   The hand-written constructor is a good, well-known, way to hide the complexity,
+as long as we don&#8217;t want to allow derived structure types. But what if we do want
+inheritance?
+</p><!--l. 53--><p style="text-indent:1.5em">   One way to work around the issue is to instead have an additional slot for
+arbitrary extension data. I&#8217;m not a fan.
+</p><!--l. 56--><p style="text-indent:1.5em">   Another way is to move the complexity from <code style="font-family:monospace">make-foo </code>into <code style="font-family:monospace">initialize-foo</code>,
+which mutates an already-allocated instance of <code style="font-family:monospace">foo </code>(or a subtype). I&#8217;m even less
+satisfied by this approach than by the previous one. It means that I lose read-only
+slots, and, when I don&#8217;t have sane default values, typed slots as well. I also have to
+track whether or not each object is fully initialised, adding yet more state to take
+into account.
+</p><!--l. 64--><p style="text-indent:1.5em">   For now, I&#8217;ve settled on an approach that parameterises <em style="font-style:italic">allocation</em>. Instead of
+calling <code style="font-family:monospace">%make-foo </code>directly, an allocation function is received as an argument. The
+hand-written constructor becomes:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-2" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun make-foo (x y 
+                 &amp;optional (allocator &#8217;%make-foo) 
+                 &amp;rest     arguments) 
+  ;; the &amp;rest list avoids having to build (a chain of) 
+  ;; closures in the common case 
+  (multiple-value-bind (x y) (%frobnicate x y) 
+    ;; allocation is parameterised 
+    (let ((foo (apply allocator :x x :y y arguments))) 
+      (%quuxify foo) 
+      foo)))</pre>
+<!--l. 79--><p style="text-indent:0em">
+</p><!--l. 81--><p style="text-indent:1.5em">   This way, I can define a subtype and still easily initialize it:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-3" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defstruct (bar 
+            (:constructor %make-bar) 
+            (:include foo)) 
+  z) 
+ 
+(defun make-bar (x y z) 
+  (make-foo x y &#8217;%make-bar :z z))</pre>
+<!--l. 90--><p style="text-indent:0em">
+</p><!--l. 92--><p style="text-indent:1.5em">   The pattern is nicely applied recursively as well:
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-4" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun make-bar (x y z 
+                 &amp;optional (allocator &#8217;%make-bar) 
+                 &amp;rest     arguments) 
+  (apply &#8217;make-foo x y allocator :z z arguments))</pre>
+<!--l. 98--><p style="text-indent:0em">
+</p><!--l. 100--><p style="text-indent:1.5em">   Consing-averse people will note that the <code style="font-family:monospace">&amp;rest </code>arguments are only used for
+<code style="font-family:monospace">apply</code>. SBCL (and many other implementations, most likely) handles this case
+specially and doesn&#8217;t even allocate a list: the arguments are used directly on the call
+stack.
+</p><!--l. 105--><p style="text-indent:1.5em">   I&#8217;m sure others have encountered this issue. What other solutions are there? How
+can the pattern of parameterising allocation be improved or generalised?
+</p> 
+
+
+    </div>
+<p>
+  posted at: 18:29 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/modular-struct-initialisation.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

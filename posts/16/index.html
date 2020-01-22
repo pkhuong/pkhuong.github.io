@@ -1,0 +1,521 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/posts/16/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div class="blog-index">
+  
+  
+  
+    <article>
+      
+  <header>
+    
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2015/06/27/linear-log-bucketing-fast-versatile-simple/">Linear-log bucketing: fast, versatile, simple</a></h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+June
+  
+27th, 
+2015
+
+
+
+
+        
+         | <a href="/Blog/2015/06/27/linear-log-bucketing-fast-versatile-simple/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2015/06/27/linear-log-bucketing-fast-versatile-simple/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+  <div class="entry-content" style="font-family: ; font-size: "><p><em>There’s a couple code snippets in this post (lb.lisp, bucket.lisp, bucket-down.lisp, bin.c).  They’re all <a href="https://creativecommons.org/publicdomain/zero/1.0/">CC0</a>.</em></p>
+
+<p>What do memory allocation, histograms, and event scheduling have in
+common?  They all benefit from rounding values to predetermined
+buckets, and the same bucketing strategy combines acceptable precision
+with reasonable space usage for a wide range of values.  I don’t know
+if it has a real name; I had to come up with the (confusing) term
+“linear-log bucketing” for this post!  I also used it twice last
+week, in otherwise unrelated contexts, so I figure it deserves more
+publicity.</p>
+
+<p>I’m sure the idea is old, but I first came across this strategy in
+<a href="https://github.com/jemalloc/jemalloc">jemalloc</a>’s binning scheme for
+allocation sizes.  The general idea is to simplify allocation and reduce
+external fragmentation by rounding allocations up to one of a few bin
+sizes.  The simplest scheme would round up to the next power of two,
+but experience shows that’s extremely wasteful: in the worst case, an
+allocation for \(k\) bytes can be rounded up to \(2k - 2\) bytes,
+for almost 100% space overhead!  Jemalloc further divides each
+power-of-two range into 4 bins, reducing the worst-case space overhead
+to 25%.</p>
+
+<p>This sub-power-of-two binning covers medium and large allocations.  We
+still have to deal with small ones: the ABI forces alignment on every
+allocation, regardless of their size, and we don’t want to have too
+many small bins (e.g., 1 byte, 2 bytes, 3 bytes, …, 8 bytes).
+Jemalloc adds another constraint: bins are always multiples of the
+allocation quantum (usually 16 bytes).</p>
+
+<p>The sequence for bin sizes thus looks like: 16, 32, 48, 64, 80, 96,
+112, 128, 160, 192, 224, 256, 320, 384, … (0 is special because malloc must
+either return NULL [bad for error checking] or treat it as a full
+blown allocation).</p>
+
+<p>I like to think of this sequence as a special initial range with 4
+linearly spaced subbins (0 to 63), followed by power-of-two ranges
+that are again split in 4 subbins (i.e., almost logarithmic binning).
+There are thus two parameters: the size of the initial linear range,
+and the number of subbins per range.  We’re working with integers, so
+we also know that the linear range is at least as large as the number
+of subbins (it’s hard to subdivide 8 integers in 16 bins).</p>
+
+<p>Assuming both parameters are powers of two, we can find the bucket for
+any value with only a couple x86 instructions, and no conditional jump or
+lookup in memory.  That’s a lot simpler than jemalloc’s
+implementation; if you’re into Java,
+<a href="http://hdrhistogram.org/">HdrHistogram</a>’s binning code is nearly
+identical to mine.</p>
+
+<h2 id="common-lisp-my-favourite-programmers-calculator">Common Lisp: my favourite programmer’s calculator</h2>
+
+<p>As always when working with bits, I first doodled in SLIME/SBCL: CL’s
+bit manipulation functions are more expressive than C’s, and a
+REPL helps exploration.</p>
+
+<p>Let <code>linear</code> be the \(\log\sb{2}\) of the linear range, and <code>subbin</code>
+the \(\log\sb{2}\) of the number of subbin per range, with 
+<code>linear &gt;= subbin</code>.</p>
+
+<p>The key idea is that we can easily find the power of two range (with a
+<code>BSR</code>), and that we can determine the subbin in that range by shifting
+the value right to only keep its <code>subbin</code> most significant (nonzero)
+bits.</p>
+
+<p>I clearly need something like \(\lfloor\log\sb{2} x\rfloor\):</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"lb.lisp" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">lb</span> <span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">1-</span> <span class="p">(</span><span class="nb">integer-length</span> <span class="nv">x</span><span class="p">)))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>I’ll also want to treat values smaller than <code>2**linear</code> as
+though they were about <code>2**linear</code> in size.  We’ll do that with</p>
+
+<pre><code>n-bits := (lb (logior x (ash 1 linear))) === (max linear (lb x))
+</code></pre>
+
+<p>We now want to shift away all but the top <code>subbin</code> bits of <code>x</code></p>
+
+<pre><code>shift := (- n-bits subbin)
+sub-index := (ash x (- shift))
+</code></pre>
+
+<p>For a memory allocator, the problem is that the last rightward shift
+rounds <em>down</em>!  Let’s add a small mask to round things up:</p>
+
+<pre><code>mask := (ldb (byte shift 0) -1) ; that's `shift` 1 bits
+rounded := (+ x mask)
+sub-index := (ash rounded (- shift))
+</code></pre>
+
+<p>We have the top <code>subbin</code> bits (after rounding) in <code>sub-index</code>.  We
+only need to find the range index</p>
+
+<pre><code>range := (- n-bits linear) ; n-bits &gt;= linear
+</code></pre>
+
+<p>Finally, we combine these two together by shifting <code>index</code> by
+<code>subbin</code> bits</p>
+
+<pre><code>index := (+ (ash range subbin) sub-index)
+</code></pre>
+
+<p>Extra! Extra! We can also find the maximum value for the bin with</p>
+
+<pre><code>size := (logandc2 rounded mask)
+</code></pre>
+
+<p>Assembling all this yields</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"bucket.lisp" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">bucket</span> <span class="p">(</span><span class="nv">x</span> <span class="nv">linear</span> <span class="nv">subbin</span><span class="p">)</span>
+</span><span class="line">  <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">n-bits</span> <span class="p">(</span><span class="nv">lb</span> <span class="p">(</span><span class="nb">logior</span> <span class="nv">x</span> <span class="p">(</span><span class="nb">ash</span> <span class="mi">1</span> <span class="nv">linear</span><span class="p">))))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">shift</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n-bits</span> <span class="nv">subbin</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">mask</span> <span class="p">(</span><span class="nb">ldb</span> <span class="p">(</span><span class="nb">byte</span> <span class="nv">shift</span> <span class="mi">0</span><span class="p">)</span> <span class="mi">-1</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">rounded</span> <span class="p">(</span><span class="nb">+</span> <span class="nv">x</span> <span class="nv">mask</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">sub-index</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">rounded</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">shift</span><span class="p">)))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">range</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n-bits</span> <span class="nv">linear</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">index</span> <span class="p">(</span><span class="nb">+</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">range</span> <span class="nv">subbin</span><span class="p">)</span> <span class="nv">sub-index</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">size</span> <span class="p">(</span><span class="nb">logandc2</span> <span class="nv">rounded</span> <span class="nv">mask</span><span class="p">)))</span>
+</span><span class="line">    <span class="p">(</span><span class="nb">values</span> <span class="nv">index</span> <span class="nv">size</span><span class="p">)))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Let’s look at what happens when we want \(2\sp{2} = 4\) subbin per
+range, and a linear progression over \([0, 2\sp{4} = 16)\).</p>
+
+<pre><code>CL-USER&gt; (bucket 0 4 2)
+0 ; 0 gets bucket 0 and rounds up to 0
+0
+CL-USER&gt; (bucket 1 4 2)
+1 ; 1 gets bucket 1 and rounds up to 4
+4
+CL-USER&gt; (bucket 4 4 2)
+1 ; so does 4
+4
+CL-USER&gt; (bucket 5 4 2)
+2 ; 5 gets the next bucket
+8
+CL-USER&gt; (bucket 9 4 2)
+3
+12
+CL-USER&gt; (bucket 15 4 2)
+4
+16
+CL-USER&gt; (bucket 17 4 2)
+5
+20
+CL-USER&gt; (bucket 34 4 2)
+9
+40
+</code></pre>
+
+<p>The sequence is exactly what we want: 0, 4, 8, 12, 16, 20, 24, 28, 32, 40, 48, …!</p>
+
+<p>The function is marginally simpler if we can round down instead of up.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"bucket-down.lisp" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">bucket-down</span> <span class="p">(</span><span class="nv">x</span> <span class="nv">linear</span> <span class="nv">subbin</span><span class="p">)</span>
+</span><span class="line">  <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">n-bits</span> <span class="p">(</span><span class="nv">lb</span> <span class="p">(</span><span class="nb">logior</span> <span class="nv">x</span> <span class="p">(</span><span class="nb">ash</span> <span class="mi">1</span> <span class="nv">linear</span><span class="p">))))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">shift</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n-bits</span> <span class="nv">subbin</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">sub-index</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">x</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">shift</span><span class="p">)))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">range</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n-bits</span> <span class="nv">linear</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">index</span> <span class="p">(</span><span class="nb">+</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">range</span> <span class="nv">subbin</span><span class="p">)</span> <span class="nv">sub-index</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">size</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">sub-index</span> <span class="nv">shift</span><span class="p">)))</span>
+</span><span class="line">     <span class="p">(</span><span class="nb">values</span> <span class="nv">index</span> <span class="nv">size</span><span class="p">)))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<pre><code>CL-USER&gt; (bucket-down 0 4 2)
+0 ; 0 still gets the 0th bucket 
+0 ; and rounds down to 0
+CL-USER&gt; (bucket-down 1 4 2)
+0 ; but now so does 1
+0
+CL-USER&gt; (bucket-down 3 4 2)
+0 ; and 3
+0
+CL-USER&gt; (bucket-down 4 4 2)
+1 ; 4 gets its bucket
+4
+CL-USER&gt; (bucket-down 7 4 2)
+1 ; and 7 shares it
+4
+CL-USER&gt; (bucket-down 15 4 2)
+3 ; 15 gets the 3rd bucket for [12, 15]
+12
+CL-USER&gt; (bucket-down 16 4 2)
+4
+16
+CL-USER&gt; (bucket-down 17 4 2)
+4
+16
+CL-USER&gt; (bucket-down 34 4 2)
+8
+32
+</code></pre>
+
+<p>That’s the same sequence of bucket sizes, but rounded down in size
+instead of up.</p>
+
+<h2 id="the-same-in-gcc">The same, in GCC</h2>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"bin.c" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">unsigned</span> <span class="kt">int</span>
+</span><span class="line"><span class="nf">lb</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">x</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="cm">/* I need an extension just for integer-length (: */</span>
+</span><span class="line">        <span class="k">return</span> <span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span> <span class="kt">long</span><span class="p">)</span> <span class="o">*</span> <span class="n">CHAR_BIT</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="n">__builtin_clzll</span><span class="p">(</span><span class="n">x</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/*</span>
+</span><span class="line"><span class="cm"> * The following isn&#39;t exactly copy/pasted, so there might be</span>
+</span><span class="line"><span class="cm"> * transcription bugs.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">size_t</span>
+</span><span class="line"><span class="nf">bin_of</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">size</span><span class="p">,</span> <span class="kt">size_t</span> <span class="o">*</span><span class="n">rounded_size</span><span class="p">,</span>
+</span><span class="line">    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">linear</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">subbin</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">size_t</span> <span class="n">mask</span><span class="p">,</span> <span class="n">range</span><span class="p">,</span> <span class="n">rounded</span><span class="p">,</span> <span class="n">sub_index</span><span class="p">;</span>
+</span><span class="line">        <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">n_bits</span><span class="p">,</span> <span class="n">shift</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">n_bits</span> <span class="o">=</span> <span class="n">lb</span><span class="p">(</span><span class="n">size</span> <span class="o">|</span> <span class="p">(</span><span class="mi">1ULL</span> <span class="o">&lt;&lt;</span> <span class="n">linear</span><span class="p">));</span>
+</span><span class="line">        <span class="n">shift</span> <span class="o">=</span> <span class="n">n_bits</span> <span class="o">-</span> <span class="n">subbin</span><span class="p">;</span>
+</span><span class="line">        <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1ULL</span> <span class="o">&lt;&lt;</span> <span class="n">shift</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rounded</span> <span class="o">=</span> <span class="n">size</span> <span class="o">+</span> <span class="n">mask</span><span class="p">;</span> <span class="cm">/* XXX: overflow. */</span>
+</span><span class="line">        <span class="n">sub_index</span> <span class="o">=</span> <span class="n">rounded</span> <span class="o">&gt;&gt;</span> <span class="n">shift</span><span class="p">;</span>
+</span><span class="line">        <span class="n">range</span> <span class="o">=</span> <span class="n">n_bits</span> <span class="o">-</span> <span class="n">linear</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="o">*</span><span class="n">rounded_size</span> <span class="o">=</span> <span class="n">rounded</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">mask</span><span class="p">;</span>
+</span><span class="line">        <span class="k">return</span> <span class="p">(</span><span class="n">range</span> <span class="o">&lt;&lt;</span> <span class="n">subbin</span><span class="p">)</span> <span class="o">+</span> <span class="n">sub_index</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">size_t</span>
+</span><span class="line"><span class="nf">bin_down_of</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">size</span><span class="p">,</span> <span class="kt">size_t</span> <span class="o">*</span><span class="n">rounded_size</span><span class="p">,</span>
+</span><span class="line">    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">linear</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">subbin</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">size_t</span> <span class="n">range</span><span class="p">,</span> <span class="n">sub_index</span><span class="p">;</span>
+</span><span class="line">        <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">n_bits</span><span class="p">,</span> <span class="n">shift</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">n_bits</span> <span class="o">=</span> <span class="n">lb</span><span class="p">(</span><span class="n">size</span> <span class="o">|</span> <span class="p">(</span><span class="mi">1ULL</span> <span class="o">&lt;&lt;</span> <span class="n">linear</span><span class="p">));</span>
+</span><span class="line">        <span class="n">shift</span> <span class="o">=</span> <span class="n">n_bits</span> <span class="o">-</span> <span class="n">subbin</span><span class="p">;</span>
+</span><span class="line">        <span class="n">sub_index</span> <span class="o">=</span> <span class="n">size</span> <span class="o">&gt;&gt;</span> <span class="n">shift</span><span class="p">;</span>
+</span><span class="line">        <span class="n">range</span> <span class="o">=</span> <span class="n">n_bits</span> <span class="o">-</span> <span class="n">linear</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="o">*</span><span class="n">rounded_size</span> <span class="o">=</span> <span class="n">sub_index</span> <span class="o">&lt;&lt;</span> <span class="n">shift</span><span class="p">;</span>
+</span><span class="line">        <span class="k">return</span> <span class="p">(</span><span class="n">range</span> <span class="o">&lt;&lt;</span> <span class="n">subbin</span><span class="p">)</span> <span class="o">+</span> <span class="n">sub_index</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h2 id="whats-it-good-for">What’s it good for?</h2>
+
+<p>I first implementated this code to mimic’s jemalloc binning scheme: in
+a memory allocator, a linear-logarithmic sequence give us
+alignment and bounded space overhead (bounded internal fragmentation),
+while keeping the number of size classes down (controlling external
+fragmentation).</p>
+
+<p><a href="http://hdrhistogram.org/">High dynamic range histograms</a> use the same
+class of sequences to bound the relative error introduced by binning,
+even when recording latencies that vary between microseconds and
+hours.</p>
+
+<p>I’m currently considering this binning strategy to handle a large
+number of timeout events, when an exact priority queue is overkill.  A
+timer wheel would work, but tuning memory usage is annoying.  Instead
+of going for a hashed or hierarchical timer wheel, I’m thinking of
+binning events by timeout, with one FIFO per bin: events may
+be late, but never by more than, e.g., 10% their timeout.  I also
+don’t really care about sub millisecond precision, but wish to treat
+zero specially; that’s all taken care of by the “round up” linear-log
+binning code.</p>
+
+<p>In general, if you ever think to yourself that dispatching on the
+bitwidth of a number would mostly work, except that you need more
+granularity for large values, and perhaps less for small ones,
+linear-logarithmic binning sequences may be useful.  They let you tune
+the granularity at both ends, and we know how to round values and map
+them to bins with simple functions that compile to fast and compact
+code!</p>
+
+<p>P.S. If a chip out there has fast int-&gt;FP conversion and slow bit
+scans(!?), there’s another approach: convert the integer to FP,
+scale by, e.g., \(1.0 / 16\), add 1, and shift/mask to extract
+the bottom of the exponent and the top of the significand.  That’s not
+slow, but unlikely to be faster than a bit scan and a couple
+shifts/masks.</p>
+</div>
+  
+  
+
+
+    </article>
+  
+  <div class="pagination">
+    
+      <a class="prev" href="/posts/17">&larr; Older</a>
+    
+    <a href="/Blog/archives">Blog Archives</a>
+    
+    <a class="next" href="/posts/15">Newer &rarr;</a>
+    
+  </div>
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2020 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>

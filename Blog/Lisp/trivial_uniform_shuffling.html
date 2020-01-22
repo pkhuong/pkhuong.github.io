@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Trivial uniform shuffling - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Sat, 05 Apr 2008</h2>
+<div class="entry">
+  <a id="trivial_uniform_shuffling" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Trivial uniform shuffling</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>Leslie Polzer suggested this short and simple code to randomly shuffle
+a sequence:</p>
+
+<pre class="example">
+(defun seqrnd (seq)
+  &quot;Randomize the elements of a sequence. Destructive on SEQ.&quot;
+  (sort seq #'&gt; :key (lambda (x) (random 1.0))))
+</pre>
+
+<p>Associating a random key with the values to shuffle, and sorting on
+these keys works well, as long as there aren't too many items
+(otherwise, there are birthday paradox issues with the finite
+mantissa). Unfortunately, quoting the CLHS on <code>SORT</code>: &quot;There is no
+guarantee on the number of times the key will be called.&quot; In
+particular, the key may be called once/element/comparison; it should
+probably be (nearly) referentially transparent.</p>
+
+<p>In this case, calling the key for each comparison reduces the above to
+sorting with a random comparison predicate, which is known to not
+yield an uniform distribution. For example, in a typical quicksort,
+the probability of displacing one of the first elements of an <code>n</code> element
+sequence to its end is in <code>1/2^n</code>, not <code>1/n</code>. This is not a purely
+hypothetical issue: SBCL's <code>SORT</code> calls key for each comparison, as do
+some other implementations, I'm sure. Considering the common case for
+key functions (reader functions), the decision makes sense.</p>
+
+<p>So, to actually associate a <em>single</em> random key to each element,
+something like this could be used:</p>
+
+<pre class="example">
+(defun random-shuffle (sequence)
+  (map-into sequence #'car
+            (sort (map 'vector (lambda (x)
+                                 (cons x (random 1d0)))
+                       sequence)
+                  #'&lt; :key #'cdr)))
+</pre>
+
+    </div>
+<p>
+  posted at: 19:00 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/trivial_uniform_shuffling.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

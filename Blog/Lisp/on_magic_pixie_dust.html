@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>On Magic Pixie Dust - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Sun, 06 Apr 2008</h2>
+<div class="entry">
+  <a id="on_magic_pixie_dust" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>On Magic Pixie Dust</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p><a class="image-link" href="http://xkcd.com/386/">
+<img src="http://imgs.xkcd.com/comics/duty_calls.png" 
+     alt="Someone is *wrong* on the internet"></img></a></p>
+
+<p>(Thank you xkcd)</p>
+
+<p>Common Lisp isn't one of them scripting languages in which lists have
+O(1) random dereferencing or arrays O(1) insertion at both ends, but
+it's still possible to forget about invisible costs.</p>
+
+<p>Still on the topic of random shuffling, <a href="http://blog.viridian-project.de/2008/04/06/sequence-shuffling-revisited/">Leslie Polzer</a> lists three
+alternatives, and suggests another, one that feels like a &quot;Good
+Solution&quot;. Unfortunately, the only one not to work is the latter.</p>
+
+<p>It seems to me the best solution is the one that looks the worst to
+some. Fisher-Yates is a nice, simple shuffling algorithm. It could
+have been cuter, but I don't see what's wrong with imperative code.</p>
+
+<pre class="example">
+(defun fisher-yates (sequence)
+  (let ((vector (coerce sequence 'vector)))
+    (loop for i downfrom (1- (length vector)) to 0
+          do (rotatef (aref vector i)
+                      (aref vector (random (1+ i)))))
+    (replace sequence vector)))
+</pre>
+
+<p>The other sort-based solutions also work, except the final cleverer
+one that uses memoisation. It <em>looks</em> good. Unfortunately, it's not
+thread-safe and, contrary to the advertisement, it conses (probably
+more so than the other implementations). Worse, it doesn't work.</p>
+
+<p>It's obviously not thread-safe, since each call to <code>seqrnd</code>
+reinitialises the global memoisation table. A better solution would
+use dynamic scoping instead of assignment. If the code isn't meant to
+be used in a threaded environment, then <code>CLRHASH</code> would probably be a
+better idea.</p>
+
+<p>Generic memoisation is often based on a hash table. Such a table must
+save the key-value association somewhere. It needs at least two words
+for the key and the value. Usually, the overhead is greater than that,
+for various implementation-level reasons. Compare that to the
+solutions that sort a sequence of conses: with a vector, the space
+overhead's usually a bit more than 3 words/value (4 for a
+list). Specialised data structures can often bring the cost down, by
+being lossy or using some attribute of the set of
+associations. Generic memoisation is a nice hack, but is often
+replaced by specialised code as development goes on.</p>
+
+<p>The shuffling code also does not work. A memoisation table will
+associate random numbers to values, not (initial) positions. If the
+sequence to shuffle contains the same element several times, all the
+references/copies will be bundled sequentially! For
+example, the list <code>(a a b b)</code> can only be shuffled two ways: <code>(a a b b)</code>
+or <code>(b b a a)</code>. There are also issues with numbers and characters, for
+which <code>EQ</code> is free to return <code>NIL</code> regardless of the arguments, but that's
+not exactly common.</p>
+
+<p>(Mis)Using existing code is a very good idea, especially for quick
+hacks or boilerplate that's only in the way of the essence of a
+project. However, it's still important to be aware of what's going on
+underneath it all. Excessive use of opaque magic leads to beautiful
+broken code.</p>
+
+<p>Extra! Extra! We can abuse CLISP's arbitrary precision floats to
+generate a lot of digits of Pi for us:</p>
+
+<pre class="example">
+[1]&gt; (setf (long-float-digits) 3500)
+3500
+[2]&gt; (* 4 (atan 1L0))
+3.14159265358979323846264338327950288419...
+</pre>
+
+    </div>
+<p>
+  posted at: 17:50 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/on_magic_pixie_dust.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

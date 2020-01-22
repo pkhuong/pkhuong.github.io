@@ -1,0 +1,17 @@
+digraph G {
+	rankdir=LR;
+	bgcolor=transparent;
+	n0 [label="0" shape=circle];
+	n1 [label="1" shape=circle];
+	nK [label="K" shape=square];
+	n8 [label="8" shape=circle];
+	n12 [label="12" shape=circle];
+	n13 [label="13" shape=doublecircle];
+	n0 -> n1 [label="&#97;"];
+	n1 -> nK [label="&#98;"];
+	nK -> nK [label="&#101;"];
+	nK -> n8 [label="&#99;"];
+	n8 -> nK [label="&#100;"];
+	nK -> n12 [label="&#102;"];
+	n12 -> n13 [label="&#103;"];
+}

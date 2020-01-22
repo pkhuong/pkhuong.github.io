@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>SBCL's flow sensitive analysis pass - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Tue, 21 Jun 2011</h2>
+<div class="entry">
+  <a id="flow_sensitive_analysis_in_sbcl" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>SBCL's flow sensitive analysis pass</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">As I noted <a href="http://www.pvk.ca/Blog/Lisp/constraint-sets.html">a year and a half ago</a>, the constraint propagation pass in SBCL can slow
+compilation down a lot (<a href="https://bugs.launchpad.net/bugs/394206">lp#394206</a>, <a href="https://bugs.launchpad.net/bugs/792363">lp#792363</a>). To a large extent, I feel like that
+issue has been fixed in HEAD, but the lack of documentation on that pass made
+progress slower than it could have been. So, this post is a half-organised version of
+my notes, before I forget it all.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>What constraint propagation does</h3>
+<!--l. 22--><p style="text-indent:0em">The constraint propagation pass is executed as part of the <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/main.lisp;h=84bfea7f25b3b33eee7be2a52a564de46e168c8d;hb=HEAD#l469">IR1 optimisation loop</a>,
+which operates on Lisp-level basic blocks. It&#8217;s only concerned with propagating
+information between &#8220;real&#8221; variables (<a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l1095">LAMBDA-VARiable</a>), variables that have a
+name and can be set and referred to multiple times, as opposed to temporaries
+(<a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l58">LVARs</a>).
+</p><!--l. 31--><p style="text-indent:1.5em">   The distinction is useful because there are (usually) much fewer full-blown
+variables than temporaries, and only the former directly benefit from exploiting
+previously executed type checks and predicates to deduct information (flow
+sensitivity).
+</p><!--l. 36--><p style="text-indent:1.5em">   Instead of handling all the operation found in basic blocks, constraint propagation
+only consider a few key operations, and otherwise exploits the type information
+previously derived in a bottom-up manner (i.e. propagating the types of arguments
+to result types) by the other IR1 passes. The latter, inversely, only have access to the
+results of constraint propagation through the type derived for each <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l1177">REFerence</a> to a
+lambda-var.
+</p><!--l. 46--><p style="text-indent:1.5em">   So, constraint propagation goes through each basic block, updating its state (set
+of known true constraints) when it encounters <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l1289">BIND</a> nodes (LET bindings, more or
+less), references to a lambda-var, <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l1322">CAST</a> nodes ([usually] checked type assertions),
+<a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/node.lisp;h=69bc2959197ca7ea5446a233580923e72f9324b4;hb=HEAD#l1218">CSET</a> nodes (assignment), or branches on a few key predicates (EQL, <em style="font-style:italic">&lt;</em>, <em style="font-style:italic">&gt; </em>or
+TYPEP, mostly).
+</p><!--l. 56--><p style="text-indent:1.5em">   As would be expected, the state at the end of each basic block is propagated to its
+successors, join points take the intersection of their precedessors&#8217; states, and entry
+points are initialised with empty states... and this is all executed iteratively until
+convergence.
+</p><!--l. 62--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>What constraint propagation isn&#8217;t</h3>
+<!--l. 63--><p style="text-indent:0em">It <em style="font-style:italic">feels </em>a lot like an abstract interpretation algorithm. However, a major difference is
+that constraint propagation doesn&#8217;t converge on a <em style="font-style:italic">least </em>fixed point. Take the
+following trivial example:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">CL-USER&gt; (lambda () 
+           (let ((x 0.0)) 
+             (dotimes (i 10 x) 
+               (setf x (/ x 2.0))))) 
+#&lt;FUNCTION (LAMBDA ()) {10048E20C9}&gt; 
+CL-USER&gt; (sb-kernel:%simple-fun-type *) 
+(FUNCTION NIL (VALUES NUMBER &amp;OPTIONAL))</pre>
+<!--l. 76--><p style="text-indent:0em">
+</p><!--l. 78--><p style="text-indent:1.5em">   It&#8217;s obvious to us that <code style="font-family:monospace">X </code>will always be a single float. Unfortunately, while SBCL&#8217;s
+type analyses converge to a fixed point, they&#8217;re not always seeded with an
+underapproximation of a least fixed point.
+</p><!--l. 83--><p style="text-indent:1.5em">   When there are assignments to a variable, the type of that variable is initialised
+with its declared type (T if none), and, after that initial type has been used to
+derive the type of the values that could be assigned to it, the union of these
+types is taken (and of the initially bound value). In the example above,
+the return type of <code style="font-family:monospace">(/ [T] [single-float]) </code>is <code style="font-family:monospace">NUMBER</code>. Once we have an
+over-approximation of the least fixed point, we shouldn&#8217;t expect to tighten it back
+much.
+</p><!--l. 92--><p style="text-indent:1.5em">   In a proper abstract interpretation pass, <code style="font-family:monospace">X </code>would be initialised with the bottom
+type or the singleton type <code style="font-family:monospace">(EQL 0.0) </code>(or some approximation thereof), and
+iteratively widened with the derived type of the division and of its initialisation
+value, up to convergence. That would easily deduce that <code style="font-family:monospace">X </code>is always 0.0, or, at least,
+a single-float.
+</p><!--l. 99--><p style="text-indent:1.5em">   It&#8217;s also not like any SSA variant. Yes, <a href="http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.3.6773">Continuation-passing Style is equivalent to
+Static single assignment form</a>. One key part of that equivalence is that both styles
+rename variables at join points (via arguments to the continuation or phi functions).
+IR1 does mention continuations, but these continuations don&#8217;t perform the essential
+renaming of variables. That is the very reason why we have to use constraint sets
+to represent what we know about a variable&#8217;s contents <em style="font-style:italic">at a given program</em>
+<em style="font-style:italic">point</em>.
+</p><!--l. 109--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-30003"></a>How constraint propagation does it</h3>
+<!--l. 110--><p style="text-indent:0em">
+</p>
+                                                                  
+
+                                                                  
+   <h4><span>3.1   </span> <a id="x1-40003.1"></a>Constraints</h4>
+<!--l. 111--><p style="text-indent:0em">At the heart of the pass are constraint sets (<a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l134">CONSETs</a>) that are updated as the
+analysis walks through a basic block. Each <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l56">constraint</a> in a conset represent a small
+fact that is known to be true about a given lambda-var: that its contents are (or are
+not) of a certain type, are greater or less than values of a given type, EQL to a
+constant, or EQL to another variable.
+</p><!--l. 120--><p style="text-indent:1.5em">   As a pun, EQL constraint can also link a lambda-var and an lvar: as combinations
+(function calls) work with lvars, these special constraints are used to translate
+information about a combination&#8217;s arguments to information about lambda-vars
+(which is what constraint propagation handles).
+</p><!--l. 126--><p style="text-indent:1.5em">   EQL constraints are special. When two variables are EQL, it&#8217;s essential for good
+performance to extend that EQLness to all the variables that are EQL to either of
+them (i.e. compute the transitive closure of the EQL relation). This is useful because,
+when something is true of a variable (e.g. it&#8217;s TYPEP FIXNUM), it&#8217;s also true of all
+the variables EQL to it.
+</p><!--l. 133--><p style="text-indent:1.5em">   However, we only do that for one of the operands in a non-EQL constraint
+between variables, and not at all for EQL constraints involving constants (overly
+eager constant propagation can hurt since our codegen doesn&#8217;t handle repeated
+references to constraints that well) or lvars (these aren&#8217;t really constraints, but rather
+pure bookkeeping information punned as constraints).
+</p><!--l. 140--><p style="text-indent:0em">
+</p>
+   <h4><span>3.2   </span> <a id="x1-50003.2"></a>Propagation</h4>
+<!--l. 141--><p style="text-indent:0em">To begin propagation, entry points are initialised with empty constraint sets (we
+know nothing about the inputs), and the consets are updated by walking down the
+basic blocks in execution order, in <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l915">CONSTRAINT-PROPAGATE-IN-BLOCK</a>:
+</p>
+     <ul><li>BIND nodes represent things like LET bindings. If we have a useful (more
+     precise than T) type for the bound value, the new variable is (currently)
+     of that type. Also, if the bound value is a lambda-var&#8217;s current value, then
+     the newly introduced variable is EQL to it.
+     </li>
+     <li>REF nodes are references to a lambda-var. The LVAR that receives that
+     value is EQL to the lambda-var. Additionally, if we&#8217;re on the last iteration,
+     it&#8217;s useful to store all that we know about the referenced variable at that
+     program point for other IR1 passes to exploit.
+     </li>
+     <li>CAST nodes are type checks. If the check fails, execution will not continue,
+     so we can simply assume that the check is successful, and propagate the
+     type to the lambda-var at the end of the chain of casts (if any).
+                                                                  
+
+                                                                  
+     </li>
+     <li>CSET nodes represent assignments. The most important thing to do is
+     forget all that is known about the assigned variable at that program point:
+     after the assignment, it&#8217;s bound to a brand new value. Still, before that,
+     if we want a lot of propagation, it&#8217;s useful to propagate some information
+     that&#8217;s always true of that variable to EQL nodes. For now, it only makes
+     sense to propagate the fact that, if the assigned variable is known to always
+     be of a given type, all the variables that are currently EQL to it are
+     also of that type. Then, as with bind nodes, it&#8217;s useful sense to add type
+     constraints from the new value, and to add EQL constraints if applicable.</li></ul><!--l. 174--><p style="text-indent:1.5em">   Finally, if the block ends with a conditional branch, it&#8217;s useful to look at the
+predicate guiding the branch to propagate different constraints to the consequent and
+alternative successors.
+</p><!--l. 178--><p style="text-indent:1.5em">   If the predicate is simply a reference to a variable, then it&#8217;s known to be NIL in
+the alternative, and something else in the consequent.
+</p><!--l. 181--><p style="text-indent:1.5em">   If it&#8217;s a function call, only a few functions are interpreted: </p>
+     <ul><li>TYPEP-like  functions  result  in  constraints  to  the  effect  that  a  given
+     lambda-var is or is not of a given type.
+     </li>
+     <li>EQ and EQL result in additional EQL constraints (between variables, or
+     to a constant) in the consequent, and the reverse constraints (not EQL)
+     in the alternative
+     </li>
+     <li><em style="font-style:italic">&lt; </em>and <em style="font-style:italic">&gt; </em>are used to derive tighter bounds on numeric types. However,
+     we do not track relationships between variables (except for EQLity and
+     non-EQLity), and only note that a given variable is less or greater than a
+     value of some type.
+     </li>
+     <li>A  few  other  type  predicates  also  result  in  TYPEP  constraints,  when
+     specially marked for the compiler.</li></ul><!--l. 196--><p style="text-indent:1.5em">   Once a basic block has been constraint propagated through, the information is
+used by its successors. Basic blocks are processed in such an order that at least one of
+its predecessors have been propagated through before itself. The analysis is run with
+an initial conset made of the intersection of the consets (that have already been
+computed) at the end of its predecessors, taking care to use the right one if some
+predecessor ends in a conditional branch (<a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l1051">COMPUTE-BLOCK-IN</a>). And, that&#8217;s
+repeated on blocks for which the initial conset might have changed until we hit a
+fixed point.
+</p><!--l. 207--><p style="text-indent:1.5em">   Once that&#8217;s done, we&#8217;re only interested in storing all the flow-sensitive
+information we have about each variable in the relevant REFerences to it. So,
+constraint propagation is executed one last time (otherwise we only have the consets
+                                                                  
+
+                                                                  
+at the beginning and end of each basic block), and, when a ref node is encountered,
+the set of constraints related to the referenced variables is extracted and converted
+into a type, in <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l803">CONSTRAIN-REF-TYPE</a>.
+</p><!--l. 216--><p style="text-indent:0em">
+</p>
+   <h3><span>4   </span> <a id="x1-60004"></a>What&#8217;s been and what could be done</h3>
+<!--l. 217--><p style="text-indent:0em">We currently represent consets as bitsets. Without too much surprise, the only
+operation that is horrible with bitsets is iterating through the members of a given set.
+Fortunately, we only used this in a few functions, and it seems like bitsets are still the
+best option, when supplemented with a few indices.
+</p><!--l. 223--><p style="text-indent:1.5em">   The heaviest timesink was <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD#l292">FIND-CONSTRAINT</a>: constraints are hash-consed so
+that equivalent constraints are always EQ. It used to be we&#8217;d perform a linear
+search over the set of constraints associated with a given variable to find
+constraints. We now use hash tables in each variable to speed the search
+up.
+</p><!--l. 230--><p style="text-indent:1.5em">   The other major slowdowns were related to functions that need to iterate through
+the intersection of the current set of constraints and certain subsets of the constraints
+associated with a given variable (e.g. all the EQL constraints for a given variable in
+the current constraint set). Instead of iterating through the intersection of two
+bitvectors, we represent each subset of the constraints associated with each variable
+as vectors of constraints (the hash-consing step already ensures there won&#8217;t be any
+duplicate). Now, we only have to iterate through these vectors and check for
+membership in a bitset.
+</p><!--l. 240--><p style="text-indent:1.5em">   These simple changes are enough to bring compile times for a couple test cases
+down from hundreds of seconds to a few seconds or less.
+</p><!--l. 243--><p style="text-indent:1.5em">   There are definitely more low-hanging fruits in this area, be it for more precise
+analyses (converging to a proper least fixed point), stronger interaction with the rest
+of the IR1 passes or quicker compilation. Hopefully, this post can serve as
+a high level guide to would-be <a href="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git;a=blob;f=src/compiler/constraint.lisp;h=5056510d55b4756b01c393820dce424557bf928a;hb=HEAD"><code style="font-family:monospace">src/compiler/constraint.lisp</code></a> hackers.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 15:45 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/flow_sensitive_analysis_in_sbcl.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

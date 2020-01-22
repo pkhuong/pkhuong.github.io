@@ -1,0 +1,7 @@
+digraph {
+  rankdir="LR";
+
+  "X (source)" -> "S (skip every other)" -> "F";
+  "X (source)" -> "F";
+  "F" -> "output";
+}

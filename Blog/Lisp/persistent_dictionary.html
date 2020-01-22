@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>An Impure Persistent Dictionary - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Thu, 15 May 2008</h2>
+<div class="entry">
+  <a id="persistent_dictionary" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>An Impure Persistent Dictionary</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>A persistent data structure is one in which it is possible to revert
+to previous versions of the structure. A simple way to achieve that is
+simply to always work with copies when modifying values. More commonly
+and realistically, purely functional variants are used. There is then
+no need for bulk copying; only local rewriting. Old data is never
+overwritten, but rather implicitly not referenced by updated
+versions.</p>
+
+<p>For tree-like structures with small nodes, there often is a
+straightforward purely functional variant. However, for large flat
+structures such as arrays, things aren't as obvious. With some
+cleverness, one can find alternative ways that are not pure, but still
+persistent, without having to fully copy old versions either (which
+could be considered pure, modulo linearity). A classic (and
+unfortunately little known) approach is described in Baker's
+&quot;<a href="http://home.pipeline.com/~hbaker1/ShallowArrays.html">Shallow Binding Makes Functional Arrays Fast</a>&quot;.</p>
+
+<p>Shallow binding is a technique that was originally developed to
+implement dynamic scoping.  It is in some ways the dual of the natural
+technique of deep binding, in which bindings are stored in an alist
+(or, rather, an associative stack, since bindings are only pushed and
+popped). In deep binding, creating a new a binding is simple (constant
+time), but lookups must traverse the alist to find a match.  In
+shallow binding, the &quot;associative stack&quot; is used to store not the new
+binding, but the previous value of that binding. Active (current,
+non-shadowed) bindings are stored in a flat array, in which each
+symbol is uniquely allocated a known index. Thus shadowing is still in
+O(1), but lookups are now also done in constant time! (A disadvantage
+is that switching contexts, e.g. between green threads, isn't in O(1)
+as in deep binding.)</p>
+
+<p>As Baker points out, the technique of using a side-effectful data
+structure and logging enough information to reverse the side-effects
+can also be used for persistent arrays or, here, dictionaries.</p>
+
+<p>The simple cases are accesses to the latest version.  Reading from the
+latest version simply queries the associated hash table directly.
+Writing to the latest version creates a new version, in which the
+overwritten key-value association is saved, and updates the hash
+table.</p>
+
+<p>The interesting case is when older versions are accessed.  The
+approach suggested by Baker &quot;reroots&quot; the tree of versions (one vertex
+per version): the tree is rewritten as though the version we want to
+access was the latest.  In order to do that, each version points to
+the <em>next</em> version (not the previous, parent, version).  It makes sense
+to point to (at most) a single child version because we reroot before
+writing: each time we create a new child version from an old parent
+version, rerooting to the parent ensures that the latter has no child
+(until one is created).  Note that since versions point to newer ones,
+old unreferenced versions are not artificially kept alive by
+references from newer versions.</p>
+
+<p>Rerooting can be executed in two phases. First, reverse the
+single-linked list that begins at the version to which we wish to
+reroot and ends at the very latest version. To make these changes
+globally visible, the in-place reversal algorithm should be
+used. Second, walk the reversed list to undo the changes; these
+undoings themselves should be logged in place of the previous undo
+information.</p>
+
+<p>Thus, with persistent tables represented by structures such as</p>
+
+<pre class="example">
+(defstruct ptable
+  (key        +unbound+
+              :read-only t)
+  (prev-value +unbound+)
+  (next       (make-hash-table))) ; either the *child* ptable
+                                  ; or the backing hash table
+</pre>
+
+<p>the reversal can be done with the classic algorithm</p>
+
+<pre class="example">
+(defun reverse-ptable-list (ptable-list)
+  (declare (type ptable ptable-list)
+           (optimize speed))
+  (labels ((inner (list next)
+             (if (ptable-p list)
+                 (inner (shiftf (ptable-next list) next)
+                        list)
+                 (values next list))))
+    (multiple-value-bind (reversed-list terminal)
+        (inner ptable-list ptable-list)
+      (setf (ptable-next ptable-list) terminal)
+      (values reversed-list terminal))))
+</pre>
+
+<p>and the undoing pass with a simple traversal (<code>table-value</code> is pretty
+much like <code>gethash</code>, but associates values of <code>+unbound+</code> to absent
+entries)</p>
+
+<pre class="example">
+(defun undo-changes (change-list table)
+  (declare (type ptable change-list)
+           (type hash-table table)
+           (optimize speed))
+  (do ((change change-list next)
+       (next   (ptable-next change-list)
+               (ptable-next next)))
+      ((not (ptable-p next))
+       table)
+    (rotatef (ptable-prev-value change)
+             (table-value table
+                          (ptable-key change)))))
+</pre>
+
+<p>Finally reroot becomes a very short</p>
+
+<pre class="example">
+(defun reroot (ptable)
+  (declare (type ptable ptable))
+  (when (ptable-p (ptable-next ptable)) ; fast-path the
+    (multiple-value-call #'undo-changes ; pre-rooted case
+      (reverse-ptable-list ptable)))
+  ptable)
+</pre>
+
+<p><code>reroot</code> lets us reduce any case to the trivial case. A read can simply
+<code>reroot</code> the persistent table that is read, and then access the
+associated hash table (<code>ptable-next</code>).  A write may reroot the ptable to
+update, record the previous value in a new ptable node, update the
+associated hash table, and set the <code>next</code> slot of the updated ptable to
+the new ptable and that of the new ptable to the hash table.</p>
+
+<p>This logging approach has the significant advantage of being mostly
+generic (the only specialised part is the representation of undo
+information) and of passing most of the coding and algorithmic
+complexity to a normal side-effectful data structure. Such data
+structures have been extensively studied for decades, unlike purely
+functional ones, which currently represent a sensibly smaller
+niche. It is likely that the regular (side-effectful) structure uses
+simpler and more efficient algorithms than the closest purely
+functional alternative. In an impure language like Common Lisp, the
+former is also more likely to have already been implemented, either in
+a library or by the implementation.</p>
+
+<p>For example, on SBCL 1.0 (FreeBSD/1.8 GHz O265), inserting all the
+integers from <code>0</code> to <code>2^20</code> in an <code>eql</code> hash table takes 1.128 seconds
+(0.204 sec of GC) and conses 165 MB.  Wrapping an identical hash table
+in a shallow binding scheme to make it persistent makes that go to
+4.362 seconds (2.89 sec of GC) while consing 215 MB. Reads take almost
+twice as much time in the persistent version (but still very
+little). While hash table performance has greatly improved in newer
+versions of SBCL, that should only make the relative difference for
+writes even greater. It is easy to see that most of it is due to
+additional GC pressure.</p>
+
+<p>Unfortunately, there are limits to the amount of allocation/GC
+overhead that can be shaved from the persistent version (in the
+general case): enough information to recover any arbitrary version
+must be preserved!  Ideally, linearity (single reference count) would
+be exploited to reuse storage implicitly instead of allocating a fresh
+ptable while rendering another one dead.  Barring that, however, it
+seems likely that a good part of the overhead on writes for the
+shallow binding version is simply due to the nigh unavoidable need to
+preserve more information (and thus allocate more memory) for
+persistence.  That much (all, when only the latest version is
+referenced) of that information is short-lived is a good thing: it
+means that the space overhead is within a constant factor of the
+original data structure.  Moreover, that is exactly the sort of
+workloads generational GCs are designed to exploit.</p>
+
+<p>It may be possible to design a purely functional data structure with
+the same complexity on reads and writes as hash tables or the
+persistent hash tables described above.  However, rarely is anything
+free.  In some ways, it seems to me that one must often pay for the
+implicit O(1) version switch of purely functional data structures with
+additional complexity in other operations.</p>
+
+<p>There are some issues with the naive technique described here.  The
+current data structure isn't thread safe, nor is it obvious how to
+make it so.  I believe it is be possible to achieve thread-safety by
+associating a lock with the hash table.  Whenever one wishes to
+operate (reroot or update) on a backing hash table or associated
+ptable nodes, the lock must be taken.  That leaves the problem of
+&quot;ping-ponging&quot; between versions.  If a program alternatively
+operates between two versions of the hash table that are far apart,
+the constant rerooting will tend to dominate times.  A common way to
+address that is to introduce a probability of making a copy of the hash
+table (instead of rerooting back and forth) at each reroot.  To keep
+(amortised) constant time writes and reads, the probability of making
+a copy should be inversely proportional to the number of entries in
+the hash table.</p>
+
+<p>The barely tested source code used to perform the measurements may be
+found at <a href="http://www.discontinuity.info/~pkhuong/persistent-table.lisp">http://www.discontinuity.info/~pkhuong/persistent-table.lisp</a>.
+As usual, it is distributed under a modified BSD license.</p>
+
+    </div>
+<p>
+  posted at: 22:34 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/persistent_dictionary.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

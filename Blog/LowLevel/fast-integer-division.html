@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Fast Constant Integer Division - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Tue, 23 Oct 2007</h2>
+<div class="entry">
+  <a id="fast-integer-division" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Fast Constant Integer Division</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>Integer division (and its kissing cousins, remainder and modulo) is an
+operation that regularly pops up in surprising places. The first time
+I encountered the problem was a few years ago, when I wanted to
+implement a corewar VM in SBCL (probably my first attempt at a real
+project in CL). My program was much slower than I would have expected:
+constant MOD were compiled to actual divisions. More recently, I hit
+the same problem when trying to implement hash functions and PRNGs
+efficiently. The main technique to make such operation decently fast
+approximates division by a multiplication and a shift (in other words,
+multiplication by a fraction). However, there are other tricks in more
+restricted situations that can sometimes yield simpler code.</p>
+
+<p>Expressing division as a multiplication is actually simple when you
+think of it in terms of fractions. Division (and then truncation) by <code>x</code>
+is like multiplication by <code>1/x</code>. Since the only type of division we can
+easily express is division by a power of 2, we want to approximate
+multiplication by <code>1/x</code> with a multiplication by <code>y/2^k</code>. Moreover, since
+the result will be truncated, we want to overapproximate (in absolute
+value) the fraction. We thus find (for <code>x</code> positive) the folklore
+formula <code>y = ceiling(2^k/x)</code> (or <code>1 + floor(2^k/x)</code>,
+which suffers from an off-by-one when <code>x</code> is a power of 2). Note that
+since the multiplier is rounded up, any error will be one of
+overapproximation. If the sign of the input is known (or the range
+otherwise asymetric), it is possible to use a small additive constant
+to bring the result of the multiplication closer to 0 before dividing
+and taking the floor (with a shift), and reduce the overapproximation.</p>
+
+<p>In <a href="http://www.discontinuity.info/~pkhuong/pseudoinverse.pdf">http://www.discontinuity.info/~pkhuong/pseudoinverse.pdf</a>, we find a
+nice way to figure out the smallest <code>z</code> such that <code>floor(z/x)</code> is
+different from <code>floor(z*y/2^k)</code>. If the input is known to fit in the
+range (which is often on the order of machine ints), then it is
+possible to convert integer division to multiplication. Unfortunately,
+this doesn't even consider the possibility of a (constant) additive
+fixup between multiplication and division/flooring.</p>
+
+<p>When implementing this on a machine that offers <code>BxB -&gt; B, B</code>
+multiplication (e.g., <code>32x32 -&gt; 32, 32</code> on IA32, or <code>64x64 -&gt; 64, 64</code> on
+x86-64), or even just the most significant half (like Itanium or
+Alpha), there are two main interesting values for <code>k</code> (as in <code>y/2^k</code>): <code>B</code>
+and <code>B + floor(lg x)</code>. If we take <code>k = B</code>, then we can simply
+use the most significant word as an implicitly shifted value. If that
+isn't precise enough, then <code>B + floor(lg x)</code> is the largest denominator
+such that <code>y</code> (skipping leading zeros) will fit in <code>B</code> bits; the result
+must however then be shifted. In both cases, but especially when
+shifting, it is essential to ensure that the result won't overflow
+the space available in the significant half of the product. When a
+machine offers many multiplication sizes, it can be useful to try
+smaller ones first: wider multiplications are sometimes slower, and
+larger constant always take up more space.</p>
+
+<p>Sometimes, we're only interested in the remainder (MOD is slightly
+more complex and can be expressed in terms of REM). In the general
+case, it is impossible to avoid a division, or at least a
+multiplication by a pseudoinverse, followed by a multiplication and a
+subtraction. However, when the input range is restricted, some nice
+tricks are available. It's much simpler to assume that the input is
+always positive (or always negative). Doing otherwise requires a
+non-trivial amount of mask generation and subsequent masking, making
+the tricks less attractive.</p>
+
+<p>Apart from powers of 2, the most obvious trick is when we want <code>(rem z
+x)</code>, where <code>z</code> is known to be smaller than <code>2x</code>. We can express <code>x</code> as
+<code>2^n - e</code>. We have <code>(rem z x) = z</code> if <code>z &lt; x</code>, and
+<code>(rem z x) = z-x</code> otherwise. It would be simple to compare,
+generate a mask and do a masked subtraction. However, when <code>z + e</code>
+might overflow (and <code>n</code> is the width of the register), a simple way to
+check for that is to add <code>e</code> to <code>z</code>. If the result is greater than <code>2^n -
+1</code>, <code>z &gt;= x</code> (but we still have <code>z &lt; 2^(n+1)</code>). Luckily, the
+implicit wrap around (masking off everything but the lower <code>n</code> bits) is
+enough to subtract <code>x</code> (remember that <code>e</code> was previously added, so
+subtracting <code>2^n</code> really subtracts <code>x</code>). If <code>z &lt; x</code> (the
+overflow bit isn't set), then we have to subtract <code>e</code> back. This logic can
+easily be expressed with a masked subtraction.</p>
+
+<p>A slightly more widely applicable trick is also based on representing
+the modulo <code>x</code> as <code>2^k - e</code>. We can split <code>z</code> in 2 (or more) parts: <code>z
+= z1 2^k + z0</code>. Thus <code>(rem z x) = (rem (z1 e + z0) x)</code>.
+If the product <code>z1 e</code> is small enough, we can then use the previous
+trick instead of computing the remainder the usual way (it would be
+possible to recurse). By adding <code>e</code> to <code>z1 e</code> and then adding that to <code>z0</code>
+we can guarantee that any overflow will only happen in the last
+addition, thus making it possible to easily use hardware flags.</p>
+
+<p>Official SBCL should be able to express some of these tricks (at the
+very least reciprocal multiplication) some time soon. The neat thing
+about optimising divisions away is that they're so expensive (on the
+order of 100-200 clock cycles on modern x86) that even branches are
+pretty much guaranteed to be an improvement, even in the worst case :)</p>
+
+    </div>
+<p>
+  posted at: 00:49 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/fast-integer-division.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

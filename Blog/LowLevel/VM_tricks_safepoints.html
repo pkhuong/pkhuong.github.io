@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Revisiting VM tricks for safepoints - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 06 Oct 2008</h2>
+<div class="entry">
+  <a id="VM_tricks_safepoints" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Revisiting VM tricks for safepoints</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>In February this year, Nathan Froyd described
+<a href="http://www.method-combination.net/blog/archives/2008/02/01/vm-tricks.html">allocation sequences in SBCL</a> and alternative approaches other
+implementations use to make sure the runtime never sees
+half-initialised objects.  At first sight, SBCL's sequence
+seems fairly large and slow for what, in the end, increments a
+thread-local pointer, even on x86-64, with its awesome 14 (RBP
+actually serves as a frame pointer in SBCL) GPRs:</p>
+
+<pre class="example">
+    Set the pseudo-atomic bit
+OR BYTE PTR [R12+160], 8
+
+    (what you'd expect for bump:) Load the allocation pointer
+MOV R11, [R12+80]
+    Test for overflow
+LEA RDX, [R11+16]
+CMP [R12+88], RDX
+    Jump to an out of line sequence
+JBE L4
+    Or save incremented pointer
+MOV [R12+80], RDX
+    ... and tag it
+LEA RDX, [R11+7]
+    (end of allocation per se)
+
+    Finally, unset the pseudo-atomic bit
+XOR BYTE PTR [R12+160], 8
+    Check for interrupt pending
+JEQ L2
+    Trigger a signal if so
+BREAK 9                    ;      pending interrupt trap
+L2: ...
+</pre>
+
+<p>That's two load/store and a test just to make sure we're not caught
+with our pants down, handling improperly initialised objects.</p>
+
+<p>One element of the alternatives is to actively check for pending
+interrupts (or GCs, etc).  Instead of allowing interruptions
+everywhere except around key sequences, interruptions are queued, and
+explicit checks inserted by the compiler. That seems like an
+interesting implementation choice, so I wanted to see what it'd look
+like in SBCL.</p>
+
+<p>It was pretty easy to adapt the compiler to insert such checks at
+appropriate locations (in the current case, at the end of each
+function' prologue, and at the head of loops).  Using memory
+protection to turn an access into a conditional interruption seemed
+like a good idea, and that's what I quickly implemented.</p>
+
+<p>These checks can be executed fairly often in tight loops, so it's
+important that they be very efficient.  The first version loaded a
+magic address from thread-local storage (an address pointed to by a
+register), and then wrote to that address.  When the thread had to be
+interrupted, the page containing that address was made unreadable and
+unwritable, so the last access triggered a segfault, which was then
+handled specially.</p>
+
+<p>The result was slow... 25% as much time as the original (signals-ful)
+version for a simple <code>(loop repeat n do [not cons])</code> function, and no
+difference for a consing loop.  Modifying the safepoint sequence to
+read from the magic address instead of writing to it halved the
+slowdown to ~10%, and did not improve the runtime of the consing
+loop.  That's still far from impressive.</p>
+
+<p>Executing two instructions at each safepoint seems obviously fishy.
+Indeed, things improved sensibly when the safepoint sequence became a
+single <code>TEST</code>, as in Nathan's example from HotSpot.  Instead of having
+to read an arbitrary address from the thread struct, I moved the
+&quot;magic page&quot; to a fixed offset from the thread structure.  The
+safepoint sequence then became a single instruction, <code>TEST EAX,
+[THREAD_STRUCT_REG + offset]</code> (a register is dedicated to thread-local
+storage).  That's a single instruction, reads from memory and does not
+clobber any register.  Unfortunately, that was only enough to bring
+the runtime for safepoints to the same level (+/- 1-2%) as that of the
+original code (it does save ~50 KB out of 40 MB on the x86-64 core
+:).</p>
+
+<p>I'm not sure how to explain the results, except by saying that x86-64
+(both Core 2 and K10) memory subsystems are awesome.  In any case,
+unless I was doing something extremely wrong, the current
+<code>XOR/XOR/JEQ/BREAK</code> sequence seems to perform well, even when compared
+to what other implementations (not constrained by any systems
+programming goal) do.  There still are reasons to look into a safe
+point system for SBCL (simpler to reason about, easier to avoid
+certain states, easier to manipulate where and when interruptions can
+happen, ...), but performance doesn't seem to be one of them.</p>
+
+    </div>
+<p>
+  posted at: 23:25 | <a href="http://www.pvk.ca/Blog/LowLevel" title="path">/LowLevel</a> | <a href="http://www.pvk.ca/Blog/LowLevel/VM_tricks_safepoints.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>The type-lower-bound branch - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 12 Apr 2010</h2>
+<div class="entry">
+  <a id="type_lower_bound" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>The type-lower-bound branch</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">Nikodemus was intrigued by the <a href="http://repo.or.cz/w/sbcl/pkhuong.git/shortlog/refs/heads/type-lower-bound">type-lower-bound</a> branch I pushed on <code style="font-family:monospace">repo.or.cz </code>a
+few weeks ago. It&#8217;s a convenience hack that wound up being slightly more intricate
+and interesting than planned: a user was complaining that there was no nice way to
+muffle <em style="font-style:italic">some </em>optimisation notes. Take
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(lambda (x) 
+  (declare (type integer x) 
+           (optimize speed)) 
+  (1+ x)) 
+ 
+; in: LAMBDA (X) 
+;     (1+ X) 
+; ==&gt; 
+;   (+ X 1) 
+; 
+; note: forced to do GENERIC-+ (cost 10) 
+;       unable to do inline fixnum arithmetic (cost 1) because: 
+;       The first argument is a INTEGER, not a FIXNUM. 
+;       The result is a (VALUES INTEGER &amp;OPTIONAL), not a (VALUES FIXNUM &amp;REST T). 
+;       unable to do inline fixnum arithmetic (cost 2) because: 
+;       The first argument is a INTEGER, not a FIXNUM. 
+;       The result is a (VALUES INTEGER &amp;OPTIONAL), not a (VALUES FIXNUM &amp;REST T). 
+;       etc.</pre>
+<!--l. 36--><p style="text-indent:0em">
+</p><!--l. 38--><p style="text-indent:1.5em">   If the user already knows that the best they can do is declare that <code style="font-family:monospace">x </code>is an
+<code style="font-family:monospace">integer</code>, there is no way to muffle only the notes that amount to wishing that the
+type of <code style="font-family:monospace">x </code>was more precisely known.
+</p><!--l. 43--><p style="text-indent:1.5em">   My first (failed) attempt tagged <em style="font-style:italic">variables </em>as hopeless (any note mentioning these
+variables&#8217; types would then be muffled). I forgot why I couldn&#8217;t make it
+work, but I believe it&#8217;s because invisible copies are very common, so that
+transforms manipulated <code style="font-family:monospace">lvar</code>s that were mere untagged copies of the tagged
+variable.
+</p><!--l. 49--><p style="text-indent:1.5em">   Luckily, we have a well-established mechanism to make properties flow across
+copies: the type (propagation) system. Again, my first attempt was to create a type
+for hopelessly vague types. However, types must implement all three set operations
+(negation, intersection and union), and making that work with such an ad hoc type
+wasn&#8217;t an attractive prospect.
+</p><!--l. 56--><p style="text-indent:1.5em">   This is where type <em style="font-style:italic">lower </em>bounds come in. In CL, types, as exposed through
+declarations, are always upper bounds: they are treated as conservative
+approximations of the set of values the annotated form, variable, etc. can take. The
+conservativeness is necessary because the exact static type is generally undecidable.
+In other words, the meaning of <code style="font-family:monospace">(the integer x) </code>is that <code style="font-family:monospace">x </code>can evaluate to
+any integer; it could actually only ever evaluate to a <code style="font-family:monospace">fixnum </code>(or any other
+subset of <code style="font-family:monospace">integer</code>s), which is what the note in the original example asks
+for.
+                                                                  
+
+                                                                  
+</p><!--l. 66--><p style="text-indent:1.5em">   If we had a way to also denote lower bounds (e.g. that <code style="font-family:monospace">x </code>can take <code style="font-family:monospace">(not fixnum)</code>
+values) on the exact static type of forms, compiler notes could be tested
+against these lower bounds to determine when the programmer knows that
+the declared or derived type cannot be improved enough for a transform
+to fire. In the original example, this would amount to declaring that <code style="font-family:monospace">x</code>&#8217;s
+exact static type is between <code style="font-family:monospace">fixnum </code>(exclusively) and <code style="font-family:monospace">integer </code>(inclusively),
+or, equivalently, that <code style="font-family:monospace">x </code>will always be an <code style="font-family:monospace">integer</code>, and will sometimes not
+be a <code style="font-family:monospace">fixnum</code>. The note is then obviously moot, and can be muffled by the
+compiler.
+</p><!--l. 77--><p style="text-indent:1.5em">   Unlike ad hoc &#8220;hopeless&#8221; types, intersection and union of lower bound types
+(really, range of types, since lower bound types are always accompanied by an upper
+bound) are straightforward and theoretically sound. The only issue is with type
+negation. Since this is all for convenience, I decided to just punt and drop the lower
+bound before negating.
+</p><!--l. 84--><p style="text-indent:1.5em">   The branch, as pushed on <code style="font-family:monospace">repo.or.cz</code>, seems to be working. In order to keep
+changes to a minimum, regular types are treated as having an implicit lower bound of
+<code style="font-family:monospace">nil</code>, and range types (with a non-trivial lower bound) are aggressively converted to
+regular types. This gives the muffling effect for some interesting simple cases, and
+reverts to the old behaviour very quickly. There are probably hidden bugs (both in
+the code and in the design), but since they could only be triggered by using the
+extension, I&#8217;m not <em style="font-style:italic">too </em>worried.
+</p>
+   <h3><a id="x1-1000"></a>N.B. This isn&#8217;t actually useful for compilation speed</h3>
+<!--l. 94--><p style="text-indent:0em">I originally thought type lower bounds could be useful to improve compilation speed:
+by keeping around both lower and upper bounds, we are able to overapproximate
+types even in the presence of type negation. Once I implemented a quick prototype,
+<a href="http://repo.or.cz/w/sbcl/pkhuong.git/shortlog/refs/heads/ir1-widening">ir1-widening</a>, I realised we don&#8217;t need lower bounds at all: we only have to make sure
+we only ever approximate types once we&#8217;re sure they&#8217;ll never be negated.
+Actually, what would be even more useful is a way to compute approximate
+unions and intersections quickly, instead of widening types after the fact.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 20:44 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/type_lower_bound.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

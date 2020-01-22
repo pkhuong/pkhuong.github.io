@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Concurrency with MVars - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Sat, 04 Dec 2010</h2>
+<div class="entry">
+  <a id="concurrency_with_mvars" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Concurrency with MVars</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em"><span style="font-size:90%">[Updated twice to improve readability on planet lisp, and again to remove some useless</span>
+<span style="font-size:90%">package qualifiers.]</span>
+</p><!--l. 14--><p style="text-indent:1.5em">   I originally intended to remind users of condition variables (waitqueues) in SBCL
+that <code style="font-family:monospace">condition-wait </code>can return spuriously. In other words, you&#8217;re likely misusing
+condition variables if your program isn&#8217;t correct with (basically) the following
+definition of <code style="font-family:monospace">condition-wait</code>:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun condition-wait (queue mutex) 
+  (declare (ignore queue)) 
+  (sb-thread:release-mutex mutex) 
+  ;; sleep and/or assume a fair mutex 
+  (sb-thread:get-mutex mutex))</pre>
+<!--l. 26--><p style="text-indent:0em">
+</p><!--l. 28--><p style="text-indent:1.5em">   One way to almost always use condition variables correctly is to insert calls to
+<code style="font-family:monospace">condition-wait </code>in a busy-polling loop. I was going to code up a rough example
+of how to do that for coroutines, but it seemed better to exploit MVars
+instead.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>MVars</h3>
+<!--l. 34--><p style="text-indent:0em">(The code for this section is available at <a href="http://discontinuity.info/~pkhuong/mvar.lisp">http://discontinuity.info/&#732;pkhuong/mvar.lisp</a>.)
+</p><!--l. 36--><p style="text-indent:1.5em">   The <a href="http://haskell.org/ghc/docs/6.12.2/html/libraries/base-4.2.0.1/Control-Concurrent-MVar.html">GHC docs</a> describe MVars as &#8220;(pronounced &#8221;em-var&#8221;) is a synchronising
+variable, used for communication between concurrent threads. It can be thought of as
+a a [sic] box, which may be empty or full.&#8221; Another way to see them is as bounded
+(one-element) message queues.
+</p><!--l. 42--><p style="text-indent:1.5em">   To use MVars, we need to be able to create one (<code style="font-family:monospace">make</code>), consume a value (<code style="font-family:monospace">take</code>)
+and put one in the queue (<code style="font-family:monospace">put</code>). It&#8217;s also useful to expose a type (<code style="font-family:monospace">mvar</code>) and a type
+test (<code style="font-family:monospace">mvar-p</code>).
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defpackage "MVAR" 
+    (:use "CL" "SB-THREAD") 
+  (:export "MVAR" "MVAR-P" "MAKE" "VALUE" "TAKE" "PUT")) 
+ 
+(in-package "MVAR")</pre>
+<!--l. 53--><p style="text-indent:0em">
+</p><!--l. 55--><p style="text-indent:1.5em">   To implement an MVar, we obviously need some way to denote emptyness, a
+mutable box, and a mutex to protect against concurrent accesses.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defconstant +empty+ &#8217;+empty+) 
+ 
+(defstruct (mvar 
+             (:constructor %make-mvar)) 
+  (mutex      (make-mutex)     :type mutex 
+   :read-only t) 
+  ;; signaled when reads are possible 
+  (read-cvar  (make-waitqueue) :type waitqueue 
+   :read-only t) 
+  ;; signaled when writes are possible 
+  (write-cvar (make-waitqueue) :type waitqueue 
+   :read-only t) 
+  (value  +empty+))</pre>
+<!--l. 72--><p style="text-indent:0em">
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun make (&amp;optional (value +empty+)) 
+  (%make-mvar :value value))</pre>
+<!--l. 77--><p style="text-indent:0em">
+</p><!--l. 79--><p style="text-indent:1.5em">   The two condition variables (waitqueues) are used to reduce busy-looping.
+It would also be possible to only have a single condition variable for both
+reads and writes, but that would result in even more spurious wake-ups.
+Instead, the code can use <code style="font-family:monospace">condition-notify </code>to only wake a single waiter at a
+time.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun take (mvar) 
+  (declare (type mvar mvar)) 
+  (let ((mutex (mvar-mutex mvar)) 
+        (cvar  (mvar-read-cvar mvar))) 
+    (with-mutex (mutex) 
+      (loop for value = (mvar-value mvar) 
+            do (cond ((eq value +empty+) 
+                      (condition-wait cvar mutex)) 
+                     (t 
+                      (setf (mvar-value mvar) +empty+) 
+                      (condition-notify (mvar-write-cvar mvar)) 
+                      (return value)))))))</pre>
+<!--l. 98--><p style="text-indent:0em">
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun put (mvar new-value) 
+  (declare (type mvar mvar)) 
+  (assert (not (eq new-value +empty+))) 
+  (let ((mutex (mvar-mutex mvar)) 
+        (cvar  (mvar-write-cvar mvar))) 
+    (with-mutex (mutex) 
+      (loop for value = (mvar-value mvar) 
+            do (cond ((eq value +empty+) 
+                      (setf (mvar-value mvar) new-value) 
+                      (condition-notify (mvar-read-cvar mvar)) 
+                      (return new-value)) 
+                     (t 
+                      (condition-wait cvar mutex)))))))</pre>
+<!--l. 114--><p style="text-indent:0em">
+</p><!--l. 116--><p style="text-indent:1.5em">   Finally, tiny <code style="font-family:monospace">setf </code>wrappers never hurt:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(declaim (inline value (setf value))) 
+(defun value (mvar) 
+  (take mvar)) 
+ 
+(defun (setf value) (value mvar) 
+  (put mvar value))</pre>
+<!--l. 124--><p style="text-indent:0em">
+</p><!--l. 126--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>Implementing coroutines with MVars</h3>
+<!--l. 127--><p style="text-indent:0em">(The code for this section is available at <a href="http://discontinuity.info/~pkhuong/coroutine.lisp">http://discontinuity.info/&#732;pkhuong/coroutine.lisp</a>.)
+</p><!--l. 129--><p style="text-indent:1.5em">   Coroutines are like functions, except that they allow multiple returns and (re-)
+entries. Users should be able to create coroutines (<code style="font-family:monospace">coroutine</code>), <code style="font-family:monospace">yield </code>values from
+coroutines, and grab the <code style="font-family:monospace">next </code>values from a coroutine.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defpackage "COROUTINE" 
+    (:use "CL" "SB-THREAD" "SB-EXT") 
+  (:export "COROUTINE" "YIELD" "NEXT" "+DEAD+")) 
+ 
+(in-package "COROUTINE")</pre>
+<!--l. 140--><p style="text-indent:0em">
+</p><!--l. 142--><p style="text-indent:1.5em">   To implement that, <code style="font-family:monospace">coroutine</code>s only need a thread and two <code style="font-family:monospace">mvar</code>, one for
+arguments and another for return values:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defstruct (coroutine 
+             (:constructor %make-coroutine (thread in out))) 
+  (thread nil :type thread    :read-only t) 
+  (in     nil :type mvar:mvar :read-only t) 
+  (out    nil :type mvar:mvar :read-only t))</pre>
+<!--l. 150--><p style="text-indent:0em">
+</p><!--l. 152--><p style="text-indent:1.5em">   <code style="font-family:monospace">next </code>simply has to <code style="font-family:monospace">put </code>fresh argument values, and <code style="font-family:monospace">take </code>return values:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun next (coroutine &amp;rest values) 
+  (mvar:put (coroutine-in coroutine) values) 
+  (values-list (mvar:take (coroutine-out coroutine))))</pre>
+<!--l. 159--><p style="text-indent:0em">
+</p><!--l. 161--><p style="text-indent:1.5em">   <code style="font-family:monospace">yield </code>shouldn&#8217;t be used outside coroutines, so it&#8217;s defined as a stub and a
+compiler macro:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun yield (&amp;rest values) 
+  (declare (ignore values)) 
+  (error "~S used outside ~S" &#8217;yield &#8217;coroutine)) 
+ 
+(define-compiler-macro yield (&amp;whole whole &amp;rest values) 
+  (declare (ignore values)) 
+  (warn "~S used outside ~S" &#8217;yield &#8217;coroutine) 
+  whole)</pre>
+<!--l. 172--><p style="text-indent:0em">
+</p><!--l. 174--><p style="text-indent:1.5em">   Finally, coroutines are just threads with a local <code style="font-family:monospace">yield </code>function.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defconstant +dead+ &#8217;+dead+) 
+ 
+(defmacro coroutine (&amp;body body) 
+  (let ((_in    (gensym "IN")) 
+        (_out   (gensym "OUT")) 
+        (_block (gensym "BLOCK"))) 
+    &#8216;(make-coroutine 
+      (lambda (,_in ,_out) 
+        "IN is the input MVAR and OUT the output MVAR." 
+        (lambda () 
+          (block ,_block 
+            (flet ((yield (&amp;rest values) 
+                     (mvar:put ,_out values) 
+                     (let ((in (mvar:take ,_in))) 
+                       (when (eq in +dead+) 
+                         (return-from ,_block)) 
+                       (values-list in)))) 
+              ;; signal that initialization is complete 
+              (yield) 
+              (locally 
+                  ,@body))) 
+          (mvar:put ,_out (list +dead+))))))) 
+ 
+(defun make-coroutine (builder) 
+  (let* ((in     (mvar:make)) 
+         (out    (mvar:make)) 
+         (thread (make-thread (funcall builder in out))) 
+         (coroutine (%make-coroutine thread in out))) 
+    ;; the coroutine thread and the finalizer don&#8217;t hold references 
+    ;; to the coroutine struct, so finalize isn&#8217;t useless. 
+    (finalize coroutine 
+              (lambda () 
+                (mvar:put in +dead+) 
+                (join-thread thread))) 
+    ;; return the coroutine and the first yielded values 
+    (multiple-value-call #&#8217;values 
+      coroutine 
+      (values-list (mvar:take out)))))</pre>
+<!--l. 215--><p style="text-indent:0em">
+                                                                  
+
+                                                                  
+</p><!--l. 217--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-30003"></a>Same-fringe with coroutines</h3>
+<!--l. 218--><p style="text-indent:0em">A classic toy application of coroutines (or, actually generators, since information only
+flows out of coroutines) is the same fringe problem. We can implement that by first
+enumerating the leaves of a cons tree:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun leaves (tree) 
+  (coroutine 
+    (labels ((walk (tree) 
+               (cond ((consp tree) 
+                      (walk (car tree)) 
+                      (walk (cdr tree))) 
+                     (t 
+                      (yield tree))))) 
+      (walk tree))))</pre>
+<!--l. 232--><p style="text-indent:0em">
+</p><!--l. 234--><p style="text-indent:1.5em">   Then, we only have to read the leaves from the input trees:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun same-fringe (tree1 tree2) 
+  (loop with leaves1 = (leaves tree1) 
+        with leaves2 = (leaves tree2) 
+        for leaf1 = (next leaves1) 
+        for leaf2 = (next leaves2) 
+        do 
+     (cond ((and (eq leaf1 +dead+) 
+                 (eq leaf2 +dead+)) 
+            (return t)) 
+           ((not (eql leaf1 leaf2)) 
+            (return nil)))))</pre>
+<!--l. 247--><p style="text-indent:0em"> </p> 
+
+
+    </div>
+<p>
+  posted at: 17:22 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/concurrency_with_mvars.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Specify absolute deadlines, not relative timeouts, part 2 - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Sun, 28 Aug 2011</h2>
+<div class="entry">
+  <a id="deadline-vs-timeout-part-2" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Specify absolute deadlines, not relative timeouts, part 2</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">In <a href="http://www.pvk.ca/Blog/Coding/deadline-vs-timeout.html">the last post</a>, I advocated the use and design of blocking interfaces based on
+deadlines rather than timeouts. I finally found the POSIX snippet that I was
+thinking of: it&#8217;s in the <a href="http://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_cond_wait.html#tag_03_518_08_02">specification for <code style="font-family:monospace">pthread_cond_timedwait</code></a>. The post also got
+me two very interesting comments.
+</p><!--l. 19--><p style="text-indent:1.5em">   One reader noted that they had had a lot more trouble understanding and fixing
+performance issues in a highly-threaded program when they used deadlines instead of
+timeouts. I suppose that using deadlines based on something like wallclock-time can
+introduce yet another variable in an already hard-to-understand system. In the end, I
+still feel that&#8217;s more than outweighed by the consistency with respect to the rest of
+the world, especially given that timeouts can be constructed so easily on top of
+deadlines.
+</p><!--l. 28--><p style="text-indent:1.5em">   Another raised an important issue: which time should our deadlines be based on?
+The regular system clock, like UTC time, is affected by many events like leap
+seconds, ntp drift, the user changing the time to fool Farmville, &#8230;. In fact, it&#8217;s not
+even guaranteed to be monotonic: the system time can be moved backward. (Bonus
+points if you can determine how hardware suspend should be detected and/or
+handled.)
+</p><!--l. 36--><p style="text-indent:1.5em">   Of course, timeouts share all issues regarding nonmonotonic clocks, but I suppose
+most of us don&#8217;t think about it. POSIX usually specifies that timeouts must ignore
+time adjustments, or at least, backward ones, and linux/glibc seem to mostly achieve
+that by using a monotonic clock; it&#8217;s not clear how a portable program can achieve
+the same effect, though.
+</p><!--l. 44--><p style="text-indent:1.5em">   <a href="http://blog.habets.pp.se/2010/09/gettimeofday-should-never-be-used-to-measure-time">This blog post</a> has an interesting overview of the issue, and a list of buggy
+programs and APIs that misuse wall-clock time.
+</p><!--l. 47--><p style="text-indent:1.5em">   The realtime POSIX extension includes a partial solution to this non-monotonic
+clock issue: <a href="http://pubs.opengroup.org/onlinepubs/7908799/xsh/clock_getres.html"><code style="font-family:monospace">clock_gettime</code></a>, along with <code style="font-family:monospace">CLOCK_MONOTONIC</code>, gives access to time values
+that never go backward. Unfortunately, that&#8217;s not always available (in particular, it&#8217;s
+absent on Solaris, OS X and Windows); the author of the previously-mentioned
+blog post also has <a href="https://github.com/ThomasHabets/monotonic_clock">a tiny portability wrapper</a> to provide such time values on
+POSIX platforms with <code style="font-family:monospace">CLOCK_MONOTONIC</code>, and on Solaris and OS X as well.
+Still, platforms without <code style="font-family:monospace">clock_gettime </code>don&#8217;t necessarily expose blocking
+calls with deadlines based on a monotonic clock either (e.g. OS X doesn&#8217;t
+have one for its Mach semaphores), so only having a sane clock isn&#8217;t <em style="font-style:italic">that</em>
+useful.
+</p><!--l. 62--><p style="text-indent:1.5em">   This isn&#8217;t only a theoretical or highly-improbable issue either; SBCL has had a
+bug caused by timeouts for quite a while. The internals include this function, which
+resumes <code style="font-family:monospace">nanosleep</code>ing when interrupted by signal handling.
+                                                                  
+
+                                                                  
+</p>
+   <pre id="verbatim-1" style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun nanosleep (secs nsecs) 
+  (with-alien ((req (struct timespec)) 
+               (rem (struct timespec))) 
+    (setf (slot req &#8217;tv-sec) secs 
+          (slot req &#8217;tv-nsec) nsecs) 
+    (loop while (and (eql sb!unix:eintr 
+                          (nth-value 1 
+                                     (int-syscall ("nanosleep" (* (struct timespec)) 
+                                                               (* (struct timespec))) 
+                                                  (addr req) (addr rem)))) 
+                     ;; KLUDGE: [...] 
+                     #!+darwin 
+                     (let ((rem-sec (slot rem &#8217;tv-sec)) 
+                           (rem-nsec (slot rem &#8217;tv-nsec))) 
+                       (when (or (&gt; secs rem-sec) 
+                                 (and (= secs rem-sec) (&gt;= nsecs rem-nsec))) 
+                         ;; Update for next round. 
+                         (setf secs  rem-sec 
+                               nsecs rem-nsec) 
+                         t))) 
+          do (setf (slot req &#8217;tv-sec) (slot rem &#8217;tv-sec) 
+                   (slot req &#8217;tv-nsec) (slot rem &#8217;tv-nsec)))))</pre>
+<!--l. 89--><p style="text-indent:0em">
+</p><!--l. 91--><p style="text-indent:1.5em">   On OS X, when <code style="font-family:monospace">nanosleep </code>is interrupted by a signal, the second argument is
+updated by computing the time remaining in the timeout, once the signal handler
+returns. Of course, that leads to an interesting situation when the subtracted time is
+greater than the time to <code style="font-family:monospace">nanosleep </code>for (e.g. a signal handler consumes two seconds
+before returning to a 1-second <code style="font-family:monospace">nanosleep</code>): the &#8220;remaining&#8221; timeout underflows into
+a very long timeout.
+</p><!--l. 99--><p style="text-indent:1.5em">   Other platforms only subtract the time elapsed from the execution of
+<code style="font-family:monospace">nanosleep </code>until the signal is received. At least, there&#8217;s never any underflow in
+the &#8220;remaining&#8221; timeout, but that value, while always sane, is still pretty
+much useless. If the loop is executed 5 times (i.e. <code style="font-family:monospace">nanosleep </code>is interrupted 5
+times), and each signal takes 1 second to handle, the function be 5 second
+late.
+</p><!--l. 106--><p style="text-indent:1.5em">   So, outside OS X, the &#8220;remaining&#8221; timeout computed by <code style="font-family:monospace">nanosleep </code>is subtly
+useless. On OS X, it&#8217;s only even more subtly useless: we have the same problem when
+a signal hits us between two calls to <code style="font-family:monospace">nanosleep</code>.
+</p><!--l. 111--><p style="text-indent:1.5em">   POSIX recommends the use of <a href="http://pubs.opengroup.org/onlinepubs/009695399/functions/clock_nanosleep.html"><code style="font-family:monospace">clock_nanosleep</code></a> if the issue above with
+interruptions matters. In addition to being based on a deadline rather than a
+timeout, it lets us specify which clock the deadline is based on. As usual, that&#8217;s not
+                                                                  
+
+                                                                  
+available everywhere, so we&#8217;ll likely be stuck with a hard-to-trigger race condition in
+<code style="font-family:monospace">SLEEP </code>on some platforms. </p> 
+
+
+    </div>
+<p>
+  posted at: 01:30 | <a href="http://www.pvk.ca/Blog/Coding" title="path">/Coding</a> | <a href="http://www.pvk.ca/Blog/Coding/deadline-vs-timeout-part-2.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

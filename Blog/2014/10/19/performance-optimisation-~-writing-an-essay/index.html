@@ -1,0 +1,522 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Performance tuning ~ writing an essay - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Performance tuning ~ writing an essay</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Oct
+  
+19th, 
+2014
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>&lt;a href=”#trust-no-one”“&gt;Skip to the meaty bits.&lt;/a&gt;</p>
+
+<p>My work at <a href="http://www.appnexus.com/">AppNexus</a> mostly involves
+performance optimisation, at any level from microarchitecture-driven
+improvements to data layout and assembly code to improving the
+responsiveness of our distributed system under load.  Technically,
+this is similar to what I was doing as a lone developer on
+research-grade programs.  However, the scale of our (constantly
+changing) code base and collaboration with a dozen other coders mean
+that I approach the task differently: e.g., rather than
+single-mindedly improving throughput <em>now</em>, I aim to pick an evolution
+path that improves throughput today without imposing too much of a
+burden on future development or fossilising ourselves in a design
+dead-end.  So, although numbers still don’t lie (hah), my current
+approach also calls for something like judgment and taste, as well as
+a fair bit of empathy for others.  Rare are the obviously correct
+choices, and, in that regard, determining what changes to make and
+which to discard as
+<a href="http://fun.irq.dk/funroll-loops.org/">over-the-top ricing</a> feels like
+I’m drafting a literary essay.</p>
+
+<p>This view is probably tainted by the fact that, between English and
+French classes, I spent something like half of my time in High School
+critiquing essays, writing essays, or preparing to write one.
+Initially, there was a striking difference between the two languages:
+English teachers had us begin with the five paragraph format where one
+presents multiple arguments for the same thesis, while French teachers
+imposed a thesis/antithesis/synthesis triad (and never really let it
+go until CÉGEP, but that’s another topic).  When I write that
+performance optimisation feels like drafting essays, I’m referring to
+the latter “Hegelian” process, where one exposes arguments and
+counterarguments alike in order to finally make a stronger case.</p>
+
+<p>I’ll stretch the analogy further.  Reading between the lines gives us
+access to more arguments, but it’s also easy to get the context wrong and
+come up with hilariously far-fetched interpretations.  When I try to
+understand a system’s performance, the most robust metrics treat the
+system as a black box: it’s hard to get throughput under production
+data wrong.  However, I need finer grained information (e.g.,
+performance counters, instruction-level profiling, or
+application-specific metrics) to guide my work, and, the more useful
+that information can be – like domain specific metrics that highlight
+what we could do differently rather than how to do the same thing more
+efficiently – the easier it is to measure incorrectly.  That’s not a
+cause for despair, but rather a fruitful line of skepticism that helps
+me find more opportunities.</p>
+
+<p>Just two weeks ago, questioning our application-specific metrics
+lead to an easy 10% improvement in throughput for our biggest
+consumer of CPU cycles.  The consumer is an application that
+determines whether internet advertising campaigns are eligible to bid
+on an ad slot, and if so, which creative (ad) to show and at what bid
+price.  For the longest time, the most time-consuming part of that
+process was the first step, testing for campaign eligibility.
+Consequently, we tracked the execution of that step precisely and
+worked hard to minimise the time spent on ineligible campaigns,
+without paying much attention to the rest of the pipeline.  However,
+we were clearly hitting diminishing returns in that area, so I asked
+myself how an adversary could use our statistics to mislead us.  The
+easiest way I could think of was to have campaigns that are eligible
+to bid, but without any creative compatible with the ad slot (e.g.,
+because it’s the wrong size or because the website forbids Flash ads):
+although the campaigns are technically eligible, they are unable to
+bid on the ad slot.  We added code to track these cases and found that
+almost half of our “eligible” campaigns simply had no creative in the
+right size.  Filtering these campaigns early proved to be a
+low-hanging fruit with an ideal code complexity:performance
+improvement ratio.</p>
+
+<h1 id="trust-no-one-not-even-performance-counters"><a href="#trust-no-one" name="trust-no-one">Trust no one, not even performance counters</a></h1>
+
+<p>I recently learned that we also had to second-guess instruction level
+profiles.  Contemporary x86oids are out of order, superscalar, and
+speculative machines, so profiles are always messy: “blame” is
+scattered around the real culprit, and some instructions (pipeline
+hazards like conditional jumps and uncached memory accesses, mostly)
+seem to account for more than their actual share.  What I never
+realised is that, in effect, some instructions systematically mislead
+and push their cycles to others.</p>
+
+<p>Some of our internal spinlocks use <code>mfence</code>.  I expected that to be
+suboptimal, since it’s
+<a href="https://blogs.oracle.com/dave/resource/NHM-Pipeline-Blog-V2.txt">common</a>
+<a href="http://shipilev.net/blog/2014/on-the-fence-with-dependencies/">knowledge</a>
+that <code>lock</code>ed instruction are more efficient barriers: serialising
+instructions like <code>mfence</code> have to affect streaming stores and other
+weakly ordered memory accesses, and that’s a lot more work than just
+preventing store/load reordering.  However, our profiles showed that
+we spent very little time on spinlocking so I never gave it much thought…
+until eliminating a set of spinlocks had a much better impact on
+performance than I would have expected from the profile.  Faced with
+this puzzle, I had to take a closer look at the way <code>mfence</code> and
+locked instructions affect hardware-assisted instruction profiles on
+our production Xeon E5s (Sandy Bridge).</p>
+
+<p>I came up with a simple synthetic microbenchmark to simulate locking
+on my E5-4617: the loop body is an adjustable set of memory accesses
+(reads and writes of out-of-TLB or uncached locations) or computations
+(divisions) bracketed by pairs of normal stores, <code>mfence</code>, or <code>lock
+inc/dec</code> to cached memory (I would replace the fences with an
+increment/decrement pair and it looks like all read-modify-write
+instructions are implemented similarly on Intel).  Comparing runtimes
+for normal stores with the other instructions helps us gauge their
+overhead.  I can then execute each version under <code>perf</code> and estimate
+the overhead from the instruction-level profile.  If <code>mfence</code> is
+indeed extra misleading, there should be a greater discrepancy between
+the empirical impact of the <code>mfence</code> pair and my estimate from the
+profile.</p>
+
+<p>You can find the
+<a href="/images/2014-10-19-performance-optimisation-~-writing-an-essay/fence.c">super crufty code here</a>,
+<a href="/images/2014-10-19-performance-optimisation-~-writing-an-essay/cycle.h">along with an <code>rdtscp</code> version of cycle.h</a>.</p>
+
+<p>With <code>lock</code>ed instructions and random reads that miss the L3 cache,
+the (cycle) profile for the microbenchmark loop is:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">$ perf annotate -s cache_misses
+</span><span class="line">[...]
+</span><span class="line">    0.06 :        4006b0:       and    %rdx,%r10
+</span><span class="line">    0.00 :        4006b3:       add    $0x1,%r9
+</span><span class="line">    ;; random (out of last level cache) read
+</span><span class="line">    0.00 :        4006b7:       mov    (%rsi,%r10,8),%rbp
+</span><span class="line">   30.37 :        4006bb:       mov    %rcx,%r10
+</span><span class="line">    ;; foo is cached, to simulate our internal lock
+</span><span class="line">    0.12 :        4006be:       mov    %r9,0x200fbb(%rip)        # 601680 &lt;foo&gt;
+</span><span class="line">    0.00 :        4006c5:       shl    $0x17,%r10
+</span><span class="line">    [... Skipping arithmetic with &lt; 1% weight in the profile]
+</span><span class="line">    ;; locked increment of an in-cache "lock" byte
+</span><span class="line">    1.00 :        4006e7:       lock incb 0x200d92(%rip)        # 601480 &lt;private+0x200&gt;
+</span><span class="line">   21.57 :        4006ee:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    ;; random out of cache read
+</span><span class="line">    0.00 :        400704:       xor    (%rsi,%r10,8),%rbp
+</span><span class="line">   21.99 :        400708:       xor    %r9,%r8
+</span><span class="line">    [...]
+</span><span class="line">    ;; locked in-cache decrement
+</span><span class="line">    0.00 :        400729:       lock decb 0x200d50(%rip)        # 601480 &lt;private+0x200&gt;
+</span><span class="line">   18.61 :        400730:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    0.92 :        400755:       jne    4006b0 &lt;cache_misses+0x30&gt;</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Looking at that profile, I’d estimate that the two random reads
+account for ~50% of runtime, and the pair of <code>lock inc/dec</code> for ~40%.</p>
+
+<p>The picture is completely different for <code>mfence</code>.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">$ perf annotate -s cache_misses
+</span><span class="line">[...]
+</span><span class="line">    0.00 :        4006b0:       and    %rdx,%r10
+</span><span class="line">    0.00 :        4006b3:       add    $0x1,%r9
+</span><span class="line">    ;; random read
+</span><span class="line">    0.00 :        4006b7:       mov    (%rsi,%r10,8),%rbp
+</span><span class="line">   42.04 :        4006bb:       mov    %rcx,%r10
+</span><span class="line">    ;; store to cached memory (lock word)
+</span><span class="line">    0.00 :        4006be:       mov    %r9,0x200fbb(%rip)        # 601680 &lt;foo&gt;
+</span><span class="line">    [...]
+</span><span class="line">    0.20 :        4006e7:       mfence 
+</span><span class="line">    5.26 :        4006ea:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    ;; random read
+</span><span class="line">    0.19 :        400700:       xor    (%rsi,%r10,8),%rbp
+</span><span class="line">   43.13 :        400704:       xor    %r9,%r8
+</span><span class="line">    [...]
+</span><span class="line">    0.00 :        400725:       mfence 
+</span><span class="line">    4.96 :        400728:       add    $0x1,%rax
+</span><span class="line">    0.92 :        40072c:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    0.36 :        40074d:       jne    4006b0 &lt;cache_misses+0x30&gt;</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>It looks like the loads from uncached memory represent ~85% of the
+runtime, while the <code>mfence</code> pair might account for <em>at most</em> ~15%, if
+I include all the noise from surrounding instructions.</p>
+
+<p>If I trusted the profile, I would worry about eliminating <code>lock</code>ed
+instructions, but not so much for <code>mfence</code>.  However, runtimes (in
+cycles), which is what I’m ultimately interested in, tell a different
+story.  The same loop of LLC load misses takes 2.81e9 cycles for 32M
+iterations without any atomic or fence, versus 3.66e9 for <code>lock
+inc/dec</code> and 19.60e9 cycles for <code>mfence</code>.  So, while the profile for
+the <code>mfence</code> loop would let me believe that only ~15% of the time is
+spent on synchronisation, the <code>mfence</code> pair really represents 86%
+\(((19.6 - 2.81) / 19.6)\) of the runtime for that loop!  Inversely,
+the profile for the <code>lock</code>ed pair would make me guess that we spend
+about 40% of the time there, but, according to the timings, the real
+figure is around 23%.</p>
+
+<p>The other tests all point to the same conclusion: the overhead of
+<code>mfence</code> is strongly underestimated by instruction level profiling,
+and that of <code>lock</code>ed instructions exaggerated, especially when
+adjacent instructions write to memory.</p>
+
+<pre><code>  setup     cycles   (est. overhead)  ~actual overhead
+
+div [ALU] (100 Mi iterations)
+ atomic: 20153782848   (20%)          ~ 3.8%
+ mfence: 28202315112   (25%)          ~31.3%
+vanilla: 19385020088
+
+Reads:
+
+TLB misses (64Mi iterations)
+ atomic:  3776164048   (80%)          ~39.3%
+ mfence: 12108883816   (50%)          ~81.1%
+vanilla:  2293219400 
+
+LLC misses (32Mi iterations)
+ atomic:  3661686632   (40%)          ~23.3%
+ mfence: 19596840824   (15%)          ~85.7%
+vanilla:  2807258536
+
+Writes:
+
+TLB (64Mi iterations)
+ atomic:  3864497496   (80%)          ~10.4%
+ mfence: 13860666388   (50%)          ~75.0%
+vanilla:  3461354848
+
+LLC (32Mi iterations)
+ atomic:  4023626584   (60%)          ~16.9%
+ mfence: 21425039912   (20%)          ~84.4%
+ vanilla: 3345564432
+</code></pre>
+
+<p>I can guess why we observe this effect; it’s not like Intel is
+intentionally messing with us.  <code>mfence</code> is a full pipeline flush: it
+slows code down because it waits for all in-flight instructions to
+complete their execution.  Thus, while it’s flushing that slows us
+down, the profiling machinery will attribute these cycles to the
+instructions that are being flushed.  Locked instructions instead
+affect stores that are still queued.  By forcing such stores to
+retire, locked instructions become responsible for the extra cycles
+and end up “paying” for writes that would have taken up time anyway.</p>
+
+<p>Losing faith in hardware profiling being remotely representative of
+reality makes me a sad panda; I now have to double check <code>perf</code>
+profiles when hunting for misleading metrics.  At least I can tell
+myself that knowing about this phenomenon helps us make better
+informed – if less definite – decisions and ferret out more easy
+wins.</p>
+
+<p>P.S., if you find this stuff interesting, feel free to send an email
+(pkhuong at $WORK.com).  My team is hiring both experienced developers
+and recent graduates (:</p>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Oct
+  
+19th, 
+2014
+
+
+
+
+      
+      
+
+<br><span class="categories">
+  In categories:
+  
+    appnexus
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/" title="Previous Post: Doodle: hybridising SBCL's GENCGC with mark and sweep">&laquo; Doodle: hybridising SBCL's GENCGC with mark and sweep</a>
+      
+      
+        <a class="basic-alignment right" href="/Blog/2015/01/13/lock-free-mutual-exclusion/" title="Next Post: Lock-free sequence locks">Lock-free sequence locks &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2020 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/';
+      this.page.title = 'Performance tuning ~ writing an essay';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>

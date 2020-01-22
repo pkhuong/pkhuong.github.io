@@ -1,0 +1,502 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Thu, 06 Sep 2007</h2>
+<div class="entry">
+  <a id="serialisable_closures_in_sbcl" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Hacking serialisable closures with SBCL</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>The key element in <a href="http://www.discontinuity.info/~pkhuong/common-cold/">Common Cold</a> was being able to generate
+serialisable closures without having to transform all the lexically
+enclosing code. To do that, I had to have access to two things:
+all the functions in the lexical environment &mdash; remember that CL is a
+Lisp-2, so even if <code>lambda</code> are serialisable, local functions won't
+benefit from that automatically (that would also be pretty bad for
+performance) &mdash; and all the variables in the enviroment (along with
+their values, at runtime).</p>
+
+<p>As would be expected, there is a list of all the lexical variable
+definitions (whether they're symbol-macros, lexical variables or
+dynamically scoped ones) in the lexical environment (lexenv)
+object. After all, most of that is needed for <code>macroexpand</code> to work
+correctly. As is logical, the innermost variables are at the
+head. Even better: SBCL's compiler seems to always store the
+information needed to inline local functions (in the lexenv), which
+is, luckily enough, more than enough to recover their source and their
+ordering. Some of that information is a bit hidden, however, since the
+goals of the compiler are different from ours. What is directly
+available in the lexenv object is a list of function 'nodes', with the
+most nested function(s) first. Note how there is no direct way to know
+how functions and variables are interleaved, or which functions were
+defined in the same <code>labels</code> or <code>flet</code> (this is not an issue for
+variables, since their value will already have been computed when
+we'll unserialise the closures).</p>
+
+<p>To recover that information, we can use the lexenv object associated
+with each function node. To group functions together, we simply have
+to detect when they close over the same set of functions.  Recursive
+functions (defined with <code>labels</code>) also close over themselves, while
+those defined with <code>flet</code> don't. Local macros are represented as
+closures, so there is no need to get their grouping right, only the
+ordering, which is implicit in the list of functions. Note that, since
+local functions must be defined where they are bound (CL is a Lisp-2),
+we know that simply getting this ordering and grouping right will be
+enough to rebuild the correct lexical environment.</p>
+
+<p>In order to know where each variable should be defined, we can, again,
+use the lexenv object associated with each function node to find the
+outermost (group of) function that closes over that variable. Now,
+we can easily generate a form that will have all the function/macros
+definition and variable binding/symbol macro definition forms nested
+in the right order to recreate the lexical environment. To bind the
+variables to the right values, the simplest way is to wrap the form
+in a lambda, and take the values as arguments (bound to gensymmed
+variables, otherwise there would be issues with variables that
+have the same names). There is also the issue of local macros: macro
+functions are stored as functions. Trying to store them in the form
+would be quite painful: no dumping to fasls, no easy way to share the
+data across processes, ... Instead, they are left in the form only to
+expand all the macros away with sb-walker, and then removed from the
+form. We can finally splice in whatever form we want inside all those
+definitions and bindings (before macroexpanding everything). Once we
+evaluate the complete form and pass it the values of the lexical
+variables, we will have the value of the spliced in form, evaluated
+inside a recreation of the lexical environment represented by the
+lexenv object.</p>
+
+<p>That still leaves the question of how to get the values of the
+variables. Naively, since we have access to all the variables' names, it
+seems like we could just generate a form to create a list of all the
+variables' values. That dies when lexical scope is used to have two
+variables with the same name. We also cannot only capture the value of
+innermost variable of each name: the values are needed for surrounding
+local functions. The solution that I found is to make sure I get a
+fresh lexenv, side effect it to associate all the variable objects
+with fresh names, and create the list inside that new environment.</p>
+
+<p>In <a href="http://www.discontinuity.info/~pkhuong/common-cold/closures.lisp">slightly more than 400 LOC</a>, this gives us a generic way to evaluate
+forms in serialisable lexical environments, and thus serialisable
+closures, and a global registry to unserialise these closures (and to
+detect nearly duplicate unserialisers, which may happen with nested
+serialisable closures, or serialisable closures inside local functions
+that surround another serialisable closure, although that blow-up is,
+at most, quadratic in the number of environment serialising forms).</p>
+
+    </div>
+<p>
+  posted at: 00:00 | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold" title="path">/Lisp/CommonCold</a> | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold/serialisable_closures_in_sbcl.html">permalink</a>
+</p>
+  </div>
+</div>
+<h2>Mon, 25 Jun 2007</h2>
+<div class="entry">
+  <a id="common_cold_special_forms" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Common Cold's special forms</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>The central element in serialising continuations are serialisable
+closures. They are created by the macros <code>slambda</code> (serialisable lambda)
+and <code>sfunction</code> (serialisable function), which can be used exactly like
+the <code>lambda</code> and <code>function</code> special forms, except that <code>slambda</code> may not be
+the <code>car</code> of an expression (or inside a <code>function</code> form), and that
+<code>sfunction</code> can only be given a function's name as argument. These macros
+will globally register the information needed to serialise and
+deserialise the closures at compile-time, in a serialisable format.</p>
+
+<p>For example, a serialisable adder could be created this way</p>
+
+<pre class="example">
+(defun make-adder (inc)
+  (flet ((adder (x)
+           (+ x inc)))
+    (sfunction adder)))
+</pre>
+or that way
+
+<pre class="example">
+(defun make-adder (inc)
+  (slambda (x)
+    (+ x inc)))
+</pre>
+
+<p>Note that there is no need to annotate local variables or
+functions. Highly unportable environment access is used to regenerate
+information about the lexical scope surrounding an <code>slambda</code> or <code>sfunction</code>
+form. Unfortunately, it means that it may also interact badly with
+codewalked extensions.</p>
+
+<p>Something close to Administrative-Normal Form (ANF, or monadic style)
+is then used to expose enough structure to macros for them to be able
+to easily save continuations. <code>(bind (var val) expr)</code> binds the
+value of <code>val</code> to <code>var</code> in <code>expr</code>, adding <code>expr</code> to <code>val</code>'s
+continuation. <code>dbind</code> is the same thing, but binds to <em>special</em>
+(dynamically scoped) variables instead of lexical ones. This is enough
+to make explicit the order in which operations will be executed, which
+is exactly what is needed to implement continuations. There is no need
+for a monadic <code>return</code>: we use dynamically scoped constructs (<code>catch</code> and
+<code>throw</code>), so values need not be wrapped specially.</p>
+
+<p>ANF is much less painful to use than CPS, but it's still far from
+ideal. Common Cold offers several macros to emulate common CL values
+binding forms. Instead of <code>let*</code>, one should use <code>mlet*</code> (to bind to
+lexical variables) or <code>mdlet*</code> (to bind to special variables). For
+example:</p>
+
+<pre class="example">
+(mlet* ((x (get-x))
+        (y (get-y))
+        (dist (sqrt (+ (* x x)
+                       (* y y)))))
+  (fn dist))
+</pre>
+or, if we want <code>fn</code> to have access to <code>x</code> and <code>y</code> as special variables:
+
+<pre class="example">
+(mdlet* ((*x* (get-x))
+         (*y* (get-y)))
+  (fn (sqrt (+ (* *x* *x*)
+               (* *y* *y*)))))
+</pre>
+
+<p>Note that normal CL lexical binding forms (e.g., <code>let</code> or <code>let*</code>) may be
+freely mixed with CC's forms, as long as the execution of the value
+expressions (<code>(get-x)</code>, <code>(get-y)</code>, ... here) does not capture
+continuations. CL <em>dynamic</em> binding forms (e.g. with <code>(declare (special...))</code>),
+however, should only be used when the execution of both the value
+expressions and the body of the forms (the dynamic extent of the
+bindings) does not capture continuations. <code>mlet</code> (for lexical bindings)
+and <code>mdlet</code> (for dynamic ones) offer a behaviour like that of CL's <code>let</code>,
+where the bindings are only established once all the bound values have
+been computed.</p>
+
+<p>Creating serialisable closures and continuations establishes copies of
+the lexical bindings. Assignment to lexical variables is thus not
+recommended, at least not when <code>slambda</code> or <code>sfunction</code> forms are in the
+lexical scope, or continuation-capturing code in the dynamic
+scope. Dynamic bindings, on the other hand, are linked to the dynamic
+environment, and not to continuation frames or closures. Thus, it makes
+sense to capture them with the rest of the dynamic environment &mdash; at
+least, as much of it &mdash; in continuations. Capturing continuations will
+also save (copy) the values of all the bindings at the time of the
+capture, so assignment to special variables is meaningful... without
+continuations making it harder to reason about them.</p>
+
+<p>Common Lisp's non-local exit forms (e.g., <code>throw</code> or <code>tagbody</code>) all have a
+dynamic extent, which means they are useless after the capture and
+later invocation of a continuation. Common Cold duplicates some of
+these forms in order to be able to restore them when invoking
+continuations. <code>mcatch</code> may be used exactly like <code>catch</code>, returning to it
+with a normal <code>throw</code>. <code>mblock</code> (which, like <code>block</code>, establishes a lexical
+non-local exit environment), on the other hand, must be matched with
+<code>mreturn-from</code> or <code>mreturn</code> (which act like <code>return-from</code> and
+<code>return</code>). Returning to a CL <code>block</code> with <code>mreturn-from</code>, or to an <code>mblock</code>
+with <code>return-from</code> will result in erroneous code. Fortunately, they are
+lexically scoped constructs, so using them correctly should be easy
+(checkable locally).</p>
+
+<p>Finally, to execute several operations in sequence, one should use
+<code>mprogn</code>, which acts like <code>progn</code>. However, most of the special forms
+above have implicit <code>mprogn</code> (when their CL counterparts have implicit
+<code>progn</code>).</p>
+
+    </div>
+<p>
+  posted at: 00:00 | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold" title="path">/Lisp/CommonCold</a> | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold/common_cold_special_forms.html">permalink</a>
+</p>
+  </div>
+</div>
+<div class="entry">
+  <a id="details_on_serialisation_closures_continuations" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Details on the serialisation of closures and continuations</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>Closures are serialised by saving information about their lexical
+environment at compile-time, and the values of the variables they
+close over at runtime. More accurately, the fully macroexpanded
+(another possible conflict with codewalked extensions) <em>source</em>
+of a function that will reconstruct the complete lexical environment
+of the closure, given the values of closed variables, and then
+recreate the closure in that environment, is generated. That source is
+compiled lazily, when needed, while the server is running. While this
+should increase the speed at which programs are compiled, it can be
+undesirable. <code>(ensure-all-builders)</code> will compile, in advance, all the
+deserialising functions.</p>
+
+<p>Note that, in order to save space, lexical environments that are
+identical modulo the equivalence of uninterned symbols are considered
+equivalent. In any case, using uninterned symbols for equality
+(as opposed to lexical variables or function) is a bad idea, since
+their identity is not preserved by a <code>print -&gt; read</code> round-trip. While
+using <code>symbol-name</code> would make sense, using strings sounds like a better
+idea.</p>
+
+<p>Once the deserialising function has been generated, it is associated
+with an unique closure descriptor number and saved in a global hash
+table. The descriptor is used during serialisation instead of the
+source itself to save space and improve speed. A serialisable closure
+is thus defined by a closure descriptor number and a list of the
+values it closes over (in an arbitrary but important order).</p>
+
+<p>Since both the descriptors (numbers) and the deserialising functions
+(or, rather, their source) can be printed readably, they can easily be
+serialised to migrate to another server or to improve load balancing
+and redundancy.</p>
+
+<p>Finally, continuations are simply lists of (serialisable) closures,
+generated at runtime by the <code>bind</code> and <code>dbind</code> macros, and are printed as
+such. Since <code>*print-circle*</code> is bound to <code>T</code> during serialisation
+(<code>print</code>ing), sharing <em>within a single continuation</em> is
+preserved. Object identity, however, is not, except for interned
+symbols.</p>
+
+    </div>
+<p>
+  posted at: 00:00 | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold" title="path">/Lisp/CommonCold</a> | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold/details_on_serialisation_closures_continuations.html">permalink</a>
+</p>
+  </div>
+</div>
+<div class="entry">
+  <a id="generating_webpages_with_common_cold" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Generating webpages with Common Cold</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>Common Cold doesn't actually offer any special way to generate
+webpages. Functions simply have to return strings; how the strings are
+generated is irrelevant. What CC does offer is a way to encode
+continuations in URLs and a Hunchentoot handler to decode and invoke
+them.</p>
+
+<p><code>call-with-continuation-url</code> is a low-level function that takes an input
+function, captures the continuation and encodes it in an URL, sets up
+a <em>copy</em> of the dynamic bindings in the continuation, and passes its
+argument that URL. The function should return a string, the contents
+of the webpage. For example,</p>
+
+<pre class="example">
+(defun counter ()
+  (labels
+      ((inner (count)
+         (mprogn
+          (call-with-continuation-url
+           (lambda (k)
+             (with-html-output-to-string
+                 (*standard-output*)
+               (:html
+                (:head (:title &quot;Counter&quot;))
+                (:body (fmt &quot;Count: ~A~%&quot; count)
+                       (:a :href k &quot;Next&quot;))))))
+          (inner (1+ count)))))
+    (inner 0)))
+</pre>
+uses cl-who to implement a simple page that counts the number of times
+the user has clicked on &quot;Next&quot;. Continuation capture prunes redundant
+frames, so tail recursion is safe and will not lead to ever-growing
+URLs.
+
+<p><code>send/suspend</code> is a simple macro that wraps <code>call-with-continuation-url</code>
+in some syntactic sugar. It should be used as <code>(send/suspend (k)
+body...)</code>, where <code>k</code> is the variable to which the continuation's URL will
+be bound, and <code>body</code> an implicit <code>progn</code> (not <code>mprogn</code>) that should evaluate
+to a string. The example above can be rewritten as:</p>
+
+<pre class="example">
+(defun counter ()
+  (labels
+      ((inner (count)
+         (mprogn
+          (send/suspend (k)
+            (with-html-output-to-string
+                (*standard-output*)
+              (:html
+               (:head (:title &quot;Counter&quot;))
+               (:body (fmt &quot;Count: ~A~%&quot; count)
+                      (:a :href k &quot;Next&quot;)))))
+          (inner (1+ count)))))
+    (inner 0)))
+</pre>
+
+<p>Note that neither version uses CGI parameters. However, the count
+could clearly be one. Common Cold treats special variables as CGI
+parameters, exposing them in the URL as such, and updating their
+values according to the parameters list when possible. The counter
+could thus be rewritten as:</p>
+
+<pre class="example">
+(defun counter ()
+  (labels
+      ((inner (count)
+         (mdlet ((count count))
+          (send/suspend (k)
+            (with-html-output-to-string
+                (*standard-output*)
+              (:html
+               (:head (:title &quot;Counter&quot;))
+               (:body (fmt &quot;Count: ~A~%&quot; count)
+                      (:a :href k &quot;Next&quot;)))))
+          (inner (1+ count)))))
+    (inner 0)))
+</pre>
+
+<p>The URL will look like <code>[base64-data]?COUNTER:COUNT=0&amp;</code>
+(the colon is actually URI-encoded), and, if the value is overridden
+in any way (by replacing it, or by appending a binding to
+<code>COUNTER:COUNT</code> in the query), it will replace the current one. If,
+however, no value is provided as a parameter, the actual value when
+the continuation was capture will be used as a default. Hunchentoot's
+parameter handling functions can of course also be used.</p>
+
+<p>To register our <code>counter</code> function as a webpage, <code>make-continuation-handler</code>
+must be used to create a handler closure, which we can then pass to
+Hunchentoot's dispatcher creating functions. For example,</p>
+
+<pre class="example">
+(push (hunchentoot:create-prefix-dispatcher
+       &quot;/counter/&quot;
+       (make-continuation-handler 'counter
+                                  &quot;/counter/&quot;
+                                  ))
+      hunchentoot:*dispatch-table*)
+</pre>
+will call <code>counter</code> whenever a request is made for &quot;/counter/&quot;. It will
+also treat any other URL beginning with &quot;/counter/&quot; as a continuation
+URL by clipping out the prefix. A predicate (that returns a true value
+when its argument corresponds to a request to <code>'counter</code>) can also be
+passed instead of a string as the second argument to
+<code>make-continuation-handler</code>.
+
+<p>Continuations are, by default, simply gziped and base64-encoded. While
+we are passing closure descriptors instead of actual code, it can
+still be dangerous, and probably constitutes an information
+leak. <code>register-key</code> should be used to register a private key that will
+be used to encrypt and decrypt (symmetrically) the
+continuations.</p>
+
+    </div>
+<p>
+  posted at: 00:00 | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold" title="path">/Lisp/CommonCold</a> | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold/generating_webpages_with_common_cold.html">permalink</a>
+</p>
+  </div>
+</div>
+<div class="entry">
+  <a id="common_cold_latest_hack" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Common Cold, my latest hack</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>When someone wants to try continuations-based web pages in Common
+Lisp, they're usually directed at UnCommonWeb. A lot of work has gone
+into making UCW powerful, but that's not necessarily useful, and can
+even make things harder to understand, when one doesn't need all that
+power. <a href="http://www.discontinuity.info/~pkhuong/common-cold">Common Cold</a> tries to target that niche, as a simple library (I
+certainly wouldn't call it a framework) with a low cost of entry.</p>
+
+<p>To keep things simple, Common Cold (CC) defers to third-party
+libraries for nearly everything. It uses <a href="http://weitz.de/hunchentoot/">Hunchentoot</a> straightforwardly
+for web serving per se. Functions only have to return pages as
+strings, for example, using <a href="http://weitz.de/cl-who/">CL-WHO</a> (which is what CC does internally).
+Moreover, instead of striving for a transparent restructuring of code
+to extract continuations, explicitly marked macros must be used by the
+user. Hopefully, they won't prove to be particularly painful.</p>
+
+<p>Having the programmer annotate its code with special forms instead of
+using a codewalker has several advantages. Obviously, we can use the
+normal CL macro machinery instead of having to use a codewalker, which
+makes the code much less complex. It also makes the restructuring more
+transparent and controllable for the programmer. I believe the most
+important advantage, however, is simply that the border between
+continuations-ful code and normal CL code is always explicit. When
+playing with non-native but 'transparent' continuations, the
+abstraction tends to leak in various surprising ways (for example,
+when passing a continuation-capturing closure to an untransformed
+higher-order function), even more so when continuations are serialised,
+as in Common Cold.</p>
+
+<p>Serialised continuations are another design goal of Common
+Cold. Continuations-based web systems usually keep the continuations
+server-side (for a certain amount of time), and only pass an unique
+handle to the client. This means that every <em>request</em> consumes server
+resources and that URLs always have a somewhat short lifetime. It also
+makes load balancing more difficult, unless continuations can be
+migrated from one node to another. CC instead uses special forms to
+enable serialisable closures (and continuation frames). They are then
+encoded in the URL, instead of a session id or of a handle. The system
+was designed so that even the deserialisation routines can be
+serialised, making migration and load balancing easier to
+implement. These continuation URLs have an illimited lifetime, as long
+as the webpage functions are not recompiled (and that could be
+arranged). They are thus closer to the ideal of <a href="http://www.w3.org/Provider/Style/URI">cool URL</a>s than those
+of typical continuations-based web frameworks.</p>
+
+<p>Since serialising and deserialising closures and continuations amounts
+to deeply copying them, side effects to lexical bindings often make
+little sense. Dynamic bindings (special variables) are instead used
+for side-effectful bindings. Since special variables have a dynamic
+scope, capturing their latest value in continuations, which can be
+seen as capturing the current dynamic environment, seems to make
+sense. While assignment is restricted to special variables, it is far
+from discouraged. Common Cold establishes a parallel between CGI
+parameters and top-level (non-shadowed) dynamic bindings. Their values
+are always saved in the continuation URL. However, they may be
+overridden, as if by assignment, by CGI parameters with the same
+(symbol-)name. These parameters are also exposed in the URL to make
+them easier to manipulate. To simplify interactions via forms, only
+the rightmost binding for any given parameter is considered.</p>
+
+<p>More on how to actually use Common Cold later; I have a conference to
+register at in 6 hours.</p>
+
+    </div>
+<p>
+  posted at: 00:00 | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold" title="path">/Lisp/CommonCold</a> | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold/common_cold_latest_hack.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,337 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Fri, 29 Jul 2011</h2>
+<div class="entry">
+  <a id="accelerated_gradient_method" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>An implementation of (one of) Nesterov's accelerated gradient method</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">I&#8217;m a PhD student at Universit&#233; de Montr&#233;al. Contrary to what I suppose
+most people would expect from the contents of this blog, I don&#8217;t (officially)
+work on compilers. Instead, I chose to focus on mathematical optimisation;
+specifically, large-scale combinatorial optimisation. Although I sometimes
+wonder if I made the right choice, the basic rationale is that I&#8217;m hoping to
+contribute to both the compilers and optimisation worlds by bringing them
+closer.
+</p><!--l. 19--><p style="text-indent:1.5em">   Sketching algorithms makes up a large fraction of my work, and, lately, <a href="http://matlisp.sourceforge.net/">Matlisp</a>
+has been very useful. If you work with algorithms that depend on numerical tools like
+the BLAS, LAPACK, FFTs, or even just special function like <code style="font-family:monospace">erf </code>or <code style="font-family:monospace">gamma</code>, you too
+might like it. In addition to foreign function wrappers and a couple <a href="http://trac.common-lisp.net/f2cl/">f2cl</a>ed routines,
+Matlisp includes a nice reader macro for matrices, and a few convenience functions to
+manipulate them. Plus, it&#8217;s reasonably efficient: it doesn&#8217;t try to roll its own
+routines, can use platform-specific libraries for BLAS and LAPACK, and
+passes Lisp vectors without copying. It doesn&#8217;t look like it was written with
+threads in mind, unfortunately, but it&#8217;s always been good enough for me so
+far.
+</p><!--l. 33--><p style="text-indent:1.5em">   The latest project in which I&#8217;ve used Matlisp is the <a href="http://discontinuity.info/~pkhuong/agm.lisp">prototype implementation</a> of
+an <a href="http://www.ecore.be/DPs/dp_1191313936.pdf">accelerated gradient method for composite functions [PDF]</a>). The sequel will more
+or less closely follow the code in my implementation.
+</p><!--l. 40--><p style="text-indent:1.5em">   I think the program makes a useful, small and self-contained example of how
+Matlisp can be used; if you need to minimise something that fits in the method&#8217;s
+framework, it might even work well.
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>An accelerated gradient method for composite functions</h3>
+<!--l. 45--><p style="text-indent:0em">
+</p>
+   <h4><span>1.1   </span> <a id="x1-20001.1"></a>The theory</h4>
+<!--l. 46--><p style="text-indent:0em">In his paper on gradient methods for composite functions, Nesterov describes a
+family of efficient algorithms to minimise convex functions of the form
+</p>
+   <center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method0x.png" alt="&#981; (x) = f(x)+ &#936;(x)&#10;"></img></center>
+<!--l. 49--><p style="text-indent:0em"> where <em style="font-style:italic">f </em>is a &#8220;nice&#8221; black box, and &#936; not as nice, but better-known.
+</p><!--l. 53--><p style="text-indent:1.5em">   Here, &#8220;efficient&#8221; means that, in addition to being a gradient method (so each
+iteration is fairly inexpensive computationally), the method converges at a rate of
+<span><img src="http://www.pvk.ca/Blog/resources/cmsy10-4f.png" alt="O"></img></span>(<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method1x.png" alt="1k2" align="middle"></img>), where <em style="font-style:italic">k </em>is the number of iterations.
+                                                                  
+
+                                                                  
+</p><!--l. 58--><p style="text-indent:1.5em">   <em style="font-style:italic">f </em>is nice because it must be convex, continuous and differentiable, with a
+Lipschitz-continuous gradient (continuous and also not too variable). Fortunately, the
+Lispchitz constant itself may not be known a priori. On the other hand, we only
+assume that we have access to oracles to compute its value and gradients at arbitrary
+points.
+</p><!--l. 64--><p style="text-indent:1.5em">   &#936; simply has to be convex. However, in addition to value and <a href="http://en.wikipedia.org/wiki/Subderivative#The_subgradient">(sub)gradient</a>
+oracles, we also assume the existence of an oracle to solve problems of the form (with
+<em style="font-style:italic">s,a &gt; </em>0)
+</p>
+   <center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method2x.png" alt="argmin sx&#8242;x+ b&#8242;x+ a&#936;(x)&#10;    x  2&#10;"></img></center>
+<!--l. 68--><p style="text-indent:0em">
+</p><!--l. 70--><p style="text-indent:1.5em">   &#936; can, for instance, be used to express domain constraints or barriers. In the
+former case, the last oracle amounts to solving a projection problem.
+</p><!--l. 74--><p style="text-indent:0em">
+</p>
+   <h4><span>1.2   </span> <a id="x1-30001.2"></a>The programming interface</h4>
+<!--l. 75--><p style="text-indent:0em">My implementation exposes four generic functions to implement one&#8217;s own <em style="font-style:italic">f </em>and
+&#936;.
+</p><!--l. 78--><p style="text-indent:1.5em">   <code style="font-family:monospace">value </code>and <code style="font-family:monospace">grad </code>both take a function description as the first argument, and a
+point (a Matlisp column vector) as the second argument. They return, respectively,
+the value and the gradient of the function at that point.
+</p><!--l. 83--><p style="text-indent:1.5em">   <code style="font-family:monospace">project </code>takes a &#936; function description, a distance function description and the
+multiplicative factor factor <em style="font-style:italic">a </em>as arguments; the distance function <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method3x.png" alt="s&#10;2" align="middle"></img><em style="font-style:italic">x</em><span>&#8242;</span><em style="font-style:italic">x </em>+ <em style="font-style:italic">b</em><span>&#8242;</span><em style="font-style:italic">x </em>is
+represented by a <code style="font-family:monospace">distance </code>struct with three slots: <code style="font-family:monospace">n </code>(the size of the vectors), <code style="font-family:monospace">s </code>and <code style="font-family:monospace">b</code>.
+It returns the minimiser of <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method4x.png" alt="s&#10;2" align="middle"></img><em style="font-style:italic">x</em><span>&#8242;</span><em style="font-style:italic">x </em>+ <em style="font-style:italic">b</em><span>&#8242;</span><em style="font-style:italic">x </em>+ <em style="font-style:italic">a</em>&#936;(<em style="font-style:italic">x</em>).
+</p><!--l. 90--><p style="text-indent:1.5em">   An additional generic function <code style="font-family:monospace">map-gradient </code>is also exposed to solve problems of
+the type arg min<sub><em style="font-size:70%; font-style:italic">x</em></sub><em style="font-style:italic">g</em><span>&#8242;</span>(<em style="font-style:italic">x</em><span>-</span><em style="font-style:italic">y</em>) + <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method5x.png" alt="L&#10;2-" align="middle"></img><span>&#8741;</span><em style="font-style:italic">x</em><span>-</span><em style="font-style:italic">y</em><span>&#8741;</span><sup><span style="font-size:70%">2</span></sup> + &#936;(<em style="font-style:italic">x</em>), but the default method re-formulates
+this expression in terms of <code style="font-family:monospace">project</code>.
+</p><!--l. 96--><p style="text-indent:1.5em">   Computing the minimiser of a distance function (without any &#936; term) is a
+common operation, so it&#8217;s exposed as <code style="font-family:monospace">distance-min</code>.
+</p><!--l. 99--><p style="text-indent:1.5em">   The rest of the code isn&#8217;t really complicated, but the best explanation is probably
+the original paper (n.b. although the definitions always come before their use, the
+distance separating them may be surprisingly large).
+</p><!--l. 104--><p style="text-indent:1.5em">   Hooks are available to instrument the execution of the method and, e.g., count
+the number of function or gradient evaluations, or the number of projections. It
+should be obvious how to use them.
+</p><!--l. 108--><p style="text-indent:0em">
+                                                                  
+
+                                                                  
+</p>
+   <h4><span>1.3   </span> <a id="x1-40001.3"></a>Example implementations of &#936;</h4>
+<!--l. 109--><p style="text-indent:0em">
+</p>
+   <h5><span>1.3.1   </span> <a id="x1-50001.3.1"></a><code style="font-family:monospace">:unbounded </code>function</h5>
+<!--l. 110--><p style="text-indent:0em">The simplest &#936; is probably &#936;(<em style="font-style:italic">x</em>) = 0. The accelerated gradient method is then a
+gradient method for regular differentiable convex optimisation.
+</p><!--l. 114--><p style="text-indent:1.5em">   <code style="font-family:monospace">value </code>and <code style="font-family:monospace">grad </code>are trivial.
+</p><!--l. 116--><p style="text-indent:1.5em">   <code style="font-family:monospace">project </code>isn&#8217;t much harder: a necessary and sufficient condition for minimising
+<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method6x.png" alt="s&#10;2" align="middle"></img><em style="font-style:italic">x</em><span>&#8242;</span><em style="font-style:italic">x </em>+ <em style="font-style:italic">b</em><span>&#8242;</span><em style="font-style:italic">x </em>is <em style="font-style:italic">sx</em><sup><span style="font-size:70%">*</span></sup> + <em style="font-style:italic">b </em>= 0, so <em style="font-style:italic">x</em><sup><span style="font-size:70%">*</span></sup> = <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method7x.png" alt="-1&#10; s" align="middle"></img><em style="font-style:italic">b</em>.
+</p><!--l. 119--><p style="text-indent:0em">
+</p>
+   <h5><span>1.3.2   </span> <a id="x1-60001.3.2"></a><code style="font-family:monospace">:non-negative </code>function</h5>
+<!--l. 120--><p style="text-indent:0em">To constrain the feasible space to non-negative vectors, we only have to let &#936;(<em style="font-style:italic">x</em>) = 0
+if <em style="font-style:italic">x </em><span>&#8805; </span>0 (for every component), and &#936;(<em style="font-style:italic">x</em>) = <span>&#8734; </span>otherwise.
+</p><!--l. 124--><p style="text-indent:1.5em">   Again, <code style="font-family:monospace">value </code>and <code style="font-family:monospace">grad </code>are trivial: <code style="font-family:monospace">project </code>will ensure the method only works
+with non-negative <em style="font-style:italic">x</em>, and any <a href="http://en.wikipedia.org/wiki/Subderivative#The_subgradient"><em style="font-style:italic">sub</em>gradient</a> suffices.
+</p><!--l. 128--><p style="text-indent:1.5em">   As for <code style="font-family:monospace">project</code>, a little algebra shows that it&#8217;s equivalent to finding the feasible <em style="font-style:italic">x</em>
+that minimises the distance with <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method8x.png" alt="-1&#10; s" align="middle"></img><em style="font-style:italic">b </em>(that&#8217;s actually true for any &#936; that represents
+contraints). For the non-negative orthant, we only have to clamp each negative
+component of <img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method9x.png" alt="--1&#10; s" align="middle"></img><em style="font-style:italic">b </em>to 0:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defun clamp (matrix) 
+  (map-matrix! (lambda (x) 
+                 (declare (type double-float x)) 
+                 (max x 0d0)) 
+               matrix)) 
+ 
+(defmethod project ((psi (eql :non-negative)) distance Ak) 
+  (declare (type distance distance) 
+           (ignore Ak)) 
+  (clamp (distance-min distance)))</pre>
+<!--l. 144--><p style="text-indent:0em">
+</p><!--l. 146--><p style="text-indent:0em">
+</p>
+   <h4><span>1.4   </span> <a id="x1-70001.4"></a>A sample &#8220;nice&#8221; function <em style="font-style:italic">f</em>: linear least squares</h4>
+<!--l. 147--><p style="text-indent:0em">The linear least squares problem consists of finding a vector <em style="font-style:italic">x </em>that minimizes (the
+multiplication by half is just to get a nicer derivative)
+</p>
+   <center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method10x.png" alt="1&#8741;Ax - b&#8741;2&#10;2&#10;"></img></center>
+<!--l. 150--><p style="text-indent:0em">
+</p><!--l. 152--><p style="text-indent:1.5em">   This kind of problem can come up when fitting a line or a hyperplane to a set of
+observations.
+</p><!--l. 155--><p style="text-indent:1.5em">   <code style="font-family:monospace">value </code>is straightforward:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defmethod value ((lls linear-least-square) x) 
+  ;; A set of convenient matrix operation is available 
+  (let ((diff (m- (m* (lls-A lls) x) 
+                  (lls-b lls)))) 
+    (* .5d0 (ddot diff diff)))) ; ddot ~= a call to MATLISP:DOT</pre>
+<!--l. 162--><p style="text-indent:0em">
+</p><!--l. 164--><p style="text-indent:1.5em">   A little algebra shows that the gradient can be computed with
+</p>
+   <center style="margin-top:1em; margin-bottom:1em">
+<img src="http://www.pvk.ca/Blog/resources/accelerated_gradient_method11x.png" alt=" &#8242;      &#8242;&#10;A Ax - A b&#10;"></img></center>
+<!--l. 165--><p style="text-indent:0em">
+</p><!--l. 167--><p style="text-indent:1.5em">   The constructor <code style="font-family:monospace">make-lls </code>precomputes <em style="font-style:italic">A</em><span>&#8242;</span><em style="font-style:italic">A </em>and <em style="font-style:italic">A</em><span>&#8242;</span>, so we get
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(defmethod grad ((lls linear-least-square) x) 
+  ;; we can also call BLAS routines directly 
+  (axpy! -1 (lls-Atb lls) 
+         (m* (lls-AtA lls) x)))</pre>
+<!--l. 173--><p style="text-indent:0em">
+</p><!--l. 175--><p style="text-indent:1.5em">   LAPACK has built-in functions to solve that problem, for example <code style="font-family:monospace">gelsy </code>(that&#8217;s
+on my puny macbook air):
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">;; Create an LLS instance with 2000 rows (observations) 
+;; and 400 columns (variables). 
+AGM&gt; (defparameter *lls* (make-random-lls 2000 400)) 
+*LLS* 
+AGM&gt; (time (gelsy (lls-a *lls*) (lls-b *lls*) (* 1000 (expt 2d0 -52)))) 
+Evaluation took: 
+  0.829 seconds of real time 
+  0.827092 seconds of total run time (0.806912 user, 0.020180 system) 
+  [ Run times consist of 0.036 seconds GC time, and 0.792 seconds non-GC time. ] 
+  99.76% CPU 
+  1,323,883,144 processor cycles 
+  6,425,552 bytes consed 
+ 
+#&lt;REAL-MATRIX  400 x 1 
+   -2.20134E-2 
+    1.92827E-2 
+   -7.19030E-3 
+   -4.01685E-2 
+     : 
+    7.19374E-3 &gt; 
+400 
+AGM&gt; (value *lls* *) 
+66.5195278164384d0</pre>
+<!--l. 201--><p style="text-indent:0em">
+</p><!--l. 203--><p style="text-indent:1.5em">   Although we have very solid specialised methods to solve least squares problems,
+it makes for a nice non-trivial but easily-explained example.
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">;; 400 variables, with an LLS instance for f and 
+;; a default Psi of :unbounded 
+AGM&gt; (time (solve (make-agm-instance 400 *lls*))) 
+Evaluation took: 
+  32.426 seconds of real time 
+  31.266698 seconds of total run time (31.003772 user, 0.262926 system) 
+  [ Run times consist of 0.799 seconds GC time, and 30.468 seconds non-GC time. ] 
+  96.43% CPU 
+  51,779,907,728 processor cycles 
+  795,491,552 bytes consed 
+ 
+66.51952785790199d0 
+#&lt;REAL-MATRIX  400 x 1 
+   -2.20108E-2 
+    1.92838E-2 
+   -7.19136E-3 
+   -4.01690E-2 
+     : 
+    7.19797E-3 &gt; 
+[...]</pre>
+<!--l. 227--><p style="text-indent:0em">
+</p><!--l. 229--><p style="text-indent:1.5em">   Pretty horrible, even more so when we add the <span>&#8776; </span>0<em style="font-style:italic">.</em>9 seconds it takes to
+precompute <em style="font-style:italic">A</em><span>&#8242; </span>and <em style="font-style:italic">A</em><span>&#8242;</span><em style="font-style:italic">A</em>.
+</p><!--l. 232--><p style="text-indent:1.5em">   Here&#8217;s an interesting bit:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">;; Use the optimal value as the starting point 
+AGM&gt; (time (solve (make-agm-instance 400 *lls* :x0 (second /)))) 
+Evaluation took: 
+  0.043 seconds of real time 
+  0.043683 seconds of total run time (0.043445 user, 0.000238 system) 
+  102.33% CPU 
+  69,793,776 processor cycles 
+  1,525,136 bytes consed 
+ 
+66.51952785758927d0 
+#&lt;REAL-MATRIX  400 x 1 
+   -2.20108E-2 
+    1.92838E-2 
+   -7.19136E-3 
+   -4.01690E-2 
+     : 
+    7.19795E-3 &gt; 
+[...]</pre>
+<!--l. 252--><p style="text-indent:0em">
+</p><!--l. 254--><p style="text-indent:1.5em">   This method naturally exploits warm starts close to the optimal solution&#8230;useful
+when you have to solve a lot of similar instances.
+</p><!--l. 257--><p style="text-indent:1.5em">   Another interesting property is shown here:
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">AGM&gt; (time (solve (make-agm-instance 400 *lls*) 
+                  :min-gradient-norm 1d0)) 
+Evaluation took: 
+  1.961 seconds of real time 
+[...] 
+66.52381619339305d0 ; delta: 1/2.3e2 
+[...] 
+AGM&gt; (time (solve (make-agm-instance 400 *lls*) 
+                  :min-gradient-norm 1d-1)) 
+Evaluation took: 
+  7.328 seconds of real time 
+[...] 
+66.51957600391108d0 ; delta: 1/2.1e4 
+[...] 
+AGM&gt; (time (solve (make-agm-instance 400 *lls*) 
+                  :min-gradient-norm 1d-2)) 
+Evaluation took: 
+  19.275 seconds of real time 
+[...] 
+66.51952840584295d0 ; delta: 1/1.7e6 
+[...] 
+AGM&gt; (time (solve (make-agm-instance 400 *lls*) 
+                  :min-gradient-norm 1d-4)) 
+Evaluation took: 
+  31.146 seconds of real time 
+[...] 
+66.51952785790199d0 ; delta: 1/2.4e7 
+</pre>
+<!--l. 287--><p style="text-indent:0em">
+</p><!--l. 289--><p style="text-indent:1.5em">   The run time (and the number of iteration or function/gradient evaluation) scales
+nicely with the precision.
+</p><!--l. 292--><p style="text-indent:0em">
+</p>
+   <h4><span>1.5   </span> <a id="x1-80001.5"></a>Efficiency</h4>
+<!--l. 293--><p style="text-indent:0em">The implementation wasn&#8217;t written with efficiency in mind, but rather to rapidly get
+a working prototype. However, nearly all the cost is incurred by calls to the BLAS. If
+performance were an issue, I&#8217;d mostly focus on minimising consing and copies by
+reusing storage and calling (destructive versions of) BLAS functions to fuse
+                                                                  
+
+                                                                  
+operations. </p> 
+
+
+    </div>
+<p>
+  posted at: 00:19 | <a href="http://www.pvk.ca/Blog/Lisp/Math" title="path">/Lisp/Math</a> | <a href="http://www.pvk.ca/Blog/Lisp/Math/accelerated_gradient_method.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

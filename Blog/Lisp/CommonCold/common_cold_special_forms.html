@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Common Cold's special forms - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Mon, 25 Jun 2007</h2>
+<div class="entry">
+  <a id="common_cold_special_forms" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Common Cold's special forms</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+<p>The central element in serialising continuations are serialisable
+closures. They are created by the macros <code>slambda</code> (serialisable lambda)
+and <code>sfunction</code> (serialisable function), which can be used exactly like
+the <code>lambda</code> and <code>function</code> special forms, except that <code>slambda</code> may not be
+the <code>car</code> of an expression (or inside a <code>function</code> form), and that
+<code>sfunction</code> can only be given a function's name as argument. These macros
+will globally register the information needed to serialise and
+deserialise the closures at compile-time, in a serialisable format.</p>
+
+<p>For example, a serialisable adder could be created this way</p>
+
+<pre class="example">
+(defun make-adder (inc)
+  (flet ((adder (x)
+           (+ x inc)))
+    (sfunction adder)))
+</pre>
+or that way
+
+<pre class="example">
+(defun make-adder (inc)
+  (slambda (x)
+    (+ x inc)))
+</pre>
+
+<p>Note that there is no need to annotate local variables or
+functions. Highly unportable environment access is used to regenerate
+information about the lexical scope surrounding an <code>slambda</code> or <code>sfunction</code>
+form. Unfortunately, it means that it may also interact badly with
+codewalked extensions.</p>
+
+<p>Something close to Administrative-Normal Form (ANF, or monadic style)
+is then used to expose enough structure to macros for them to be able
+to easily save continuations. <code>(bind (var val) expr)</code> binds the
+value of <code>val</code> to <code>var</code> in <code>expr</code>, adding <code>expr</code> to <code>val</code>'s
+continuation. <code>dbind</code> is the same thing, but binds to <em>special</em>
+(dynamically scoped) variables instead of lexical ones. This is enough
+to make explicit the order in which operations will be executed, which
+is exactly what is needed to implement continuations. There is no need
+for a monadic <code>return</code>: we use dynamically scoped constructs (<code>catch</code> and
+<code>throw</code>), so values need not be wrapped specially.</p>
+
+<p>ANF is much less painful to use than CPS, but it's still far from
+ideal. Common Cold offers several macros to emulate common CL values
+binding forms. Instead of <code>let*</code>, one should use <code>mlet*</code> (to bind to
+lexical variables) or <code>mdlet*</code> (to bind to special variables). For
+example:</p>
+
+<pre class="example">
+(mlet* ((x (get-x))
+        (y (get-y))
+        (dist (sqrt (+ (* x x)
+                       (* y y)))))
+  (fn dist))
+</pre>
+or, if we want <code>fn</code> to have access to <code>x</code> and <code>y</code> as special variables:
+
+<pre class="example">
+(mdlet* ((*x* (get-x))
+         (*y* (get-y)))
+  (fn (sqrt (+ (* *x* *x*)
+               (* *y* *y*)))))
+</pre>
+
+<p>Note that normal CL lexical binding forms (e.g., <code>let</code> or <code>let*</code>) may be
+freely mixed with CC's forms, as long as the execution of the value
+expressions (<code>(get-x)</code>, <code>(get-y)</code>, ... here) does not capture
+continuations. CL <em>dynamic</em> binding forms (e.g. with <code>(declare (special...))</code>),
+however, should only be used when the execution of both the value
+expressions and the body of the forms (the dynamic extent of the
+bindings) does not capture continuations. <code>mlet</code> (for lexical bindings)
+and <code>mdlet</code> (for dynamic ones) offer a behaviour like that of CL's <code>let</code>,
+where the bindings are only established once all the bound values have
+been computed.</p>
+
+<p>Creating serialisable closures and continuations establishes copies of
+the lexical bindings. Assignment to lexical variables is thus not
+recommended, at least not when <code>slambda</code> or <code>sfunction</code> forms are in the
+lexical scope, or continuation-capturing code in the dynamic
+scope. Dynamic bindings, on the other hand, are linked to the dynamic
+environment, and not to continuation frames or closures. Thus, it makes
+sense to capture them with the rest of the dynamic environment &mdash; at
+least, as much of it &mdash; in continuations. Capturing continuations will
+also save (copy) the values of all the bindings at the time of the
+capture, so assignment to special variables is meaningful... without
+continuations making it harder to reason about them.</p>
+
+<p>Common Lisp's non-local exit forms (e.g., <code>throw</code> or <code>tagbody</code>) all have a
+dynamic extent, which means they are useless after the capture and
+later invocation of a continuation. Common Cold duplicates some of
+these forms in order to be able to restore them when invoking
+continuations. <code>mcatch</code> may be used exactly like <code>catch</code>, returning to it
+with a normal <code>throw</code>. <code>mblock</code> (which, like <code>block</code>, establishes a lexical
+non-local exit environment), on the other hand, must be matched with
+<code>mreturn-from</code> or <code>mreturn</code> (which act like <code>return-from</code> and
+<code>return</code>). Returning to a CL <code>block</code> with <code>mreturn-from</code>, or to an <code>mblock</code>
+with <code>return-from</code> will result in erroneous code. Fortunately, they are
+lexically scoped constructs, so using them correctly should be easy
+(checkable locally).</p>
+
+<p>Finally, to execute several operations in sequence, one should use
+<code>mprogn</code>, which acts like <code>progn</code>. However, most of the special forms
+above have implicit <code>mprogn</code> (when their CL counterparts have implicit
+<code>progn</code>).</p>
+
+    </div>
+<p>
+  posted at: 00:00 | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold" title="path">/Lisp/CommonCold</a> | <a href="http://www.pvk.ca/Blog/Lisp/CommonCold/common_cold_special_forms.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>

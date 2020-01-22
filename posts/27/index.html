@@ -1,0 +1,1449 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/posts/27/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div class="blog-index">
+  
+  
+  
+    <article>
+      
+  <header>
+    
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/03/15/sbcl-the-ultimate-assembly-code-breadboard/">SBCL: the ultimate assembly code breadboard</a></h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Mar
+  
+15th, 
+2014
+
+
+
+
+        
+         | <a href="/Blog/2014/03/15/sbcl-the-ultimate-assembly-code-breadboard/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/03/15/sbcl-the-ultimate-assembly-code-breadboard/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+  <div class="entry-content" style="font-family: ; font-size: "><p><em>EDIT: Lutz Euler points out that the <code>NEXT</code> sequence (used to) encode
+an effective address with an index register but no base.  The mistake
+doesn’t affect the meaning of the instruction, but forces a wasteful
+encoding.  The difference in machine code are as follows.</em></p>
+
+<p><em>Before (14 bytes):</em></p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">;       03:       8B043D00000000   MOV EAX, [RDI] ; _5_ useless bytes!
+</span><span class="line">;       0A:       4883C704         ADD RDI, 4
+</span><span class="line">;       0E:       4801F0           ADD RAX, RSI
+</span><span class="line">;       11:       FFE0             JMP RAX</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p><em>Now (9 bytes):</em></p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">;       93:       8B07             MOV EAX, [RDI]
+</span><span class="line">;       95:       4883C704         ADD RDI, 4
+</span><span class="line">;       99:       4801F0           ADD RAX, RSI
+</span><span class="line">;       9C:       FFE0             JMP RAX</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p><em>I fixed the definition of <code>NEXT</code>, but not the disassembly snippets
+below; they still show the old machine code.</em></p>
+
+<p>Earlier this week, I took another look at the
+<a href="http://www.greenarraychips.com/">F18</a>.  As usual with Chuck Moore’s
+work, it’s hard to tell the difference between insanity and mere
+brilliance ;) One thing that struck me is how small the stack is: 10
+slots, with no fancy overflow/underflow trap.  The rationale is that,
+if you need more slots, you’re doing it wrong, and that silent
+overflow is useful when you know what you’re doing.  That certainly
+jibes with my experience on the HP-41C and with x87.  It also reminds
+me of a
+<a href="http://cr.yp.to/qhasm/20050210-fxch.txt">post of djb’s decrying our misuse of x87’s rotating stack</a>:
+his thesis was that, with careful scheduling, a “free” <code>FXCH</code> makes
+the stack equivalent – if not superior – to registers.  The post
+ends with a (non-pipelined) loop that wastes no cycle on shuffling
+data, thanks to the x87’s implicit stack rotation.</p>
+
+<p>That lead me to wonder what implementation techniques become available
+for stack-based VMs that restrict their stack to, e.g., 8 slots.
+Obviously, it would be ideal to keep everything in registers.
+However, if we do that naïvely, push and pop become a lot more
+complicated; there’s a reason why Forth engines usually cache only the
+top 1-2 elements of the stack.</p>
+
+<p>I decided to mimic the x87 and the F18 (EDIT: modulo the latter’s two
+TOS cache registers): pushing/popping doesn’t cause any data movement.
+Instead, like the drawing below shows, they decrement/increment a modular
+counter that points to the top of the stack (TOS).  That would still be
+slow in software (most ISAs can’t index registers).  The key is that
+the counter can’t take too many values: only 8 values if there are 8
+slots in the stack.  Stack VMs already duplicate primops for performance
+reasons (e.g., to help the BTB by spreading out execution of the same
+primitive between multiple addresses), so it seems reasonable to specialise
+primitives for all 8 values the stack counter can take.</p>
+
+<p><img class="center" src="/images/2014-03-15-sbcl-the-ultimate-assembly-code-breadboard/rotating-stack.jpg" /></p>
+
+<p>In a regular direct threaded VM, most primops would end with a code
+sequence that jumps to the next one (<code>NEXT</code>), something like
+    add rsi, 8  ; increment virtual IP before jumping
+    jmp [rsi-8] ; jump to the address RSI previously pointed to
+where <code>rsi</code> is the virtual instruction pointer, and VM instructions
+are simply pointers to the machine code for the relevant primitive.</p>
+
+<p>I’ll make two changes to this sequence.  I don’t like hardcoding
+addresses in bytecode, and 64 bits per virtual instruction is overly
+wasteful.  Instead, I’ll encode offsets from the primop code block:
+    mov eax, [rsi]
+    add rsi, 4
+    add rax, rdi
+    jmp rax
+where <code>rdi</code> is the base address for primops.</p>
+
+<p>I also need to dispatch based on the new value of the implicit stack
+counter.  I decided to make the dispatch as easy as possible by
+storing the variants of each primop at regular intervals (e.g. one
+page).  I rounded that up to <code>64 * 67 = 4288</code> bytes to minimise
+aliasing accidents.  <code>NEXT</code> becomes something like
+    mov eax, [rsi]
+    add rsi, 4
+    lea rax, [rax + rdi + variant_offset]
+    jmp rax</p>
+
+<p>The trick is that <code>variant_offset = 4288 * stack_counter</code>, and the
+stack counter is (usually) known when the primitive is compiled.  If
+the stack is left as is, so is the counter; pushing a value decrements
+the counter and popping one increments it.</p>
+
+<p>That seems reasonable enough.  Let’s see if we can make it work.</p>
+
+<h1 id="preliminaries">Preliminaries</h1>
+
+<p>I want to explore a problem for which I’ll emit a lot of repetitive
+machine code.  SLIME’s REPL and SBCL’s assembler are perfect for the
+task!  (I hope it’s clear that I’m using unsupported internals; if it
+breaks, you keep the pieces.)</p>
+
+<p>The basic design of the VM is:</p>
+
+<ul>
+  <li><code>r8</code>-<code>r15</code>: stack slots (32 bits);</li>
+  <li><code>rsi</code>: base address for machine code primitives;</li>
+  <li><code>rdi</code>: virtual instruction pointer (points to the <em>next</em> instruction);</li>
+  <li><code>rax</code>,<code>rbx</code>,<code>rcx</code>,<code>rdx</code>: scratch registers;</li>
+  <li><code>rsp</code>: (virtual) return stack pointer.</li>
+</ul>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(import '(sb-assem:inst sb-vm::make-ea)) ; we'll use these two a lot
+</span><span class="line">
+</span><span class="line">;; The backing store for our stack
+</span><span class="line">(defvar *stack* (make-array 8 :initial-contents (list sb-vm::r8d-tn
+</span><span class="line">                                                      sb-vm::r9d-tn
+</span><span class="line">                                                      sb-vm::r10d-tn
+</span><span class="line">                                                      sb-vm::r11d-tn
+</span><span class="line">                                                      sb-vm::r12d-tn
+</span><span class="line">                                                      sb-vm::r13d-tn
+</span><span class="line">                                                      sb-vm::r14d-tn
+</span><span class="line">                                                      sb-vm::r15d-tn)))
+</span><span class="line">
+</span><span class="line">;; The _primop-generation-time_ stack pointer
+</span><span class="line">(defvar *stack-pointer*)
+</span><span class="line">
+</span><span class="line">;; (@ 0) returns the (current) register for TOS, (@ 1) returns
+</span><span class="line">;; the one just below, etc.
+</span><span class="line">(defun @ (i)
+</span><span class="line">  (aref *stack* (mod (+ i *stack-pointer*) (length *stack*))))
+</span><span class="line">
+</span><span class="line">(defvar *code-base* sb-vm::rsi-tn)
+</span><span class="line">(defvar *virtual-ip* sb-vm::rdi-tn)
+</span><span class="line">
+</span><span class="line">(defvar *rax* sb-vm::rax-tn)
+</span><span class="line">(defvar *rbx* sb-vm::rax-tn)
+</span><span class="line">(defvar *rcx* sb-vm::rax-tn)
+</span><span class="line">(defvar *rdx* sb-vm::rax-tn)
+</span><span class="line">
+</span><span class="line">;; Variants are *primitive-code-offset* bytes apart
+</span><span class="line">(defvar *primitive-code-offset* (* 64 67))
+</span><span class="line">
+</span><span class="line">;; Each *stack-pointer* value gets its own code page
+</span><span class="line">(defstruct code-page
+</span><span class="line">  (alloc 0) ; index of the next free byte.
+</span><span class="line">  (code (make-array *primitive-code-offset* :element-type '(unsigned-byte 8))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The idea is that we’ll define functions to emit assembly code for each
+primitive; these functions will be implicitly parameterised on
+<code>*stack-pointer*</code> thanks to <code>@</code>.  We can then call them as many times
+as needed to cover all values of <code>*stack-pointer*</code>.  The only
+complication is that code sequences will differ in length, so we must
+insert padding to keep everything in sync.  That’s what <code>emit-code</code>
+does:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun emit-code (pages emitter)
+</span><span class="line">  ;; there must be as many code pages as there are stack slots
+</span><span class="line">  (assert (= (length *stack*) (length pages)))
+</span><span class="line">  ;; find the rightmost starting point, and align to 16 bytes
+</span><span class="line">  (let* ((alloc (logandc2 (+ 15 (reduce #'max pages :key #'code-page-alloc))
+</span><span class="line">                          15))
+</span><span class="line">         (bytes (loop for i below (length pages)
+</span><span class="line">                      for page = (elt pages i)
+</span><span class="line">                      collect (let ((segment (sb-assem:make-segment))
+</span><span class="line">                                    (*stack-pointer* i))
+</span><span class="line">                                ;; assemble the variant for this value
+</span><span class="line">                                ;; of *stack-pointer* in a fresh code
+</span><span class="line">                                ;; segment
+</span><span class="line">                                (sb-assem:assemble (segment)
+</span><span class="line">                                  ;; but first, insert padding
+</span><span class="line">                                  (sb-vm::emit-long-nop segment (- alloc (code-page-alloc page)))
+</span><span class="line">                                  (funcall emitter))
+</span><span class="line">                                ;; tidy up any backreference
+</span><span class="line">                                (sb-assem:finalize-segment segment)
+</span><span class="line">                                ;; then get the (position-independent) machine
+</span><span class="line">                                ;; code as a vector of bytes
+</span><span class="line">                                (sb-assem:segment-contents-as-vector segment)))))
+</span><span class="line">    ;; finally, copy each machine code sequence to the right code page
+</span><span class="line">    (map nil (lambda (page bytes)
+</span><span class="line">               (let ((alloc (code-page-alloc page)))
+</span><span class="line">                 (replace (code-page-code page) bytes :start1 alloc)
+</span><span class="line">                 (assert (&lt;= (+ alloc (length bytes)) (length (code-page-code page))))
+</span><span class="line">                 (setf (code-page-alloc page) (+ alloc (length bytes)))))
+</span><span class="line">         pages bytes)
+</span><span class="line">    ;; and return the offset for that code sequence
+</span><span class="line">    alloc))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>This function is used by <code>emit-all-code</code> to emit the machine code for
+a bunch of primitives, while tracking the start offset for each
+primitive.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun emit-all-code (&amp;rest emitters)
+</span><span class="line">  (let ((pages (loop repeat (length *stack*)
+</span><span class="line">                     for page = (make-code-page)
+</span><span class="line">                     ;; prefill everything with one-byte NOPs
+</span><span class="line">                     do (fill (code-page-code page) #x90)
+</span><span class="line">                     collect page)))
+</span><span class="line">    (values (mapcar (lambda (emitter)
+</span><span class="line">                      (emit-code pages emitter))
+</span><span class="line">                    emitters)
+</span><span class="line">            pages)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Now, the pièce de résistance:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun next (&amp;optional offset)
+</span><span class="line">  (setf offset (or offset 0)) ; accommodate primops that frob IP
+</span><span class="line">  (let ((rotation (mod *stack-pointer* (length *stack*))))
+</span><span class="line">    (inst movzx *rax* (make-ea :dword :base *virtual-ip*
+</span><span class="line">                                      :disp offset))
+</span><span class="line">    (unless (= -4 offset)
+</span><span class="line">      (inst add *virtual-ip* (+ 4 offset)))
+</span><span class="line">    (if (zerop rotation)
+</span><span class="line">        (inst add *rax* *code-base*)
+</span><span class="line">        (inst lea *rax* (make-ea :qword :base *code-base*
+</span><span class="line">                                        :index *rax*
+</span><span class="line">                                        :disp (* rotation *primitive-code-offset*))))
+</span><span class="line">    (inst jmp *rax*)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h1 id="first-steps">First steps</h1>
+<p>Let’s add a few simple primitives.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun swap ()
+</span><span class="line">  (inst xchg (@ 0) (@ 1)) ; exchange top of stack and stack[1]
+</span><span class="line">  (next))
+</span><span class="line">
+</span><span class="line">(defun dup ()
+</span><span class="line">  (decf *stack-pointer*) ; grow stack (which grows down)
+</span><span class="line">  (inst mov (@ 0) (@ 1)) ; and overwrite TOS
+</span><span class="line">  (next))
+</span><span class="line">
+</span><span class="line">(defun drop (&amp;optional offset)
+</span><span class="line">  (incf *stack-pointer*) ; just shrink the stack
+</span><span class="line">  (next offset))
+</span><span class="line">
+</span><span class="line">(defun add ()
+</span><span class="line">  (inst add (@ 1) (@ 0)) ; second element becomes TOS
+</span><span class="line">  (drop))
+</span><span class="line">
+</span><span class="line">(defun sub ()
+</span><span class="line">  (inst sub (@ 1) (@ 0))
+</span><span class="line">  (drop))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (setf *print-length* 100)
+</span><span class="line">100
+</span><span class="line">CL-USER&gt; (emit-all-code 'swap 'dup 'drop 'add 'sub)
+</span><span class="line">(0 32 64 96 128)
+</span><span class="line">(#S(CODE-PAGE
+</span><span class="line">    :ALLOC 152
+</span><span class="line">    :CODE #(69 135 193 139 4 61 0 0 0 0 72 131 199 4 72 1 240 255 224 102 15 31
+</span><span class="line">            132 0 0 0 0 0 15 31 64 0 69 139 248 139 4 61 0 0 0 0 72 131 199 4
+</span><span class="line">            72 141 132 6 64 117 0 0 255 224 15 31 132 0 0 0 0 0 139 4 61 0 0 0
+</span><span class="line">            0 72 131 199 4 72 141 132 6 192 16 0 0 255 224 102 15 31 132 0 0 0
+</span><span class="line">            0 0 102 144 69 1 193 139 ...))
+</span><span class="line"> ...)
+</span><span class="line">CL-USER&gt; (defparameter *code0* (code-page-code (first (second /))))
+</span><span class="line">*CODE0*
+</span><span class="line">CL-USER&gt; (defparameter *code1* (code-page-code (second (second //))))
+</span><span class="line">*CODE1*</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The code for <code>swap</code> lives between bytes 0 and 32.  Let’s take a look
+at the version for <code>*stack-pointer* = 0</code> and <code>*stack-pointer* = 1</code>.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (sb-sys:with-pinned-objects (*code0*)
+</span><span class="line">           (sb-disassem:disassemble-memory (sb-sys:vector-sap *code0*)
+</span><span class="line">                                           32))
+</span><span class="line">; Size: 32 bytes
+</span><span class="line">; 0669C700:       4587C1           XCHG R8D, R9D
+</span><span class="line">;       03:       8B043D00000000   MOV EAX, [RDI]
+</span><span class="line">;       0A:       4883C704         ADD RDI, 4
+</span><span class="line">;       0E:       4801F0           ADD RAX, RSI
+</span><span class="line">;       11:       FFE0             JMP RAX
+</span><span class="line">;       13:       660F1F840000000000 NOP  ; padding NOPs
+</span><span class="line">;       1C:       0F1F4000         NOP
+</span><span class="line">NIL
+</span><span class="line">CL-USER&gt; (sb-sys:with-pinned-objects (*code1*)
+</span><span class="line">           (sb-disassem:disassemble-memory (sb-sys:vector-sap *code1*)
+</span><span class="line">                                           32))
+</span><span class="line">; Size: 32 bytes
+</span><span class="line">; 0669D810:       4587CA           XCHG R9D, R10D
+</span><span class="line">;       13:       8B043D00000000   MOV EAX, [RDI]
+</span><span class="line">;       1A:       4883C704         ADD RDI, 4
+</span><span class="line">;       1E:       488D8406C0100000 LEA RAX, [RSI+RAX+4288]
+</span><span class="line">;       26:       FFE0             JMP RAX
+</span><span class="line">;       28:       0F1F840000000000 NOP
+</span><span class="line">NIL</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p><code>dup</code> is at 32-64, and <code>sub</code> at 128-152:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (sb-sys:with-pinned-objects (*code0*)
+</span><span class="line">           (sb-disassem:disassemble-memory (sb-sys:sap+ (sb-sys:vector-sap *code0*) 32)
+</span><span class="line">                                           32))
+</span><span class="line">; Size: 32 bytes
+</span><span class="line">; 0669C720:       458BF8           MOV R15D, R8D
+</span><span class="line">;       23:       8B043D00000000   MOV EAX, [RDI]
+</span><span class="line">;       2A:       4883C704         ADD RDI, 4
+</span><span class="line">;       2E:       488D840640750000 LEA RAX, [RSI+RAX+30016]
+</span><span class="line">;       36:       FFE0             JMP RAX
+</span><span class="line">;       38:       0F1F840000000000 NOP
+</span><span class="line">NIL
+</span><span class="line">CL-USER&gt; (sb-sys:with-pinned-objects (*code0*)
+</span><span class="line">           (sb-disassem:disassemble-memory (sb-sys:sap+ (sb-sys:vector-sap *code0*) 128)
+</span><span class="line">                                           24))
+</span><span class="line">; Size: 24 bytes
+</span><span class="line">; 0669C780:       4529C1           SUB R9D, R8D
+</span><span class="line">;       83:       8B043D00000000   MOV EAX, [RDI]
+</span><span class="line">;       8A:       4883C704         ADD RDI, 4
+</span><span class="line">;       8E:       488D8406C0100000 LEA RAX, [RSI+RAX+4288]
+</span><span class="line">;       96:       FFE0             JMP RAX
+</span><span class="line">NIL</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>These are relatively tight.  I certainly like how little data
+shuffling there is; the <code>NEXT</code> sequence is a bit hairy, but the
+indirect branch is likely its weakest (and least avoidable) point.</p>
+
+<h1 id="control-flow-primops">Control flow primops</h1>
+
+<p>A VM without control flow isn’t even a toy.  First, unconditional
+relative jumps.  These can be encoded as <code>[jmp] [offset]</code>, with the 32
+bit offset relative to the end of <code>offset</code>.  We just overwrite
+<code>*virtual-ip*</code> with the new address.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun jmp ()
+</span><span class="line">  (inst movsx *rax* (make-ea :dword :base *virtual-ip*))
+</span><span class="line">  (inst lea *virtual-ip* (make-ea :dword :base *virtual-ip* :index *rax*
+</span><span class="line">                                         :disp 4))
+</span><span class="line">  (next))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Call and return are at the heart of Forth-like engines.  <code>ret</code> is
+easy: just pop from the control stack into <code>*virtual-ip*</code>.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun ret ()
+</span><span class="line">  (inst pop *virtual-ip*)
+</span><span class="line">  (next))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Call is a bit more complicated. It’s like <code>jmp</code>, but pushes the
+address of the <em>next</em> instruction to the control stack:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun call ()
+</span><span class="line">  (inst movsx *rax* (make-ea :dword :base *virtual-ip*))
+</span><span class="line">  (inst add *virtual-ip* 4)
+</span><span class="line">  (inst push *virtual-ip*)
+</span><span class="line">  (inst add *virtual-ip* *rax*)
+</span><span class="line">  (next))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Let’s look at the resulting machine code.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (emit-all-code 'jmp 'ret 'call)
+</span><span class="line">(0 32 64)
+</span><span class="line">(#S(CODE-PAGE
+</span><span class="line">    :ALLOC 91
+</span><span class="line">    :CODE #(72 99 7 72 141 124 7 4 139 4 61 0 0 0 0 72 131 199 4 72 1 240 255
+</span><span class="line">            224 15 31 132 0 0 0 0 0 95 139 4 61 0 0 0 0 72 131 199 4 72 1 240
+</span><span class="line">            255 224 102 15 31 132 0 0 0 0 0 102 15 31 68 0 0 72 99 7 72 131 199
+</span><span class="line">            4 87 72 1 199 139 4 61 0 0 0 0 72 131 199 4 72 1 240 255 224 144
+</span><span class="line">            144 144 144 144 144 144 144 144 ...))
+</span><span class="line"> ...)
+</span><span class="line">CL-USER&gt; (let ((code (code-page-code (first (second /)))))
+</span><span class="line">           (sb-sys:with-pinned-objects (code)
+</span><span class="line">             (sb-disassem:disassemble-memory (sb-sys:vector-sap code) 91)))
+</span><span class="line">; Size: 91 bytes
+</span><span class="line">; 08395200:       486307           MOVSXD RAX, DWORD PTR [RDI] ; jmp
+</span><span class="line">;       03:       488D7C0704       LEA RDI, [RDI+RAX+4]
+</span><span class="line">;       08:       8B043D00000000   MOV EAX, [RDI]
+</span><span class="line">;       0F:       4883C704         ADD RDI, 4
+</span><span class="line">;       13:       4801F0           ADD RAX, RSI
+</span><span class="line">;       16:       FFE0             JMP RAX
+</span><span class="line">;       18:       0F1F840000000000 NOP
+</span><span class="line">;       20:       5F               POP RDI                     ; ret
+</span><span class="line">;       21:       8B043D00000000   MOV EAX, [RDI]
+</span><span class="line">;       28:       4883C704         ADD RDI, 4
+</span><span class="line">;       2C:       4801F0           ADD RAX, RSI
+</span><span class="line">;       2F:       FFE0             JMP RAX
+</span><span class="line">;       31:       660F1F840000000000 NOP
+</span><span class="line">;       3A:       660F1F440000     NOP
+</span><span class="line">;       40:       486307           MOVSXD RAX, DWORD PTR [RDI] ; call
+</span><span class="line">;       43:       4883C704         ADD RDI, 4
+</span><span class="line">;       47:       57               PUSH RDI
+</span><span class="line">;       48:       4801C7           ADD RDI, RAX
+</span><span class="line">;       4B:       8B043D00000000   MOV EAX, [RDI]
+</span><span class="line">;       52:       4883C704         ADD RDI, 4
+</span><span class="line">;       56:       4801F0           ADD RAX, RSI
+</span><span class="line">;       59:       FFE0             JMP RAX</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h1 id="ffi-from-sbcl">FFI from SBCL</h1>
+
+<p>We finally almost have enough for interesting demos.  The only
+important thing that’s still missing is calls from CL into the VM.
+I’ll assume that the caller takes care of saving any important
+register, and that the primop (<code>rsi</code>) and virtual IP (<code>rdi</code>) registers
+are setup correctly.  The stack will be filled on entry, by copying
+values from the buffer <code>rax</code> points to, and written back on exit.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun enter ()
+</span><span class="line">  (inst push sb-vm::rbp-tn)
+</span><span class="line">  (inst mov sb-vm::rbp-tn sb-vm::rsp-tn) ; setup a normal frame
+</span><span class="line">  (inst push *rax*) ; stash rax
+</span><span class="line">  (dotimes (i 8)    ; copy the stack in
+</span><span class="line">    (inst mov (@ i) (make-ea :dword :base *rax* :disp (* 4 i))))
+</span><span class="line">  (next))
+</span><span class="line">
+</span><span class="line">(defun leave ()
+</span><span class="line">  ;; restore RAX
+</span><span class="line">  (inst mov *rax* (make-ea :qword :base sb-vm::rbp-tn :disp -8))
+</span><span class="line">  ;; overwrite the output stack
+</span><span class="line">  (dotimes (i 8)
+</span><span class="line">    (inst mov (make-ea :dword :base *rax* :disp (* 4 i))
+</span><span class="line">              (@ i)))
+</span><span class="line">  ;; and unwind the frame
+</span><span class="line">  (inst mov sb-vm::rsp-tn sb-vm::rbp-tn)
+</span><span class="line">  (inst pop sb-vm::rbp-tn)
+</span><span class="line">  (inst ret))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The CL-side interlocutor of <code>enter</code> follows, as a VOP:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+<span class="line-number">61</span>
+<span class="line-number">62</span>
+<span class="line-number">63</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(sb-c:defknown %enter-vm (system-area-pointer system-area-pointer system-area-pointer) (values)
+</span><span class="line">    (sb-c:any) :overwrite-fndb-silently t)
+</span><span class="line">
+</span><span class="line">(in-package "SB-VM")
+</span><span class="line">(sb-vm::define-vop (cl-user::%enter-vm)
+</span><span class="line">  (:translate cl-user::%enter-vm)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:args (stack :scs (sap-reg) :target rax)
+</span><span class="line">         (code :scs (sap-reg) :target rdi)
+</span><span class="line">         (primitives :scs (sap-reg) :target rsi))
+</span><span class="line">  (:arg-types system-area-pointer system-area-pointer system-area-pointer)
+</span><span class="line">  (:results)
+</span><span class="line">  (:temporary (:sc sap-reg :offset rax-offset :from (:argument 0)) rax)
+</span><span class="line">  (:temporary (:sc sap-reg :offset rbx-offset :from :eval) rbx)
+</span><span class="line">  (:temporary (:sc sap-reg :offset rcx-offset :from :eval) rcx)
+</span><span class="line">  (:temporary (:sc sap-reg :offset rdx-offset :from :eval) rdx)
+</span><span class="line">  (:temporary (:sc sap-reg :offset rdi-offset :from (:argument 1)) rdi)
+</span><span class="line">  (:temporary (:sc sap-reg :offset rsi-offset :from (:argument 2)) rsi)
+</span><span class="line">  (:ignore rbx rcx rdx)
+</span><span class="line">  (:generator 0
+</span><span class="line">    (inst push r8-tn)  ;; the stack was just too painful to declare
+</span><span class="line">    (inst push r9-tn)  ;; as temporary... and it overwrites the
+</span><span class="line">    (inst push r10-tn) ;; thread-base TN, which regalloc disregards.
+</span><span class="line">    (inst push r11-tn)
+</span><span class="line">    (inst push r12-tn)
+</span><span class="line">    (inst push r13-tn)
+</span><span class="line">    (inst push r14-tn)
+</span><span class="line">    (inst push r15-tn)
+</span><span class="line">    
+</span><span class="line">    (move rax stack)
+</span><span class="line">    (move rdi code)
+</span><span class="line">    (move rsi primitives)
+</span><span class="line">    (inst call rsi)   ;; assume the code page starts with ENTER
+</span><span class="line">
+</span><span class="line">    (inst pop r15-tn)
+</span><span class="line">    (inst pop r14-tn)
+</span><span class="line">    (inst pop r13-tn)
+</span><span class="line">    (inst pop r12-tn)
+</span><span class="line">    (inst pop r11-tn)
+</span><span class="line">    (inst pop r10-tn)
+</span><span class="line">    (inst pop r9-tn)
+</span><span class="line">    (inst pop r8-tn)))
+</span><span class="line">(in-package "CL-USER")
+</span><span class="line">
+</span><span class="line">(defun %enter-vm (stack-sap bytecode-sap primitives-sap)
+</span><span class="line">  (declare (type system-area-pointer stack-sap bytecode-sap primitives-sap))
+</span><span class="line">  (%enter-vm stack-sap bytecode-sap primitives-sap))
+</span><span class="line">
+</span><span class="line">(defun vm (stack-designator bytecode primitives)
+</span><span class="line">  (declare (type (simple-array (unsigned-byte 32) 1) bytecode)
+</span><span class="line">           (type system-area-pointer primitives))
+</span><span class="line">  ;; initialise the stack with the designator.
+</span><span class="line">  (let ((stack (make-array 8 :element-type '(unsigned-byte 32)
+</span><span class="line">                             :initial-element 0)))
+</span><span class="line">    (if (typep stack-designator 'sequence)
+</span><span class="line">        (map-into stack (lambda (x)
+</span><span class="line">                          (ldb (byte 32 0) x))
+</span><span class="line">                  stack-designator)
+</span><span class="line">        (fill stack (ldb (byte 32 0) stack-designator)))
+</span><span class="line">    (sb-sys:with-pinned-objects (stack bytecode)
+</span><span class="line">      (time (%enter-vm (sb-sys:vector-sap stack) (sb-sys:vector-sap bytecode)
+</span><span class="line">                       primitives)))
+</span><span class="line">    stack))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The only thing missing is to store the machine code for our primop in
+a range of memory that’s executable.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">;; first, get an executable range of memory
+</span><span class="line">(defvar *code-page* (sb-posix:mmap nil (* (length *stack*) *primitive-code-offset*)
+</span><span class="line">                                   (logior sb-posix:prot-read sb-posix:prot-write sb-posix:prot-exec)
+</span><span class="line">                                   (logior sb-posix:map-anon sb-posix:map-private)
+</span><span class="line">                                   -1 0))
+</span><span class="line">
+</span><span class="line">;; our list of primop names
+</span><span class="line">(defvar *primops* '(enter leave
+</span><span class="line">                    swap dup drop
+</span><span class="line">                    add sub
+</span><span class="line">                    jmp
+</span><span class="line">                    call ret))
+</span><span class="line">
+</span><span class="line">(defun assemble-primops ()
+</span><span class="line">  (multiple-value-bind (offsets pages)
+</span><span class="line">      (apply 'emit-all-code *primops*)
+</span><span class="line">    (loop for page in pages
+</span><span class="line">          for offset upfrom 0 by *primitive-code-offset*
+</span><span class="line">          do (sb-kernel:copy-ub8-to-system-area
+</span><span class="line">              (code-page-code page) 0
+</span><span class="line">              *code-page* offset
+</span><span class="line">              *primitive-code-offset*))
+</span><span class="line">    (mapcar 'cons *primops* offsets)))
+</span><span class="line">
+</span><span class="line">;; this alist maps primop names to offsets
+</span><span class="line">(defparameter *primops-offsets* (assemble-primops))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; *primops-offsets*
+</span><span class="line">((ENTER . 0) (LEAVE . 64) (SWAP . 112) (DUP . 144) (DROP . 176) (ADD . 208)
+</span><span class="line"> (SUB . 240) (JMP . 272) (CALL . 304) (RET . 336))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Let’s execute <code>add sub</code> (and finish with <code>leave</code>).</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (vm '(3 2 10) (coerce '(208 240 64) '(simple-array (unsigned-byte 32) 1)) *code-page*)
+</span><span class="line">Evaluation took:
+</span><span class="line">  0.000 seconds of real time
+</span><span class="line">  0.000003 seconds of total run time (0.000002 user, 0.000001 system)
+</span><span class="line">  100.00% CPU
+</span><span class="line">  2,288 processor cycles
+</span><span class="line">  0 bytes consed
+</span><span class="line">  
+</span><span class="line">#(5 0 0 0 0 0 3 5)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>And, indeed, <code>10 - (3 + 2) = 5</code>.</p>
+
+<p>We should also test function calls</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (vm '(3 2 10) (coerce '(304 8 ; call F
+</span><span class="line">                                 240
+</span><span class="line">                                 64
+</span><span class="line">                                 ;; F:
+</span><span class="line">                                 208
+</span><span class="line">                                 336)
+</span><span class="line">                               '(simple-array (unsigned-byte 32) 1))
+</span><span class="line">             *code-page*)
+</span><span class="line">Evaluation took:
+</span><span class="line">  0.000 seconds of real time
+</span><span class="line">  0.000005 seconds of total run time (0.000003 user, 0.000002 system)
+</span><span class="line">  100.00% CPU
+</span><span class="line">  2,640 processor cycles
+</span><span class="line">  0 bytes consed
+</span><span class="line">  
+</span><span class="line">#(5 0 0 0 0 0 3 5)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Instead of executing <code>add</code> directly, this bytecode sequence calls to
+whatever is 8 bytes (2 dwords) after the call instruction; in our
+case, <code>add ret</code>.</p>
+
+<p>Writing bytecode by hand is annoying.  This tiny functions takes care
+of the stupid stuff.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun assemble (opcodes)
+</span><span class="line">  (map '(simple-array (unsigned-byte 32) 1)
+</span><span class="line">       (lambda (opcode)
+</span><span class="line">         (if (integerp opcode)
+</span><span class="line">             (ldb (byte 32 0) opcode)
+</span><span class="line">             (cdr (assoc opcode *primops-offsets*))))
+</span><span class="line">       opcodes))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We can now write</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (vm '(3 2 10) (assemble '(call 8
+</span><span class="line">                                   sub
+</span><span class="line">                                   leave
+</span><span class="line">                                   
+</span><span class="line">                                   add
+</span><span class="line">                                   ret))
+</span><span class="line">             *code-page*)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h1 id="conditionals">Conditionals</h1>
+
+<p>We can now either write (basically) straightline code or infinite
+loops.  We need conditionals.  Their implementation is much like
+<code>jmp</code>, with a tiny twist.  Let’s start with jump if (top of stack is)
+non-zero and jump if zero.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun jcc (cc)
+</span><span class="line">  ;; next word is the offset if the condition is met, otherwise,
+</span><span class="line">  ;; fall through.
+</span><span class="line">  (inst movsx *rax* (make-ea :dword :base *virtual-ip*))
+</span><span class="line">  (inst lea *rax* (make-ea :dword :base *virtual-ip* :index *rax*
+</span><span class="line">                                  :disp 4))
+</span><span class="line">  (inst add *virtual-ip* 4)
+</span><span class="line">  (inst test (@ 0) (@ 0))
+</span><span class="line">  ;; update *virtual-ip* only if zero/non-zero
+</span><span class="line">  (inst cmov cc *virtual-ip* *rax*)
+</span><span class="line">  (next))
+</span><span class="line">
+</span><span class="line">(defun jnz ()
+</span><span class="line">  (jcc :nz))
+</span><span class="line">
+</span><span class="line">(defun jz ()
+</span><span class="line">  (jcc :z))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h1 id="immediates">Immediates</h1>
+
+<p>It’s hard to write programs without immediate values.  Earlier control
+flow primitives already encode immediate data in the virtual
+instruction stream.  We’ll do the same for <code>lit</code>, <code>inc</code>, and <code>dec</code>:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun lit ()
+</span><span class="line">  (decf *stack-pointer*) ; grow the stack
+</span><span class="line">  (inst mov (@ 0) (make-ea :dword :base *virtual-ip*)) ; load the next word
+</span><span class="line">  (next 4)) ; and skip to the next instruction
+</span><span class="line">
+</span><span class="line">(defun inc ()
+</span><span class="line">  (inst add (@ 0) (make-ea :dword :base *virtual-ip*))
+</span><span class="line">  (next 4))
+</span><span class="line">
+</span><span class="line">(defun dec ()
+</span><span class="line">  (inst sub (@ 0) (make-ea :dword :base *virtual-ip*))
+</span><span class="line">  (next 4))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h1 id="my-first-loop">My first loop</h1>
+
+<p>Finally, we have enough for a decent-looking (if useless) loop.  First,
+update the primop code page:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">;; C-M-x to force re-evaluation, or defparameter
+</span><span class="line">(defvar *primops* '(enter leave lit
+</span><span class="line">                    swap dup drop
+</span><span class="line">                    add sub inc dec
+</span><span class="line">                    jmp jnz jz
+</span><span class="line">                    call ret))
+</span><span class="line">
+</span><span class="line">(defvar *primops-offsets* (assemble-primops))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (vm '(1000000) (assemble '(lit 1 sub jnz -20 leave))
+</span><span class="line">             *code-page*)
+</span><span class="line">Evaluation took:
+</span><span class="line">  0.009 seconds of real time
+</span><span class="line">  0.009464 seconds of total run time (0.009384 user, 0.000080 system)
+</span><span class="line">  100.00% CPU
+</span><span class="line">  14,944,792 processor cycles
+</span><span class="line">  0 bytes consed
+</span><span class="line">  
+</span><span class="line">#(0 0 0 0 0 0 0 1)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>One million iterations of this stupid loop that only decrements a
+counter took 15M cycles. 15 cycles/iteration really isn’t that
+bad… especially considering that it executes an indirect jump after
+loading 1, after subtracting, and after comparing with 0.</p>
+
+<p>We can do better by fusing <code>lit sub</code> into <code>dec</code>:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (vm '(1000000) (assemble '(dec 1 jnz -16 leave))
+</span><span class="line">             *code-page*)
+</span><span class="line">Evaluation took:
+</span><span class="line">  0.007 seconds of real time
+</span><span class="line">  0.006905 seconds of total run time (0.006848 user, 0.000057 system)
+</span><span class="line">  100.00% CPU
+</span><span class="line">  11,111,128 processor cycles
+</span><span class="line">  0 bytes consed
+</span><span class="line">  
+</span><span class="line">#(0 0 0 0 0 0 0 0)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h1 id="fuse-all-the-things">Fuse all the things!</h1>
+
+<p>Decrementing a counter and jumping if non zero is a common operation
+(old x86 even implemented that in hardware, with <code>loop</code>).  Let’s add
+decrement and jump if non-zero (<code>djn</code>) to the VM:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun djn ()
+</span><span class="line">  (inst movsx *rax* (make-ea :dword :base *virtual-ip*))
+</span><span class="line">  (inst lea *rax* (make-ea :dword :base *virtual-ip* :index *rax*
+</span><span class="line">                                  :disp 4))
+</span><span class="line">  (inst add *virtual-ip* 4)
+</span><span class="line">  (inst sub (@ 0) 1)
+</span><span class="line">  (inst cmov :nz *virtual-ip* *rax*)
+</span><span class="line">  (next))
+</span><span class="line">
+</span><span class="line">(defvar *primops* '(enter leave lit
+</span><span class="line">                    swap dup drop
+</span><span class="line">                    add sub inc dec
+</span><span class="line">                    jmp jnz jz djn
+</span><span class="line">                    call ret))
+</span><span class="line">
+</span><span class="line">(defvar *primops-offsets* (assemble-primops))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (vm '(1000000) (assemble '(djn -8 leave))
+</span><span class="line">             *code-page*)
+</span><span class="line">Evaluation took:
+</span><span class="line">  0.005 seconds of real time
+</span><span class="line">  0.005575 seconds of total run time (0.005542 user, 0.000033 system)
+</span><span class="line">  120.00% CPU
+</span><span class="line">  8,823,896 processor cycles
+</span><span class="line">  0 bytes consed
+</span><span class="line">  
+</span><span class="line">#(0 0 0 0 0 0 0 0)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>That’s better… But I’m really not convinced by the conditional move.
+The branch will usually be predictable, so it makes sense to expose
+that to the hardware and duplicate the <code>NEXT</code> sequence.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun djn2 ()
+</span><span class="line">  (sb-assem:assemble ()
+</span><span class="line">    (inst sub (@ 0) 1)
+</span><span class="line">    (inst jmp :z fallthrough)
+</span><span class="line">    (inst movsx *rax* (make-ea :dword :base *virtual-ip*))
+</span><span class="line">    (inst lea *virtual-ip* (make-ea :dword :base *virtual-ip* :index *rax*
+</span><span class="line">                                           :disp 8))
+</span><span class="line">    (next -4) ; might as well pre-increment *virtual-ip*
+</span><span class="line">    fallthrough ; ASSEMBLE parses for labels, like TAGBODY
+</span><span class="line">    (next 4)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The resulting code isn’t too large, and the two indirect jumps are 16
+bytes apart.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">; Size: 64 bytes
+</span><span class="line">; 00510220:       4183E801         SUB R8D, 1
+</span><span class="line">;       24:       7414             JEQ L0
+</span><span class="line">;       26:       486307           MOVSXD RAX, DWORD PTR [RDI]
+</span><span class="line">;       29:       488D7C0708       LEA RDI, [RDI+RAX+8]
+</span><span class="line">;       2E:       8B043DFCFFFFFF   MOV EAX, [RDI-4]
+</span><span class="line">;       35:       4801F0           ADD RAX, RSI
+</span><span class="line">;       38:       FFE0             JMP RAX
+</span><span class="line">;       3A: L0:   8B043D04000000   MOV EAX, [RDI+4]
+</span><span class="line">;       41:       4883C708         ADD RDI, 8
+</span><span class="line">;       45:       4801F0           ADD RAX, RSI
+</span><span class="line">;       48:       FFE0             JMP RAX
+</span><span class="line">;       4A:       660F1F840000000000 NOP
+</span><span class="line">;       53:       660F1F840000000000 NOP
+</span><span class="line">;       5C:       0F1F4000         NOP</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>This alternative implementation does work better on our stupid loop.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (vm '(1000000) (assemble '(djn2 -8 leave))
+</span><span class="line">             *code-page*)
+</span><span class="line">Evaluation took:
+</span><span class="line">  0.004 seconds of real time
+</span><span class="line">  0.004034 seconds of total run time (0.003913 user, 0.000121 system)
+</span><span class="line">  100.00% CPU
+</span><span class="line">  6,183,488 processor cycles
+</span><span class="line">  0 bytes consed
+</span><span class="line">  
+</span><span class="line">#(0 0 0 0 0 0 0 0)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Let’s see how that compares to straight assembly code.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun ubench ()
+</span><span class="line">  (sb-assem:assemble ()
+</span><span class="line">    head
+</span><span class="line">    (inst sub (@ 0) 1)
+</span><span class="line">    (inst jmp :nz head)
+</span><span class="line">    (next)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (vm '(1000000) (assemble '(ubench leave))
+</span><span class="line">             *code-page*)
+</span><span class="line">Evaluation took:
+</span><span class="line">  0.000 seconds of real time
+</span><span class="line">  0.000629 seconds of total run time (0.000628 user, 0.000001 system)
+</span><span class="line">  100.00% CPU
+</span><span class="line">  1,001,904 processor cycles
+</span><span class="line">  0 bytes consed
+</span><span class="line">  
+</span><span class="line">#(0 0 0 0 0 0 0 0)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>My slow macbook air gets 1 iteration/cycle on a loop that’s 100%
+control overhead. With <code>djn2</code>, a good implementation of a reasonable
+specialised operator, the loop is about 6x as slow as native code.  A
+worse implementation of <code>djn</code> is still only 8x as slow as pure native
+code, and horribly unspecialised bytecode is 11-15x as slow as native
+code.</p>
+
+<h1 id="verdict">Verdict</h1>
+
+<p>Specialising primops to a virtual stack pointer is feasible in
+practice, when the stack is restricted to a small size.  It also seems
+to have a reasonable runtime overhead for threaded interpreters.  I’m
+not actually interested in straight stack languages; however, I
+believe that a fixed stack VM makes a nice runtime IR, when coupled
+with a mechanism for local variables.  We’ll see if I find time to
+translate a high level language into superoperators for such a VM.
+Fused operators would reduce the importance of <code>NEXT</code>; in constrast,
+simpler function calls (because there’s less shuffling of items to
+stack them up in the right position) would remain as useful.</p>
+
+<p>SBCL has definitely proven itself to be a good companion to explore
+the generation of domain-specific machine code. I don’t know of any
+other language implementation with that kind of support for
+interactive programming and machine code generation (and inspection).
+FWIW, I believe LuaJIT + dynasm will soon be comparable.</p>
+
+<p>Steel Bank Common Lisp: because sometimes C abstracts away too much ;)</p>
+</div>
+  
+  
+
+
+    </article>
+  
+  <div class="pagination">
+    
+      <a class="prev" href="/posts/28">&larr; Older</a>
+    
+    <a href="/Blog/archives">Blog Archives</a>
+    
+    <a class="next" href="/posts/26">Newer &rarr;</a>
+    
+  </div>
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2020 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>

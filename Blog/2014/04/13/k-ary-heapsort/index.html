@@ -1,0 +1,1085 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>K-ary heapsort: more comparisons, less memory traffic - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2014/04/13/k-ary-heapsort/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">K-ary heapsort: more comparisons, less memory traffic</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+April
+  
+13th, 
+2014
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/04/13/k-ary-heapsort/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p><em>This post first appeared on <a href="http://techblog.appnexus.com/2014/k-ary-heapsort-more-comparisons-less-memory-traffic/">AppNexus’s tech blog</a>.</em></p>
+
+<p>The impetus for this post was a max heap routine I had to write
+because libc, unlike the STL, does not support
+<a href="http://www.sgi.com/tech/stl/make_heap.html">incremental</a> or even
+<a href="https://www.sgi.com/tech/stl/partial_sort.html">partial sorting</a>.
+After staring at the standard implicit binary heap for a while, I
+realised how to
+<a href="http://www.pvk.ca/Blog/2014/04/13/number-systems-for-implicit-data-structures/">generalise it to arbitrary arity</a>.  The
+routine will be used for medium size elements (a couple dozen bytes)
+and with a trivial comparison function; in that situation, it makes
+sense to implement a high arity heap and perform fewer swaps in return
+for additional comparisons.  In fact, the trade-off is interesting
+enough that a heapsort based on this routine is competitive with
+<a href="http://fxr.watson.org/fxr/source/stdlib/merge.c?v=FREEBSD-LIBC">BSD</a>
+and
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=stdlib/qsort.c;h=04c25b984f74a8f738233cc6da8a738b6437833c;hb=HEAD">glibc</a>
+sorts.  This post will present the k-ary heap code and explore the
+impact of memory traffic on the performance of a few classical sort
+routines.  The worst performing sorts in BSD’s and GNU’s libc overlook
+swaps and focus on minimising comparisons.  I argue this is rarely the
+correct choice, although our hands are partly tied by POSIX.</p>
+
+<h1 id="a-k-ary-max-heap">A k-ary max heap</h1>
+
+<p>The heart of a heap – and of heapsort – is the sift-down function.
+I explored the indexing scheme below in details
+<a href="http://www.pvk.ca/Blog/2014/04/13/number-systems-for-implicit-data-structures/">somewhere else</a>, but the gist of it is
+that we work with regular 0-indexed arrays and the children of
+<code>heap[i]</code> lie at indices <code>heap[way * i + 1]</code> to <code>heap[way * i + way]</code>,
+inclusively.  Like sifting for regular binary heaps, the routine
+restores the max-heap property under the assumption that only the root
+(head) may be smaller than any of its children.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>nheap.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define REF(I) ((void *)((char *)base + ((I) * size)))</span>
+</span><span class="line">
+</span><span class="line"><span class="cp">#define ALIGNED_SIZE 16</span>
+</span><span class="line">
+</span><span class="line"><span class="k">typedef</span> <span class="nf">int</span> <span class="p">(</span><span class="o">*</span><span class="n">comparator</span><span class="p">)(</span><span class="k">const</span> <span class="kt">void</span> <span class="o">*</span><span class="p">,</span> <span class="k">const</span> <span class="kt">void</span> <span class="o">*</span><span class="p">);</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/*</span>
+</span><span class="line"><span class="cm"> * Similar arguments to qsort. way is the arity of the heap and</span>
+</span><span class="line"><span class="cm"> * head the index from which to sift down.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="k">static</span> <span class="kt">void</span>
+</span><span class="line"><span class="nf">nheap_sift_inner</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">way</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">base</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">head</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">nmemb</span><span class="p">,</span>
+</span><span class="line">                 <span class="kt">size_t</span> <span class="n">size</span><span class="p">,</span> <span class="n">comparator</span> <span class="n">compar</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">int</span> <span class="n">aligned</span> <span class="o">=</span> <span class="p">(</span><span class="n">size</span> <span class="o">%</span> <span class="n">ALIGNED_SIZE</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span>
+</span><span class="line">                <span class="p">(((</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="n">base</span> <span class="o">-</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="mi">0</span><span class="p">)</span> <span class="o">%</span> <span class="n">ALIGNED_SIZE</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">while</span> <span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="kt">void</span> <span class="o">*</span><span class="n">parent</span><span class="p">,</span> <span class="o">*</span><span class="n">max</span><span class="p">;</span>
+</span><span class="line">                <span class="kt">size_t</span> <span class="n">children_offset</span> <span class="o">=</span> <span class="n">head</span> <span class="o">*</span> <span class="n">way</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+</span><span class="line">                <span class="kt">size_t</span> <span class="n">max_head</span> <span class="o">=</span> <span class="n">head</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">                <span class="k">if</span> <span class="p">(</span><span class="n">children_offset</span> <span class="o">&gt;=</span> <span class="n">nmemb</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                        <span class="cm">/* We&#39;re at a leaf. */</span>
+</span><span class="line">                        <span class="k">return</span><span class="p">;</span>
+</span><span class="line">                <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">                <span class="cm">/* Find the max of parent and all children. */</span>
+</span><span class="line">                <span class="n">parent</span> <span class="o">=</span> <span class="n">max</span> <span class="o">=</span> <span class="n">REF</span><span class="p">(</span><span class="n">head</span><span class="p">);</span>
+</span><span class="line">                <span class="k">for</span> <span class="p">(</span><span class="kt">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">way</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                        <span class="kt">void</span> <span class="o">*</span><span class="n">child</span><span class="p">;</span>
+</span><span class="line">                        <span class="kt">size_t</span> <span class="n">j</span> <span class="o">=</span> <span class="n">children_offset</span> <span class="o">+</span> <span class="n">i</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">                        <span class="k">if</span> <span class="p">(</span><span class="n">j</span> <span class="o">&gt;=</span> <span class="n">nmemb</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                                <span class="k">break</span><span class="p">;</span>
+</span><span class="line">                        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">                        <span class="n">child</span> <span class="o">=</span> <span class="n">REF</span><span class="p">(</span><span class="n">j</span><span class="p">);</span>
+</span><span class="line">                        <span class="k">if</span> <span class="p">(</span><span class="n">compar</span><span class="p">(</span><span class="n">child</span><span class="p">,</span> <span class="n">max</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                                <span class="n">max</span> <span class="o">=</span> <span class="n">child</span><span class="p">;</span>
+</span><span class="line">                                <span class="n">max_head</span> <span class="o">=</span> <span class="n">j</span><span class="p">;</span>
+</span><span class="line">                        <span class="p">}</span>
+</span><span class="line">                <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">                <span class="k">if</span> <span class="p">(</span><span class="n">max</span> <span class="o">==</span> <span class="n">parent</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                        <span class="k">return</span><span class="p">;</span>
+</span><span class="line">                <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">                <span class="cm">/* Swap the parent down and re-iterate. */</span>
+</span><span class="line">                <span class="n">swap</span><span class="p">(</span><span class="n">parent</span><span class="p">,</span> <span class="n">max</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">aligned</span><span class="p">);</span>
+</span><span class="line">                <span class="n">head</span> <span class="o">=</span> <span class="n">max_head</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The expected use case for this routine is that <code>compar</code> is a trivial
+function (e.g., comparing two longs) and <code>size</code> relatively large, up
+to fifty or even a few hundred bytes.  That’s why we do some more
+work to not only minimise the number of swaps, but also to accelerate
+each swap.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>nheap.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">typedef</span> <span class="kt">int</span> <span class="n">vector</span> <span class="nf">__attribute__</span><span class="p">((</span><span class="n">vector_size</span><span class="p">(</span><span class="n">ALIGNED_SIZE</span><span class="p">)));</span>
+</span><span class="line">
+</span><span class="line"><span class="cp">#define CHUNK_SIZE sizeof(long)</span>
+</span><span class="line">
+</span><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">void</span>
+</span><span class="line"><span class="nf">swap</span><span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="n">x</span><span class="p">,</span> <span class="kt">char</span> <span class="o">*</span><span class="n">y</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">n</span><span class="p">,</span> <span class="kt">int</span> <span class="n">aligned</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">char</span> <span class="n">chunk</span><span class="p">[</span><span class="n">CHUNK_SIZE</span><span class="p">];</span>
+</span><span class="line">        <span class="kt">size_t</span> <span class="n">i</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">aligned</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">;</span> <span class="n">i</span> <span class="o">+=</span> <span class="n">ALIGNED_SIZE</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                        <span class="n">vector</span> <span class="n">temp</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="n">vector</span> <span class="o">*</span><span class="p">)(</span><span class="n">x</span> <span class="o">+</span> <span class="n">i</span><span class="p">);</span>
+</span><span class="line">                        <span class="o">*</span><span class="p">(</span><span class="n">vector</span> <span class="o">*</span><span class="p">)(</span><span class="n">x</span> <span class="o">+</span> <span class="n">i</span><span class="p">)</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="n">vector</span> <span class="o">*</span><span class="p">)(</span><span class="n">y</span> <span class="o">+</span> <span class="n">i</span><span class="p">);</span>
+</span><span class="line">                        <span class="o">*</span><span class="p">(</span><span class="n">vector</span> <span class="o">*</span><span class="p">)(</span><span class="n">y</span> <span class="o">+</span> <span class="n">i</span><span class="p">)</span> <span class="o">=</span> <span class="n">temp</span><span class="p">;</span>
+</span><span class="line">                <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">                <span class="k">return</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">+</span> <span class="n">CHUNK_SIZE</span> <span class="o">&lt;=</span> <span class="n">n</span><span class="p">;</span> <span class="n">i</span> <span class="o">+=</span> <span class="n">CHUNK_SIZE</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="n">memcpy</span><span class="p">(</span><span class="n">chunk</span><span class="p">,</span> <span class="n">x</span> <span class="o">+</span> <span class="n">i</span><span class="p">,</span> <span class="n">CHUNK_SIZE</span><span class="p">);</span>
+</span><span class="line">                <span class="n">memcpy</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="n">i</span><span class="p">,</span> <span class="n">y</span> <span class="o">+</span> <span class="n">i</span><span class="p">,</span> <span class="n">CHUNK_SIZE</span><span class="p">);</span>
+</span><span class="line">                <span class="n">memcpy</span><span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="n">i</span><span class="p">,</span> <span class="n">chunk</span><span class="p">,</span> <span class="n">CHUNK_SIZE</span><span class="p">);</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">for</span> <span class="p">(;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="kt">char</span> <span class="n">temp</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+</span><span class="line">                <span class="n">x</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">y</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+</span><span class="line">                <span class="n">y</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">temp</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>When the data will always be aligned to 16-byte boundaries, we swap
+vector registers.  Otherwise, we resort to register-size calls to
+<code>memcpy(3)</code> – decent compilers will turn them into unaligned accesses
+– and handle any slop with byte-by-byte swaps.</p>
+
+<p>It’s a quick coding job to wrap the above in a linear-time <code>heapify</code>
+and a heapsort.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>nheap.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+<span class="line-number">61</span>
+<span class="line-number">62</span>
+<span class="line-number">63</span>
+<span class="line-number">64</span>
+<span class="line-number">65</span>
+<span class="line-number">66</span>
+<span class="line-number">67</span>
+<span class="line-number">68</span>
+<span class="line-number">69</span>
+<span class="line-number">70</span>
+<span class="line-number">71</span>
+<span class="line-number">72</span>
+<span class="line-number">73</span>
+<span class="line-number">74</span>
+<span class="line-number">75</span>
+<span class="line-number">76</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cm">/*</span>
+</span><span class="line"><span class="cm"> * Given a way-ary heap, sift the head&#39;th element down to restore the</span>
+</span><span class="line"><span class="cm"> * heap property.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="kt">int</span>
+</span><span class="line"><span class="nf">nheap_sift</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">way</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">base</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">head</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">nmemb</span><span class="p">,</span>
+</span><span class="line">           <span class="kt">size_t</span> <span class="n">size</span><span class="p">,</span> <span class="n">comparator</span> <span class="n">compar</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">way</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="k">return</span> <span class="o">-</span><span class="mi">2</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">head</span> <span class="o">&gt;=</span> <span class="n">nmemb</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="k">return</span> <span class="o">-</span><span class="mi">3</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">nheap_sift_inner</span><span class="p">(</span><span class="n">way</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">head</span><span class="p">,</span> <span class="n">nmemb</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">compar</span><span class="p">);</span>
+</span><span class="line">        <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/*</span>
+</span><span class="line"><span class="cm"> * Turn the nmemb elements of size bytes in base into a compar-max</span>
+</span><span class="line"><span class="cm"> * way-ary heap.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="kt">int</span> <span class="nf">nheapify</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">way</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">base</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">nmemb</span><span class="p">,</span>
+</span><span class="line">             <span class="kt">size_t</span> <span class="n">size</span><span class="p">,</span> <span class="n">comparator</span> <span class="n">compar</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">way</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="k">return</span> <span class="o">-</span><span class="mi">2</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">nmemb</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="cm">/* ceiling(nmemb, way) is a leaf. */</span>
+</span><span class="line">        <span class="k">for</span> <span class="p">(</span><span class="kt">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="n">nmemb</span> <span class="o">/</span> <span class="n">way</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span> <span class="n">i</span> <span class="o">--&gt;</span> <span class="mi">0</span><span class="p">;</span> <span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="n">nheap_sift_inner</span><span class="p">(</span><span class="n">way</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">i</span><span class="p">,</span> <span class="n">nmemb</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">compar</span><span class="p">);</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/*</span>
+</span><span class="line"><span class="cm"> * Like BSD heapsort(3), except that the first argument specifies the</span>
+</span><span class="line"><span class="cm"> * arity of the internal max-heap.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="kt">int</span>
+</span><span class="line"><span class="nf">nheapsort</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">way</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">base</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">nmemb</span><span class="p">,</span>
+</span><span class="line">          <span class="kt">size_t</span> <span class="n">size</span><span class="p">,</span> <span class="n">comparator</span> <span class="n">compar</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">int</span> <span class="n">aligned</span> <span class="o">=</span> <span class="p">(</span><span class="n">size</span> <span class="o">%</span> <span class="n">ALIGNED_SIZE</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span>
+</span><span class="line">                <span class="p">(((</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="n">base</span> <span class="o">-</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="mi">0</span><span class="p">)</span> <span class="o">%</span> <span class="n">ALIGNED_SIZE</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line">        <span class="kt">int</span> <span class="n">r</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">r</span> <span class="o">=</span> <span class="n">nheapify</span><span class="p">(</span><span class="n">way</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">nmemb</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">compar</span><span class="p">);</span>
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">r</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="k">return</span> <span class="n">r</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">for</span> <span class="p">(</span><span class="kt">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="n">nmemb</span><span class="p">;</span> <span class="n">i</span> <span class="o">--&gt;</span> <span class="mi">1</span><span class="p">;</span> <span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="n">swap</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">REF</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">size</span><span class="p">,</span> <span class="n">aligned</span><span class="p">);</span>
+</span><span class="line">                <span class="n">nheap_sift_inner</span><span class="p">(</span><span class="n">way</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">i</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">compar</span><span class="p">);</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>This heap implementation proved more than good enough for our
+production use.  In fact, it is so efficient that <code>nheapsort</code> is
+competitive with battle-tested sort implementations, particularly when
+sorting medium or large structs.  However, these classical
+implementations were primarily tuned with comparison counts in mind…
+which I argue is now inappropriate.  In the remainder of this post,
+I’ll explore the impact of swaps on the performance of sort routines.</p>
+
+<h1 id="meet-the-competition">Meet the competition</h1>
+
+<p>I will compare with the sort routines in two libc: GNU’s glibc and
+BSD’s (FreeBSD and OS X, at least, and other *BSD I expect) libc.
+All are more than 20 years old.</p>
+
+<p>The <code>qsort(3)</code> routine in glibc is usually a mergesort that allocates
+scratch space.  It includes some tests to try and detect out of memory
+conditions, but I doubt the logic is very effective on contemporary
+hardware and with Linux’s overcommit by default.  BSD manpages specify
+that <code>qsort(3)</code> is in-place.  GNU’s don’t… because glibc’s qsort is not
+a quicksort.</p>
+
+<p>I can see many arguments for glibc’s design choice.  For one, a
+nicely tuned mergesort may be quicker than a safe (guaranteed
+\(\mathcal{O}(n \log n)\) time) quicksort.  It also enables msort’s
+indirect sorting strategy for large elements: when elements span more
+than 32 chars, the sort phase only manipulates pointers and a final
+linear-time pass shuffles the actual data in place.</p>
+
+<p>On the other hand, I would be annoyed if qsort triggered the 
+<a href="http://linux-mm.org/OOM_Killer">OOM killer</a>.</p>
+
+<p>For this reason, I’ll explicitly consider the real in-place
+quicksort that gets called when it’s clear that allocating more memory
+is infeasible.  Sadly, I doubt that quicksort received much
+attention since it was tuned for a
+<a href="http://en.wikipedia.org/wiki/Sun-4">Sun 4/260</a>.  It’s clearly a
+product of the 80’s.  It has an explicit stack, the recursion order
+guarantees logarithmic stack depth, the pivot is always chosen with a
+median of three, and the base case (a partition of 4 or fewer
+elements) switches to insertion sort.</p>
+
+<p>The code and the very design of the routine seem to completely
+disregard memory traffic.  The swap loop is always char-by-char, and
+the base case (insertion sort) isn’t actually called when recursion
+stops at a leaf.  Instead, small unsorted partitions are left as is.
+Insertion sort is only executed at the end, over the whole array:
+unsorted partitions contain at most 4 elements and are otherwise
+ordered correctly, so each insertion sort inner loop iterates at most
+4 times.  This strategy wastes the locality advantage of
+divide-and-conquer sorts: the insertion sort pass is almost streaming,
+but it would likely operate on warm data if leaf partitions were
+sorted on the fly.</p>
+
+<p>It also includes unsafe code like</p>
+
+<pre><code>char *const end_ptr = &amp;base_ptr[size * (total_elems - 1)];
+char *tmp_ptr = base_ptr;
+char *thresh = min(end_ptr, base_ptr + max_thresh);
+</code></pre>
+
+<p>I can only pray that compilers never becomes smart enough to exploit
+<code>base_ptr + max_thresh</code> to determine that this routine will never sort
+arrays of fewer than 4 elements.</p>
+
+<p>glibc’s implementation of inserts only aggravates the problem.  After
+finding a sorted position for the new element, insertion sort must
+insert it there.  Usually one would implement that by copying the new
+element (one past the end of the sorted section) to a temporary
+buffer, sliding the tail of the sorted array one slot toward the end,
+and writing the new element in its expected position.  Unfortunately,
+we can’t allocate an arbitrary-size temporary buffer if our quicksort
+is to be in-place.  The insertion loop in glibc circumvents the
+problem by doing the copy/slide/write dance… one char at a time.
+That’s the worst implementation I can think of with respect to memory
+access patterns.  It operates on a set of contiguous addresses (the
+tail of the sorted array and the new element at its end) with a double
+loop of strided accesses that still end up touching each of these addresses.
+When the element size is a power of two, it might even hit aliasing
+issues and exhaust the associativity of data caches.</p>
+
+<p>The quicksort in *BSD is saner, perhaps because it is still called by
+<code>qsort(3)</code>.  While glibc pays lip service to <a href="http://dl.acm.org/citation.cfm?id=172710">Bentley and McIlroy’s “Engineering a Sort Function”,</a> BSD actually uses their implementation.
+The swap macro works one <code>long</code> at a time if possible, and the
+recursive (with tail recursion replaced by a <code>goto</code>) function switches
+to insertion sort as soon as the input comprises fewwer than 7
+elements.  Finally, unlike GNU’s insertion sort, BSD’s rotates in
+place with a series of swaps.  This approach executes more writes than
+glibc’s strided rotations, but only accesses pairs of contiguous addresses.
+There’s one tweak that I find worrying: whenever a pivoting step
+leaves everything in place, quicksort directly switches to insertion
+sort, regardless of the partition size.  This is an attempt to detect
+pre-sorted subsequences, but malicious or unlucky input can easily
+turn BSD’s quicksort into a quadratic-time insertion sort.</p>
+
+<p>GNU’s quicksort finishes with insertion sort because the latter copes
+well with almost sorted data, including the result of its partial
+quicksort.  BSD’s qsort is a straight, cache-friendly,
+divide-and-conquer implementation.  It looks like it’d make sense to
+replace its base case with a selection sort: selection sort will
+perform more comparisons than insertion sort (the latter could even
+use binary search), but, with a single swap per iteration, will move
+much less data around.  I tried it out and the change had little to no
+impact, even for large elements.</p>
+
+<p>For completeness’s sake, I’ll also include results with BSD libc’s
+heapsort and mergesort.  The heapsort doesn’t look like it’s been
+touched in a long while; it too gives compilers licence to kill code,
+via</p>
+
+<pre><code>/*
+ * Items are numbered from 1 to nmemb, so offset from size bytes
+ * below the starting address.
+ */
+base = (char *)vbase - size;
+</code></pre>
+
+<p>Even libcs can’t get <a href="http://blog.regehr.org/archives/767">undefined behaviour</a> straight.</p>
+
+<h1 id="and-the-test-range">And the test range</h1>
+
+<p>Ideally, we could expose the effect of both element size and element
+count on the performance of these sort routines.  However, even if I
+were to measure runtimes on the cross product of a range of element
+size, range of element count, and a set of sort routine, I don’t know
+how I would make sense of the results.  Instead, I’ll let element
+sizes vary from one word to a few hundred bytes, and bin element
+counts in a few representative ranges:</p>
+
+<ol>
+  <li>Tiny arrays: 4-7 elements.</li>
+  <li>X-Small arrays: 8-15 elements;</li>
+  <li>Small arrays: 16-31 elements</li>
+  <li>Medium arrays: 32-64 elements.</li>
+</ol>
+
+<p>The test program times each sort routine on the same randomly
+generated input (sampling with replacement from <code>random(3)</code>), for each
+element size.  I try and smooth out outliers by repeating this process
+(including regenerating a fresh input) 20 times for each element size and
+count.</p>
+
+<p>Regardless of the element size, the comparison function is the same:
+it compares a single <code>unsigned</code> field at the head of the member.  I
+chose this comparator to reflect real world workloads in which
+comparisons are trivial.  When comparisons are slow, element size
+becomes irrelevant and classical performance analyses apply.</p>
+
+<p>The idea is to track, within each count bin, relative speedup/slowdown
+compared to BSD’s quicksort: any difference in multiplicative factors,
+as a function of element size, should show itself.  The element count
+bins can instead highlight differences in additive factors.</p>
+
+<h1 id="pretty-pictures">Pretty pictures</h1>
+
+<p>A test program logged runtimes for this cross product of all element
+sizes from 8 to 512 bytes (inclusively), all element counts (4 to 64,
+inclusively), and various sort routines.  For each size/count pair,
+the program regenerated a number of <code>random(3)</code> input; each sort
+routine received a copy of the same input.  Given such random input,
+we can expect all runtimes to scale with \(\Theta(n\log n)\), and it
+makes sense to report cycle counts scaled by a baseline (BSD’s
+quicksort).</p>
+
+<p>I compiled each sort routine (with gcc 4.8.2 at <code>-O2</code>) separately from
+the benchmark driver.  This prevented fancy interprocedural
+optimisation or specialisation from taking place, exactly like we
+would expect from calling to libc.  Everything below reports (scaled)
+cycle counts on my machine, an E5-4617.  I executed the benchmark with
+four processes pinned to different sockets, so the results should
+reflect a regular single-threaded setting.  I definitely could have
+run the benchmark on more machines, but I doubt that the relative
+computational overhead of copying structs versus comparing two machine
+words have varied much in the past couple years.</p>
+
+<h2 id="finding-the-perfect-k">Finding the perfect k</h2>
+
+<p>I first tested our k-ary heapsort with many values for <code>k</code>: 2-9, 12,
+15-17.</p>
+
+<p>When sorting 8-byte values, <code>k</code> doesn’t have too much of an impact.
+Nevertheless, it’s clear that large k (12 and over) are slower than even
+binary heapsort.  The sweetspot seems to be around 4 to 7.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/heap_size_8s.png" /></p>
+
+<p>Larger elements (32 and 64 bytes) show that the usual choice of 
+<code>k = 2</code> causes more than a 30% slowdown when swaps are slow.  The
+ideal <code>k</code> falls somewhere between 5 and 9 and between 6 and 17.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/heap_size_32s.png" />
+<img class="center" src="/images/2014-04-13-k-ary-heapsort/heap_size_64s.png" /></p>
+
+<p>Finally, at the extreme, with 512 byte elements, binary heapsort is
+almost twice as slow as 7-ary to 17-ary heapsorts.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/heap_size_512s.png" /></p>
+
+<p>The best choice of <code>k</code> will vary depending on how much slower it is to
+swap two elements than to compare them.  A fixed value between 5 and 7
+should be close to optimal for elements of 8 to 512 bytes.</p>
+
+<h2 id="tweaks-to-gnu-quicksort">Tweaks to GNU quicksort</h2>
+
+<p>I already mentioned that GNU’s quicksort has a slow swap macro, and
+that it ends with an insertion sort pass rather than completely
+sorting recursion leaves.  I tested versions of that quicksort with a
+different swap function:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>swap.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define CHUNK_SIZE 8</span>
+</span><span class="line">
+</span><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">void</span>
+</span><span class="line"><span class="nf">SWAP</span><span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="n">x</span><span class="p">,</span> <span class="kt">char</span> <span class="o">*</span><span class="n">y</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">n</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">char</span> <span class="n">chunk</span><span class="p">[</span><span class="n">CHUNK_SIZE</span><span class="p">];</span>
+</span><span class="line">        <span class="kt">size_t</span> <span class="n">i</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">+</span> <span class="n">CHUNK_SIZE</span> <span class="o">&lt;=</span> <span class="n">n</span><span class="p">;</span> <span class="n">i</span> <span class="o">+=</span> <span class="n">CHUNK_SIZE</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="n">memcpy</span><span class="p">(</span><span class="n">chunk</span><span class="p">,</span> <span class="n">x</span> <span class="o">+</span> <span class="n">i</span><span class="p">,</span> <span class="n">CHUNK_SIZE</span><span class="p">);</span>
+</span><span class="line">                <span class="n">memcpy</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="n">i</span><span class="p">,</span> <span class="n">y</span> <span class="o">+</span> <span class="n">i</span><span class="p">,</span> <span class="n">CHUNK_SIZE</span><span class="p">);</span>
+</span><span class="line">                <span class="n">memcpy</span><span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="n">i</span><span class="p">,</span> <span class="n">chunk</span><span class="p">,</span> <span class="n">CHUNK_SIZE</span><span class="p">);</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">for</span> <span class="p">(;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="kt">char</span> <span class="n">temp</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+</span><span class="line">                <span class="n">x</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">y</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+</span><span class="line">                <span class="n">y</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">temp</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>I also tested versions that only stops recursing on inputs of size 1
+(with <code>#define MAX_THRESH 1</code>).  This is a simple-minded way to
+implement quicksort, but avoids the final insertion sort pass (which
+proved too hairy to convert to the new swap function).</p>
+
+<p>When elements are small (8 bytes), the trivial recursion base case
+(GQL) is a bad idea; it’s slower than the original GNU quicksort (GQ).
+The new swap function (GQS), however, is always useful.  In fact, the
+combination of trivial base cases and improved swap (GQLS) is pretty
+much identical to the original GNU quicksort.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/gnu_qs_8s.png" /></p>
+
+<p>Switching to larger elements (16, 32, 64 or 512 bytes) shakes things
+up a bit.  The impact of faster swaps increases, and GQLS – the
+version with faster swap and trivial base case – is markedly quicker
+than the other variants.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/gnu_qs_16s.png" /></p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/gnu_qs_32s.png" /></p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/gnu_qs_64s.png" /></p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/gnu_qs_512s.png" /></p>
+
+<p>In the sequel, I will only consider the original GNU quicksort (GQ)
+and the variant with trivial base case and faster swaps.  From now on,
+I’ll refer to that variant as GQ’.</p>
+
+<h2 id="sanity-checking-the-size-bins">Sanity checking the size bins</h2>
+
+<p>I proposed to partition array lengths in 4 bins.  For that to work,
+the behaviour of the sort routines must be fairly homogeneous within
+each bin.</p>
+
+<p>The graph below fixes the element size at 8 bytes and presents
+normalised times for a few sort routines and a range of array sizes.
+We report the (geometric) average of 20 runtimes, scaled by the
+runtime for BSD quicksort on the same input, on a logarithmic scale.
+The logarithmic scale preserves the symmetry between a routine that is
+twice as slow as BSD quicksort (log ratio = 1) and one that is twice
+as fast (log ratio = -1).  The sort routines are:</p>
+
+<ul>
+  <li>GM: GNU mergesort;</li>
+  <li>GQ: GNU quicksort;</li>
+  <li>GQ’: tweaked GNU quicksort;</li>
+  <li>BM: BSD mergesort;</li>
+  <li>BH: BSD heapsort;</li>
+  <li>NH5: 5-ary heapsort;</li>
+  <li>NH7: 7-ary heapsort.</li>
+</ul>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/slowdown_size_8s.png" /></p>
+
+<p>The graph is pretty noisy for smaller arrays, but there’s no obvious
+discrepancy within size bins.  The same holds for larger element sizes
+(16, 64 and 512 bytes).</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/slowdown_size_16s.png" /></p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/slowdown_size_64s.png" /></p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/slowdown_size_512s.png" /></p>
+
+<p>We can already see that BSD’s quicksort is hard to beat on the element
+sizes considered above.</p>
+
+<h2 id="impact-of-element-size-on-tiny-arrays">Impact of element size on tiny arrays</h2>
+
+<p>The next graph shows the evolution of average (log) normalised sort
+times for tiny arrays (4-7 elements), as the size of each element
+grows from 8 to 512 bytes.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/tiny_4-512s.png" /></p>
+
+<p>There’s some overplotting, but it’s clear that there are actually two
+sets of curves: the main one, and another that only comprises sizes
+that are multiples of 8 (word-aligned).  I believe this is caused by
+special optimisations for nice element sizes in some (but not all) sort
+routines, including our baseline, BSD’s quicksort.</p>
+
+<p>For word-unaligned sizes, GNU’s mergesort and our tweaked GNU
+quicksort are never slower than the baseline; for large items, they
+are around 4x as quick.  On the same input, BSD’s mergesort and our
+k-ary heapsorts are on par with one another and slightly slower than
+the baseline, while GNU’s quicksort is slightly quicker.  The only
+sort routine that’s markedly slower than BSD’s quicksort is BSD’s
+binary heapsort (around 2-3x as slow).</p>
+
+<p>BSD’s word-alignment optimisation makes sense in practice: larger
+structs will often include at least one field that requires
+non-trivial alignment.  I think it makes sense to look at arbitrary
+sizes only up to a small limit (e.g., 32 bytes), and then only
+consider word-aligned sizes.</p>
+
+<p>For small element sizes, all but two routines are comparable to the
+baseline.  BSD’s heapsort is markedly slower, and our tweaked GNU
+quicksort somewhat faster.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/tiny_4-32s.png" /></p>
+
+<p>When element sizes are word-aligned, BSD’s quicksort is hard to beat.
+The only routine that manages to be quicker is GNU’s mergesort, for
+very large element sizes: the routine exploits dynamic storage to sort
+pointers and only permute elements in-place during a final linear-time
+pass.  Our k-ary heapsorts remain in the middle of the pack, slightly
+slower than BSD’s mergesort and GNU’s quicksort.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/tiny_4-128s.png" />
+<img class="center" src="/images/2014-04-13-k-ary-heapsort/tiny_128-512s.png" /></p>
+
+<h2 id="impact-of-element-size-on-extra-small-arrays">Impact of element size on extra small arrays</h2>
+
+<p>The results in the previous section were noisy: that’s expected when
+sorting arrays of 4 to 7 elements.  This section looks at arrays of 8
+to 15 elements; there’s less random variations and the graphs are much
+clearer.</p>
+
+<p>The graph for overall speeds is similar to the one for tiny arrays.
+However, it’s clear that, for general element sizes, our k-ary
+heapsorts are slightly faster than BSD’s mergesort and a bit slower
+than GNU’s quicksort.  Again, GNU’s mergesort and our tweaked
+quicksort are even quicker than BSD’s quicksort.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/xsmall_4-512s.png" /></p>
+
+<p>When we only consider word-aligned element sizes, the picture changes.
+The most important change is that our baseline is a lot quicker, and
+even GNU’s mergesort is slightly slower than BSD’s quicksort.  Our
+heapsorts are now slower than BSD’s mergesort, which is now comparable
+to GNU’s quicksort.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/xsmall_4-128s.png" /></p>
+
+<p>It’s only when we consider almost ridiculous element sizes that GNU’s
+mergesort edges out BSD’s quicksort: GNU’s indirect sorting strategy
+finally pays off.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/xsmall_128-512s.png" /></p>
+
+<h2 id="finally-small-and-medium-arrays">Finally, small and medium arrays</h2>
+
+<p>Small and medium arrays lead to the same conclusion as small ones,
+only more clearly.  For arbitrary element sizes, GNU’s mergesort and
+tweaked quicksorts are much quicker than everything else.  As for
+k-ary heapsorts, they are comparable to BSD’s quicksort and quicker
+than BSD’s mergesort and heapsort, except for small elements (fewer
+than a dozen bytes each).</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/small_4-512s.png" /></p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/medium_4-512s.png" /></p>
+
+<p>For word-aligned element sizes, GNU’s quicksort is still only
+outperformed by GNU’s indirect mergesort, while k-ary heapsorts are
+still slightly slower than GNU’s quicksort and BSD’s mergesort, but
+always quicker than the latter’s heapsort.</p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/small_4-128s.png" /></p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/small_128-512s.png" /></p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/medium_4-128s.png" /></p>
+
+<p><img class="center" src="/images/2014-04-13-k-ary-heapsort/medium_128-512s.png" /></p>
+
+<h1 id="wrap-up">Wrap-up</h1>
+
+<p>I’d say our results show that heapsort gets a bad rap because we
+always implement binary heaps.  Higher arity (around 7-way) heaps are
+just as easy to implement, and much more efficient when comparators
+are trivial and data movement slow.  For small arrays of medium-size
+elements, k-way heapsorts are competitive with BSD’s mergesort and
+GNU’s quicksort, while guaranteeing \(\mathcal{O}(n \log n)\) worst-case performance
+and without allocating storage; they’re almost magical when we only
+need partial or incremental sorts.</p>
+
+<p>There’s a more general conclusion from these experiments: <code>qsort(3)</code>’s
+very interface is a bad fit for a lot of workloads.  <code>qsort</code> lets us
+implement arbitrary comparisons with a callback, but must rely on
+generic swap routines.  This probably reflects a mindset according to
+which comparisons (logic) are slow and swaps (accessing data)
+trivially quick; GNU’s quicksort was definitely written with these
+assumptions in mind.  The opposite is often the case, nowadays.  Most
+comparators I’ve written are lexicographic comparisons of machine
+words, floating point values, and, very rarely, strings.  Such
+comparators could be handled with a few specialised sort routines:
+lexicographic sorts can either exploit stability (à la bottom-up radix
+sort), or recursion (top-down radix sort).  However, there were some
+cases when I could have implemented swaps more cleverly than with
+<code>memcpy(3)</code>, and I could always have passed a size-specialised swap
+routine.  There were also cases when I wanted to sort multiple arrays
+with respect to the same key, and had to allocate temporary storage,
+transpose the data, sort, and transpose back.  Mostly, this happened
+because of hybrid
+<a href="https://software.intel.com/en-us/articles/how-to-manipulate-data-structure-to-optimize-memory-use-on-32-bit-intel-architecture">struct of arrays</a>
+data layout imposed by memory performance considerations, but
+implementing the
+<a href="http://c2.com/cgi/wiki?SchwartzianTransform">Schwartzian transform</a>
+in C (which avoids recomputing keys) is basically the same thing.  A
+swap function argument would be ideal: it’s quicker than generic
+swaps, supports memory-optimised layouts, and helps express a classic
+Perl(!) idiom for sorting on derived keys.</p>
+
+<p>Behold, the modern sort interface:</p>
+
+<pre><code>struct comparison {
+        void *base;
+        size_t stride; 
+        union { void *ptr; unsigned long mask; } auxiliary;
+        enum comparison_kind kind;
+};
+
+void
+generic_sort(const struct comparison *cmp, size_t ncmp, size_t length,
+        void (*swap)(void *, size_t i, size_t j), void *swap_data);
+</code></pre>
+
+<p>Interpreted DSLs for logic and compiled data shuffling; it’s the future.</p>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+April
+  
+13th, 
+2014
+
+
+
+
+      
+      
+
+<br><span class="categories">
+  In categories:
+  
+    appnexus
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/Blog/2014/04/13/number-systems-for-implicit-data-structures/" title="Previous Post: Number systems for implicit data structures">&laquo; Number systems for implicit data structures</a>
+      
+      
+        <a class="basic-alignment right" href="/Blog/2014/05/11/integer-division-step-0-no-remainder/" title="Next Post: Integer division, step 0: no remainder">Integer division, step 0: no remainder &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2020 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2014/04/13/k-ary-heapsort/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2014/04/13/k-ary-heapsort/';
+      this.page.title = 'K-ary heapsort: more comparisons, less memory traffic';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>

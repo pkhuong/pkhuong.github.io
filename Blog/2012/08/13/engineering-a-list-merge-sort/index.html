@@ -1,0 +1,1508 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Engineering a list merge sort - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2012/08/13/engineering-a-list-merge-sort/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Engineering a list merge sort</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Aug
+  
+13th, 
+2012
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2012/08/13/engineering-a-list-merge-sort/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>Back in November 2011, <a href="https://github.com/sile/">Takeru Ohta</a>
+submitted a
+<a href="http://article.gmane.org/gmane.lisp.steel-bank.devel/16416">very nice patch</a>
+to replace our (SBCL’s) in-place stable merge sort on linked lists
+with a simpler,
+<a href="http://article.gmane.org/gmane.lisp.steel-bank.devel/16789">much more efficient</a>
+implementation.  It took me until last May to whip myself into running
+a bunch of tests to estimate the performance improvements and make
+sure there weren’t any serious regression, and finally commit the
+patch.  This post summarises what happened as I tried to find further
+improvements.  The result is an implementation that’s linear-time on
+nearly sorted or reverse-sorted lists, around 4 times as fast on
+slightly shuffled lists, and up to 30% faster on completely shuffled
+lists, thanks to design choices guided by statistically significant
+effects on performance (… on one computer, my dual
+2.8 GHz X5660).</p>
+
+<p>I believe the approach I used to choose the implementation can be
+applied in other contexts, and the tiny tweak to adapt the sort to
+nearly-sorted inputs is simple (much simpler than explicitly detecting runs
+like
+<a href="http://svn.python.org/projects/python/trunk/Objects/listsort.txt">Timsort</a>),
+if a bit weak, and works with pretty much any merge sort.</p>
+
+<h2 id="a-good-starting-point">A good starting point</h2>
+
+<p>The original code is reproduced below.  The sort is parameterised on
+two functions: a comparator (test) and a key function that extracts
+the property on which data are compared.  The key function is often
+the identity, but having it available is more convenient than having
+to pull the calls into the comparator.  The sort is also stable, so we
+use it for both stable and regular sorting; I’d like to keep things
+that way to minimise maintenance and testing efforts.  This
+implementation seems like a good foundation to me: it’s simple but
+pretty good (both in runtime and in number of comparisons).  Trying to
+modify already-complicated code is no fun, and there’s little point
+trying to improve an implementation that doesn’t get the basics right.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>merge function </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun merge-lists* (head list1 list2 test key &amp;aux (tail head))
+</span><span class="line">  (declare (type cons head list1 list2)
+</span><span class="line">           (type function test key)
+</span><span class="line">           (optimize speed))
+</span><span class="line">  (macrolet ((merge-one (l1 l2)
+</span><span class="line">               `(progn
+</span><span class="line">                  (setf (cdr tail) ,l1
+</span><span class="line">                        tail       ,l1)
+</span><span class="line">                  (let ((rest (cdr ,l1)))
+</span><span class="line">                    (cond (rest
+</span><span class="line">                           (setf ,l1 rest))
+</span><span class="line">                          (t
+</span><span class="line">                           (setf (cdr ,l1) ,l2)
+</span><span class="line">                           (return (cdr head))))))))
+</span><span class="line">    (loop
+</span><span class="line">     (if (funcall test (funcall key (car list2))  ; this way, equivalent
+</span><span class="line">                       (funcall key (car list1))) ; values are first popped
+</span><span class="line">         (merge-one list2 list1)                  ; from list1
+</span><span class="line">         (merge-one list1 list2)))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>sort function </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun stable-sort-list (list test key &amp;aux (head (cons :head list)))
+</span><span class="line">  (declare (type list list)
+</span><span class="line">           (type function test key)
+</span><span class="line">           (dynamic-extent head))
+</span><span class="line">  (labels ((recur (list size)
+</span><span class="line">             (declare (optimize speed)
+</span><span class="line">                      (type cons list)
+</span><span class="line">                      (type (and fixnum unsigned-byte) size))
+</span><span class="line">             (if (= size 1)
+</span><span class="line">                 (values list (shiftf (cdr list) nil))
+</span><span class="line">                 (let ((half (ash size -1))) ; TRUNCATE would have worked
+</span><span class="line">                   (multiple-value-bind (list1 rest)
+</span><span class="line">                       (recur list half)
+</span><span class="line">                     (multiple-value-bind (list2 rest)
+</span><span class="line">                         (recur rest (- size half))
+</span><span class="line">                       (values (merge-lists* head list1 list2 test key)
+</span><span class="line">                               rest)))))))
+</span><span class="line">    (when list
+</span><span class="line">      (values (recur list (length list))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>There are a few obvious improvements to try out: larger base cases,
+recognition of sorted subsequences, converting branches to conditional
+moves, finding some way to avoid the initial call to length (which
+must traverse the whole linked list), … But first, what would
+interesting performance metrics be, and on what inputs?</p>
+
+<h2 id="brainstorming-an-experiment-up">Brainstorming an experiment up</h2>
+
+<p>I think it works better to first determine our objective, then the
+inputs to consider, and, last, the algorithmic variants to try and
+compare (decision variables).  That’s more or less the reverse order
+of what’s usually suggested when defining mathematical models.  The
+difference is that, in the current context, the space of inputs and
+algorithms are usually so large that we have to winnow them down by
+taking earlier choices into account.</p>
+
+<h3 id="objective-functions">Objective functions</h3>
+
+<p>A priori, three basic performance metrics seem interesting: runtimes,
+number of calls to the comparator, and number of calls to the key
+functions.  On further thought, the last one doesn’t seem useful: if
+it really matters, a
+<a href="http://en.wikipedia.org/wiki/Schwartzian_transform">schwartzian transform</a>
+suffices to reduce these calls to a minimum, regardless of the sort
+implementation.</p>
+
+<p>There are some complications when looking at runtimes.  The universe
+of test and key functions is huge, and the sorts can be inlined, which
+sometimes enables further specialisation on the test and key.  I’ve
+already decided that calls to key don’t matter directly.  Let’s
+suppose it’s very simple, the identity function.  The number of
+comparisons will correlate nicely with performance when comparisons
+are slow.  Again, let’s suppose that the comparator is simple, a
+straight <code>&lt;</code> of fixnums.  The performance of sorts, especially with a
+trivial key and a simple comparator, can vary a lot depending on
+whether the sort is specialised or not, and both cases are relevant in
+practice.  I’ll have to test for both cases: inlined comparator and
+key functions, and generic sorts with unknown functions.</p>
+
+<p>This process lead to a set of three objective functions: the number of
+calls to the comparator, the runtime (number of cycles) of normal,
+generic sort, and the number of cycles for a specialised sort.</p>
+
+<h3 id="inputs">Inputs</h3>
+
+<p>The obvious thing to vary in the input (the list to sort) is the
+length of the list.  The lengths should probably span a wide range of
+values, from short lists (e.g. 32 elements) to long ones (a few
+million elements).  Programs that are sort-bound on very long lists
+should probably use vectors, if only around the sort, and then invest
+in a sophisticated sort.</p>
+
+<p>In real programs, sort is sometimes called on nearly sorted or
+reverse-sorted sequences, and it’s useful to sort such inputs faster,
+or with fewer comparisons.  However, it’s probably not that
+interesting if the adaptivity comes at the cost of worse performance
+on fully shuffled lists.  I decided to test on sorted and fully
+shuffled inputs.  I also interpolated between the two by flipping
+randomly-selected subranges of the list a few times.</p>
+
+<p>Finally, linked lists are different than vectors in one key manner:
+contiguous elements can be arbitrarily scattered around memory.
+SBCL’s allocation scheme ensures that consecutively-allocated objects
+will tend to be located next to each other in memory, and the copying
+garbage collector is hacked to copy the spine of cons lists in order.
+However, a list can still temporarily exhibit bad locality, for
+example after an in-place sort.  Again, I decided to go for ordered
+conses, fully scattered conses (only the conses were shuffled, not the
+list’s values), and to interpolate, this time by swapping
+randomly-selected pairs of consecutive subranges a couple times.</p>
+
+<h3 id="code-tweaks">Code tweaks</h3>
+
+<p>The textbook way to improve a recursive algorithm is to increase the
+base cases’ sizes.  In the initial code the base case is a sublist of
+size one; such a list is trivially sorted.  We can easily increase
+that to two (a single conditional swap suffices), and an optimal
+sorting network for three values is only slightly more complicated.  I
+decided to stop there, with base cases of size one to three.  These
+simple sorts are implemented as a series of conditional swaps
+(i.e. pairs of max/min computations), and these can be executed
+branch-free, with only conditional moves.  There’s a bit of overhead,
+and conditional moves introduce more latency than well predicted
+branches, but it might be useful for the specialised sort on shuffled
+inputs, and otherwise not hurt too much.</p>
+
+<p>The merge loop could cache the result of calls to the key functions.
+This won’t be useful in specialised sorts, and won’t affect the number
+of comparisons, but it’ll probably help the generic sort without
+really affecting performance otherwise.</p>
+
+<p>With one more level of indirection, the merge loop can be branch-free:
+<code>merge-one</code> can be executed on references to the list heads, and these
+references can be swapped with conditional moves.  Again, the
+additional complexity makes it hard to guess if the change would be a
+net improvement.</p>
+
+<p>Like I hinted back in May, we can accelerate the sort on pre-sorted
+inputs by keeping track of the last cons in each list, and tweaking
+the merge function: if the first value in one list is greater than (or
+equal to) the last in the other, we can directly splice them in order.
+Stability means we have to add a bit of complexity to handle equal
+values correctly, but nothing major.  With this tiny tweak, merge sort
+is linear-time on sorted or reverse-sorted lists (the recursive step
+is constant-time, and merge sort recurses on both halves); it also
+works on recursively-processed sublists, and the performance is thus
+improved on nearly-sorted inputs in general.  There’s little point
+going through additional comparisons to accelerate the merger of two
+tiny lists; a minimal length check is in order.  In addition to the
+current version, without any quick merge, I decided to try quick
+merges when the length of the two sublists summed to at least 8, 16 or</p>
+<ol>
+  <li>I didn’t try limits lower than 8 because any improvement would
+probably be marginal: trying to detect opportunities for quicker merge
+introduces two additional comparisons when it fails.</li>
+</ol>
+
+<p>Finally, I tried to see if the initial call to <code>length</code> (which has to
+traverse the whole list) could be avoided, e.g. by switching to a
+bottom-up sort.  The benchmarks I ran in May made me realise that’s
+probably a bad idea.  Such a merge sort almost assuredly has to split
+its inputs in chunks of power of two (or some other base) sizes.
+These splits are suboptimal on non-power-of-two inputs; for example,
+when sorting a list of length <code>(1+ (ash 1 n))</code>, the final merge is
+between a list of length <code>(ash 1 n)</code> and a list of length … one.
+Knowing the exact length of the list means we can split optimally on
+recursive calls, and that eliminates bumps in runtimes and in the
+number of comparisons around “round” lengths.</p>
+
+<h2 id="how-can-we-compare-all-these-possibilities">How can we compare all these possibilities?</h2>
+
+<p>I usually don’t try to do anything clever, and simply run a large
+number of repetitions for all the possible implementations and
+families of inputs, and then choose a few interesting statistical
+tests or sic an
+<a href="http://en.wikipedia.org/wiki/Analysis_of_variance">ANOVA</a> on it.  The
+problem is, I’d maybe want to test with ten lengths (to span the wide
+range between 32 and a couple million), a couple shuffledness values
+(say, four, between sorted and shuffled), a couple scatteredness
+values (say, four, again), and around 48 implementations (size-1 base
+case, size-3 base case, size-3 base case with conditional moves, times
+cached or uncached key, times branchful or branch-free merge loop,
+times four possibilities for the quick merge).  That’s a total of 7680
+sets of parameter values.  If I repeated each possibility 100 times, a
+reasonable sample size, I’d have to wait around 200 hours, given an
+average time of 1 second/execution (a generous estimate, given how
+slow shuffling and scattering lists can be)… and I’d have to do that
+separately when testing for comparison counts, generic sort runtimes
+and specialised sort runtimes!</p>
+
+<p>I like working on SBCL, but not enough to give its merge sort multiple
+CPU-weeks.</p>
+
+<p>Executing multiple repetitions of the full cross product is overkill:
+that actually gives us enough information to extract information about
+the interaction between arbitrary pairs (or arbitrary subsets, in
+fact) of parameters (e.g. shuffledness and the minimum length at which
+we try to merge in constant-time).  The thing is, I’d never even try
+to interpret all these crossed effects: there are way too many pairs,
+triplets, etc.  I could instead try to determine interesting crosses
+ahead of time, and find a design that fits my simple needs.</p>
+
+<p>Increasing the length of the list will lead to longer runtimes and
+more comparisons.  Scattering the cons cells around will also slow the
+sorts down, particularly on long lists.  Hopefully, the sorts are
+similar enough to be affected comparably by the length of the list and
+by how its conses are scattered in memory.</p>
+
+<p>Pre-sorted lists should be quicker to sort than shuffled ones, even
+without any clever merge step: all the branches that depend on
+comparisons are trivially predicted.  Hopefully, the effect is more
+marked when sorted pairs of sublists are merged in constant time.</p>
+
+<p>Finally, the interaction between the remaining algorithmic tweaks is
+pretty hard to guess, and there are only 12 combinations.  I feel
+it’s reasonable to cross the three parameter sets.</p>
+
+<p>That’s three sets of crossed effects (length and scatteredness,
+shuffledness and quick merge switch-over, remaining algorithmic
+tweaks), but I’m not interested in any further interaction, and am
+actually hoping these interactions are negligible.  A Latin square
+design can help bring the sample to a much more reasonable size.</p>
+
+<h3 id="quadrata-latina-pro-victoria">Quadrata Latina pro victoria</h3>
+
+<p>An NxN <a href="http://mathworld.wolfram.com/LatinSquare.html">Latin square</a>
+is a square of NxN cells, with one of N symbols in each cell, with the
+constraint that each symbol appears once in each row and column; it’s
+a relaxed Sudoku.</p>
+
+<p>When a first set of parameters values is associated with the rows, a
+second with the columns, and a third with the symbols, a Latin square
+defines N^2 triplets that cover each pair of parameters between the
+three sets exactly once.  As long as interactions are absent or
+negligible, that’s enough information to separate the effect of each
+set of parameters.  The approach is interesting because there are only
+N^2 cells (i.e. trials), instead of N^3.  Better, the design can cope
+with very low repetition counts, as low as a single trial per cell.</p>
+
+<p>Latin squares are also fairly easy to generate.  It suffices to fill
+the first column with the symbols in arbitrary order, the second in
+the same order, rotated by one position, the third with a rotation by
+two, etc.  The square can be further randomised by shuffling the rows
+and columns (with Fisher-Yates, for example).  That procedure doesn’t
+sample from the full universe of Latin squares, but it’s supposed to
+be good enough to uncover pairwise interactions.</p>
+
+<p>Latin squares only make sense when all three sets of parameters are
+the same size.  Latin rectangles can be used when one of the sets is
+smaller than the two others, by simply removing rows or columns from a
+random Latin square.  Some pairs are then left unexplored, but the
+data still suffices for uncrossed linear fits, and generating
+independent rectangles helps cover more possibilities.</p>
+
+<p>I’ll treat all the variables as categorical, even though some take
+numerical values: it’ll work better on non-linear effects (and I have
+no clue what functional form to use).</p>
+
+<h3 id="optimising-for-comparison-counts">Optimising for comparison counts</h3>
+
+<p>Comparison counts are easier to analyse.  They’re oblivious to
+micro-optimisation issues like conditional moves or scattered conses,
+and results are deterministic for fixed inputs.  There are much fewer
+possibilities to consider, and less noise.</p>
+
+<p>Four values for the minimum length before checking for constant-time
+merger (8, 16, 32 or never), and ten shuffledness values (sorted,
+one, two, five, ten, 50, 100, 500 or 1000 flips, and full shuffle)
+seem reasonable; when the number of flips is equal to or exceeds the
+list length, a full shuffle is performed instead.  That’s 40 values
+for one parameter set.</p>
+
+<p>There are only two interesting values for the remaining algorithmic
+tweaks: size-3 base cases or not (only size-1).</p>
+
+<p>This means there should be 40 list lengths to balance the design.  I
+chose to interpolate from 32 to 16M (inclusively) with a geometric
+sequence, rounded to the nearest integer.</p>
+
+<p>The resulting Latin rectangles comprise 80 cells.  Each scenario was
+repeated five times (starting from the same five PRNG states), and 30
+independent rectangles were generated.  In total, that’s 12 000
+executions.  The are probably smarter ways to do this that better
+exploit the fact that there are only two algorithmic tweaks variants;
+I stuck to a very thin Latin rectangle to stay closer to the next two
+settings.  Still, a full cross product with 100 repetitions would have
+called for 320 000 executions, nearly 30 times as many.</p>
+
+<p>I wish to understand the effect of these various parameters on the
+number of times the comparison function is called to sort a list.
+Simple models tend to suppose additive effects.  That doesn’t look
+like it’d work well here.  I expect multiplicative effects: enabling
+quick merge shouldn’t add or subtract to the number of comparisons,
+but scale it (hopefully by less than one).  A logarithmic
+transformation will convert these multiplications into additions.  The
+ANOVA method and the linear regression I’ll use are parametric methods
+that suppose that the mean of experimental noise roughly follows a
+normal distribution.  It seems like a reasonable hypothesis:
+variations will be caused by a sum of many small differences caused by
+the shuffling, and we’re working with many repetitions, hopefully
+enough for the central limit theorem to kick in.</p>
+
+<p>The Latin square method also depends on the absence of crossed
+interactions between rows and columns, rows and symbols, or columns
+and symbols.  If that constraint is violated, the design is highly
+vulnerable to Type I errors: variations caused by interactions between
+rows and columns could be assigned to rows or columns, for example.</p>
+
+<p>My first step is to look for such interaction effects.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>two-way ANOVA for comparison counts </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">&gt; anova(lm(log(Count, 2) ~ Size.Scatter*Shuffle.Quick
+</span><span class="line">                         + Size.Scatter*Leaf.Cache.BranchMerge
+</span><span class="line">                         + Shuffle.Quick*Leaf.Cache.BranchMerge
+</span><span class="line">                         + 0, # 0 y-intercept
+</span><span class="line">           data))
+</span><span class="line">Analysis of Variance Table
+</span><span class="line">
+</span><span class="line">Response: log(Count, 2)
+</span><span class="line">                                        Df  Sum Sq Mean Sq  F value  Pr(&gt;F)
+</span><span class="line">Size.Scatter                            40 3935314   98383 6.90e+06 &lt; 2e-16 ***
+</span><span class="line">Shuffle.Quick                           39    7739     198 1.39e+04 &lt; 2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMerge                   1       8       8 5.96e+02 &lt; 2e-16 ***
+</span><span class="line">Size.Scatter:Shuffle.Quick            1159     770       1 4.66e+01 &lt; 2e-16 ***
+</span><span class="line">Size.Scatter:Leaf.Cache.BranchMerge     39       1       0 1.03e+00    0.41
+</span><span class="line">Shuffle.Quick:Leaf.Cache.BranchMerge    39       1       0 2.10e+00 7.5e-05 ***
+</span><span class="line">Residuals                            10683     152       0
+</span><span class="line">---
+</span><span class="line">Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The main effects are statistically significant (in order, list length,
+shuffling and quick merge limit, and the algorithmic tweaks), with p &lt;
+2e-16.  That’s reassuring: the odds of observing such results if they
+had no effects are negligible.  Two of the pairs are, as well.  Their
+effects, on the other hand, don’t seem meaningful.  The <code>Sum Sq</code>
+column reports how much of the variance in the data set is explained
+when the parameters corresponding to each row (one for each degree of
+freedom <code>Df</code>) are introduced in the fit.  Only the
+Size.Scatter:Shuffle.Quick row really improves the fit, and that’s
+with 1159 degrees of freedom; the mean improvement in fit, <code>Mean Sq</code>
+(per degree of freedom) is tiny.</p>
+
+<p>The additional assumption that interaction effects are negligible
+seems reasonably satisfied.  The linear model should be valid, but,
+more importantly, we can analyse each set of parameters independently.
+Let’s look at a regression with only the main effects.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>one-way ANOVA for comparison counts </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">&gt; fit &lt;- lm(log(Count, 2) ~ Size.Scatter + Shuffle.Quick
+</span><span class="line">                          + Leaf.Cache.BranchMerge + 0, data)
+</span><span class="line">&gt; anova(fit)
+</span><span class="line">Analysis of Variance Table
+</span><span class="line">
+</span><span class="line">Response: log(Count, 2)
+</span><span class="line">                          Df  Sum Sq Mean Sq F value Pr(&gt;F)
+</span><span class="line">Size.Scatter              40 3935314   98383 1269019 &lt;2e-16 ***
+</span><span class="line">Shuffle.Quick             39    7739     198    2560 &lt;2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMerge     1       8       8     110 &lt;2e-16 ***
+</span><span class="line">Residuals              11920     924       0
+</span><span class="line">---
+</span><span class="line">Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The fit is only slightly worse than with pairwise interactions.  The
+coefficient table follows.  What we see is that half of the
+observations fall within 12% of the linear model’s prediction (the
+worst case is off by more than 100%), and that nearly all the
+coefficients are statistically significantly different than zero.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>one-way coefficients for comparison counts </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">&gt; summary(fit)
+</span><span class="line">Call:
+</span><span class="line">lm(formula = log(Count, 2) ~ Size.Scatter + Shuffle.Quick
+</span><span class="line">                           + Leaf.Cache.BranchMerge + 0,
+</span><span class="line">   data = data)
+</span><span class="line">
+</span><span class="line">Residuals:
+</span><span class="line">    Min      1Q  Median      3Q     Max
+</span><span class="line">-1.1105 -0.1746  0.0052  0.1440  1.3586
+</span><span class="line">
+</span><span class="line">Coefficients:
+</span><span class="line">                            Estimate Std. Error t value Pr(&gt;|t|)
+</span><span class="line">Size.Scatter32xF             7.20776    0.02279  316.23  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter45xF             7.98704    0.02276  350.87  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter63xF             8.52335    0.02243  380.06  &lt; 2e-16 ***
+</span><span class="line">[...]
+</span><span class="line">Shuffle.QuickFx8            -2.77266    0.02284 -121.39  &lt; 2e-16 ***
+</span><span class="line">Shuffle.QuickFx16           -2.45345    0.02293 -106.98  &lt; 2e-16 ***
+</span><span class="line">Shuffle.QuickFx32           -2.14230    0.02289  -93.59  &lt; 2e-16 ***
+</span><span class="line">Shuffle.QuickFxF            -0.55217    0.02289  -24.12  &lt; 2e-16 ***
+</span><span class="line">[...]
+</span><span class="line">Leaf.Cache.BranchMergeTxFxT  0.05320    0.00508   10.47  &lt; 2e-16 ***
+</span><span class="line">---
+</span><span class="line">Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+</span><span class="line">
+</span><span class="line">Residual standard error: 0.278 on 11920 degrees of freedom
+</span><span class="line">Multiple R-squared:    1,       Adjusted R-squared:    1
+</span><span class="line">F-statistic: 6.36e+05 on 80 and 11920 DF,  p-value: &lt;2e-16</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The Size.Scatter coefficients are plotted below.  The number of
+comparison grows with the length of the lists.  The logarithmic factor
+shows in the curve’s slight convexity (compare to the linear
+interpolation in blue).</p>
+
+<p><a href="/images/2012-08-13-engineering-a-list-merge-sort/count-size-large.png"><img class="center" src="/images/2012-08-13-engineering-a-list-merge-sort/count-size.png" /></a></p>
+
+<p>The Shuffle.Quick values are the coefficients for the crossed effect
+of the level of shuffling and the minimum length (cutoff) at which
+constant-time merge may be executed; their values are reported in the
+next histogram, with error bars corresponding to one standard
+deviation.  Hopefully, a shorter cutoff lowers the number of
+comparisons when lists are nearly pre-sorted, and doesn’t increase it
+too much when lists are fully shuffled.  On very nearly sorted lists,
+looking for pre-sorted inputs as soon as eight or more values are
+merged divides the number of comparisons by a factor of 4 (these are
+base-2 logarithms), and the advantage smoothly tails off as lists are
+shuffled better.  Overall, cutting off at eight seems to never do
+substantially worse than the other choices, and is even roughly
+equivalent to vanilla merges on fully shuffled inputs.</p>
+
+<p><a href="/images/2012-08-13-engineering-a-list-merge-sort/count-shuffle-large.png"><img class="center" src="/images/2012-08-13-engineering-a-list-merge-sort/count-shuffle.png" /></a></p>
+
+<p>The coefficient table tells us that nearly all of the Shuffle.Quick
+coefficients are statistically significant.  The statistical
+significance values are for a null hypothesis that each of these
+coefficients is actually zero: the observation would be extremely
+unlikely if that were the case.  That test tells us nothing about the
+relationship between two coefficients.</p>
+
+<p>Comparing differences with standard deviations helps us detect hugely
+significant difference, but we can use statistical tests to try and
+make finer distinctions.
+<a href="http://en.wikipedia.org/wiki/Tukey's_range_test">Tukey’s Honest Significant Difference (HSD)</a>
+method gives intervals on the difference between two coefficients for
+a given confidence level.  For example, the 99.99% confidence interval
+between cutoff at 8 and 32 on lists that were flipped 50 times is
+[-0.245, -0.00553].  This result means that, if the hypotheses for
+Tukey’s HSD method are satisfied, the probability of observing the
+results I found is less than .01% when the actual difference in effect
+between cutoff at 8 and 32 is outside that interval.  Since even the
+upper bound is negative, it also means that the odds of observing the
+current results are less than .01% if the real value for cutoff at 8
+isn’t lower than that of cutoff at 32: it’s pretty sure that looking
+for quick merges as early as length eight pays off compared to only
+doing so for merges of length 32 or more.  One could also just prove
+that’s the case.  Overall, cutting off at length eight results in
+fewer comparisons than the other options at nearly all shuffling
+levels (with very high confidence), and the few cases cases it doesn’t
+aren’t statistically significant at a 99.99% confidence level – of
+course, absence of evidence isn’t evidence of absence, but the
+differences between these estimates tend to be tiny anyway.</p>
+
+<p>The last row, Leaf.Cache.BranchMergeTxFxT, reports the effect of
+adding base cases that sort lists of length 2 and 3.  Doing so causes
+4% more comparisons.  That’s a bit surprising: adding specialised base
+cases usually improves performance.  The issue is that the sorting
+networks are only optimal for data-oblivious executions.  Sorting
+three values requires, in theory, 2.58 (\(\lg 3!\)) bits of
+information (comparisons).  A sorting network can’t do better than the
+ceiling of that, three comparisons, but if control flow can depend on
+the comparisons, some lists can be sorted in two comparisons.</p>
+
+<p>It seems that, if we wish to minimise the number of comparisons, I
+should avoid sorting networks for the size-3 base case, and try to
+detect opportunities for constant-time list merges.  Doing so as soon
+as the merged list will be of length eight or more seems best.</p>
+
+<h3 id="optimising-the-runtime-of-generic-sorts">Optimising the runtime of generic sorts</h3>
+
+<p>I decided to keep the same general shape of 40x40xM parameter values
+when looking at the cycle count for generic sorts.  This time,
+scattering conses around in memory will affect the results.  I went
+with conses laid out linearly, 10 swaps, 50 swaps, and full
+randomisation of addresses.  These 4 scattering values leave 10 list
+lengths, in a geometric progression from 32 to 16M.  Now, it makes
+sense to try all the other micro-optimisations: trivial base case or
+base cases of size up to 3, with branches or conditional moves (3
+choices), cached calls to key during merge (2 choices), and branches
+or conditional moves in the merge loop (2 choices).  This calls for
+Latin rectangles of size 40x12; I generated 10 rectangles, and
+repeated each cell 5 times (starting from the same 5 PRNG seeds).  In
+total, that’s 24 000 executions.  A full cross product, without any
+repetition, would require 19 200 executions; the Latin square design
+easily saved a factor of 10 in terms of sample size (and computation
+time) for equivalent power.</p>
+
+<p>I’m interested in execution times, so I generated the inputs ahead of
+time, before sorting them; during both generation and sorting, the
+garbage collector was disabled to avoid major slowdowns caused by the
+mprotect-based write barrier.</p>
+
+<p>Again, I have to apply a logarithmic transformation for the additive
+model to make sense, and first look at the interaction effects.
+There’s a similar situation as the previous section on comparison
+counts: one of the crossed effects is statistically significant, but
+it’s not overly meaningful.  A quick look at the coefficients reveals
+that the speed-ups caused by processing nearly-sorted lists in close
+to linear time are overestimated on short lists and slightly
+underestimated on long ones.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>two-way ANOVA for generic sort runtime </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">&gt; anova(lm(log(Cycles, 2) ~ Size.Scatter*Shuffle.Quick
+</span><span class="line">                          + Size.Scatter*Leaf.Cache.BranchMerge
+</span><span class="line">                          + Shuffle.Quick*Leaf.Cache.BranchMerge
+</span><span class="line">                          + 0,
+</span><span class="line">           data))
+</span><span class="line">Analysis of Variance Table
+</span><span class="line">
+</span><span class="line">Response: log(Cycles, 2)
+</span><span class="line">                                        Df   Sum Sq Mean Sq  F value Pr(&gt;F)    
+</span><span class="line">Size.Scatter                            40 15666210  391655 3.97e+07 &lt;2e-16 ***
+</span><span class="line">Shuffle.Quick                           39    13396     343 3.48e+04 &lt;2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMerge                  11       58       5 5.37e+02 &lt;2e-16 ***
+</span><span class="line">Size.Scatter:Shuffle.Quick            1477     1620       1 1.11e+02 &lt;2e-16 ***
+</span><span class="line">Size.Scatter:Leaf.Cache.BranchMerge    429        4       0 8.90e-01   0.95    
+</span><span class="line">Shuffle.Quick:Leaf.Cache.BranchMerge   429        2       0 5.40e-01   1.00    
+</span><span class="line">Residuals                            21575      213       0                    
+</span><span class="line">---
+</span><span class="line">Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We can basically read the ANOVA with only main effects by skipping the
+rows corresponding to crossed effects and instead adding their values
+to the residuals.  There are statistically significant coefficients in
+there, and they’re reported below.  Again, I’m quite happy to be able
+to examine each set of parameters independently, rather than having to
+understand how, e.g., scattering cons cells around affects quick merges
+differently than the vanilla merge.  Maybe I just didn’t choose the
+right parameters, or was really unlucky; I’m just trying to do the
+best I can with induction.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>one-way coefficients for generic sort runtime </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">&gt; summary(lm(log(Cycles, 2) ~ Size.Scatter + Shuffle.Quick
+</span><span class="line">                            + Leaf.Cache.BranchMerge + 0, data))
+</span><span class="line">Call:
+</span><span class="line">lm(formula = log(Cycles, 2) ~ Size.Scatter + Shuffle.Quick + 
+</span><span class="line">    Leaf.Cache.BranchMerge + 0, data = data)
+</span><span class="line">
+</span><span class="line">Residuals:
+</span><span class="line">    Min      1Q  Median      3Q     Max 
+</span><span class="line">-0.9658 -0.1637 -0.0036  0.1446  1.4650 
+</span><span class="line">
+</span><span class="line">Coefficients:
+</span><span class="line">                               Estimate Std. Error t value Pr(&gt;|t|)    
+</span><span class="line">Size.Scatter32x10              14.96752    0.01684  888.96  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter32x500             15.01394    0.01677  895.22  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter32xF               15.05236    0.01703  884.05  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter32xT               15.03750    0.01702  883.43  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter138x10             17.44223    0.01703 1024.09  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter138x500            17.45624    0.01696 1029.29  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter138xF              17.45541    0.01696 1029.31  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter138xT              17.48772    0.01710 1022.69  &lt; 2e-16 ***
+</span><span class="line">[...]
+</span><span class="line">Shuffle.QuickFx8               -2.52552    0.01607 -157.17  &lt; 2e-16 ***
+</span><span class="line">Shuffle.QuickFx16              -2.20712    0.01606 -137.42  &lt; 2e-16 ***
+</span><span class="line">Shuffle.QuickFx32              -1.92409    0.01606 -119.81  &lt; 2e-16 ***
+</span><span class="line">Shuffle.QuickFxF               -0.58187    0.01606  -36.24  &lt; 2e-16 ***
+</span><span class="line">Shuffle.Quick1x8               -1.84568    0.01607 -114.86  &lt; 2e-16 ***
+</span><span class="line">Shuffle.Quick1x16              -1.64170    0.01607 -102.19  &lt; 2e-16 ***
+</span><span class="line">Shuffle.Quick1x32              -1.50046    0.01606  -93.42  &lt; 2e-16 ***
+</span><span class="line">Shuffle.Quick1xF               -0.48014    0.01607  -29.87  &lt; 2e-16 ***
+</span><span class="line">[...]
+</span><span class="line">Leaf.Cache.BranchMergeCMOVxFxT -0.03229    0.00877   -3.68  0.00023 ***
+</span><span class="line">Leaf.Cache.BranchMergeCMOVxTxF -0.04451    0.00877   -5.08  3.9e-07 ***
+</span><span class="line">Leaf.Cache.BranchMergeCMOVxTxT -0.08632    0.00877   -9.84  &lt; 2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMergeFxFxF     0.09094    0.00877   10.37  &lt; 2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMergeFxFxT    -0.01637    0.00877   -1.87  0.06193 .  
+</span><span class="line">Leaf.Cache.BranchMergeFxTxF     0.01617    0.00877    1.84  0.06519 .  
+</span><span class="line">Leaf.Cache.BranchMergeFxTxT    -0.06236    0.00877   -7.11  1.2e-12 ***
+</span><span class="line">Leaf.Cache.BranchMergeTxFxF     0.03694    0.00877    4.21  2.5e-05 ***
+</span><span class="line">Leaf.Cache.BranchMergeTxFxT    -0.03665    0.00877   -4.18  2.9e-05 ***
+</span><span class="line">Leaf.Cache.BranchMergeTxTxF    -0.03920    0.00877   -4.47  7.9e-06 ***
+</span><span class="line">Leaf.Cache.BranchMergeTxTxT    -0.08567    0.00877   -9.77  &lt; 2e-16 ***
+</span><span class="line">---
+</span><span class="line">Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1 
+</span><span class="line">
+</span><span class="line">Residual standard error: 0.277 on 23910 degrees of freedom
+</span><span class="line">Multiple R-squared:    1,	Adjusted R-squared:    1 
+</span><span class="line">F-statistic: 2.27e+06 on 90 and 23910 DF,  p-value: &lt;2e-16</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The coefficients for list length crossed with scattering level are
+plotted below. Sorting seems to be slower on longer list (surprise!),
+especially when the cons cells are scattered; sorting long scattered
+lists is about twice as slow as sorting nicely laid-out lists of the
+same length.  The difference between linear and slightly scattered
+lists isn’t statistically significant.</p>
+
+<p><a href="/images/2012-08-13-engineering-a-list-merge-sort/normal-size-large.png"><img class="center" src="/images/2012-08-13-engineering-a-list-merge-sort/normal-size.png" /></a></p>
+
+<p>Just as with comparison counts, sorting pre-sorted lists is faster,
+with or without special logic.  Looking for sorted inputs before
+merging pays off even on short lists, when the input is nearly sorted:
+the effect of looking for pre-sorted inputs even on sublists of length
+eight is consistently more negative (i.e. reduces runtimes) than for
+the other cutoffs.  The difference is statistically significant at
+nearly all shuffling levels, and never significantly positive.</p>
+
+<p><a href="/images/2012-08-13-engineering-a-list-merge-sort/normal-shuffle-large.png"><img class="center" src="/images/2012-08-13-engineering-a-list-merge-sort/normal-shuffle.png" /></a></p>
+
+<p>Finally, the three algorithmic tweaks.  Interestingly, the
+coefficients tell us that, overall, the additional overhead of the
+branch-free merge loop slows it down by 5%.  The fastest combination
+seems to be larger base cases, with or without conditional moves (C or
+T), cached calls to key (T), and branchful merge loop (T); the
+differences are statistically significant against nearly all other
+combinations, except FxTxT (no leaf sort, cached key, and branchful
+merge loop).  Compared with the current code (FxFxT), the speed up is
+on the order of 5%, and at least 2% with 99.99% confidence.</p>
+
+<p><a href="/images/2012-08-13-engineering-a-list-merge-sort/normal-tweak-large.png"><img class="center" src="/images/2012-08-13-engineering-a-list-merge-sort/normal-tweak.png" /></a></p>
+
+<p>If I want to improve the performance of generic sorts, it looks like I
+want to test for pre-sorted inputs when merging into a list of length
+8 or more, probably implement larger base cases, cache calls to the
+key function, and keep the merge loop branchful.</p>
+
+<h3 id="optimising-the-runtime-of-specialised-sorts">Optimising the runtime of specialised sorts</h3>
+
+<p>I kept the exact same plan as for generic sorts.  The only difference
+is that independent Latin rectangles were re-generated from scratch.
+With the overhead from generic indirect calls removed, I’m hoping to
+see more important effects from the micro-optimisations.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>two-way ANOVA for specialised sort runtime </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">&gt; anova(lm(log(Cycles, 2) ~ Size.Scatter*Shuffle.Quick
+</span><span class="line">                          + Size.Scatter*Leaf.Cache.BranchMerge
+</span><span class="line">                          + Shuffle.Quick*Leaf.Cache.BranchMerge
+</span><span class="line">                          + 0,
+</span><span class="line">           data))
+</span><span class="line">Analysis of Variance Table
+</span><span class="line">
+</span><span class="line">Response: log(Cycles, 2)
+</span><span class="line">                                        Df   Sum Sq Mean Sq  F value Pr(&gt;F)    
+</span><span class="line">Size.Scatter                            40 12531049  313276 2.92e+07 &lt;2e-16 ***
+</span><span class="line">Shuffle.Quick                           39    12324     316 2.94e+04 &lt;2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMerge                  11     3365     306 2.85e+04 &lt;2e-16 ***
+</span><span class="line">Size.Scatter:Shuffle.Quick            1475     2952       2 1.86e+02 &lt;2e-16 ***
+</span><span class="line">Size.Scatter:Leaf.Cache.BranchMerge    429      391       1 8.49e+01 &lt;2e-16 ***
+</span><span class="line">Shuffle.Quick:Leaf.Cache.BranchMerge   429      150       0 3.25e+01 &lt;2e-16 ***
+</span><span class="line">Residuals                            21577      232       0                    
+</span><span class="line">---
+</span><span class="line">Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1 
+</span><span class="line">Analysis of Variance Table</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Here as well, all the main and crossed effects are statistically
+significant.  The effect of the micro-optimisations
+(Leaf.Cache.BranchMerge) are now about as influential as the fast
+merge minimum length.  It’s also even more clear that the crossed
+effects are much less important than the main ones, and that it’s
+probably not too bad to ignore the former.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>one-way coefficients for specialised sort runtime </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">&gt; summary(lm(log(Cycles, 2) ~ Size.Scatter + Shuffle.Quick
+</span><span class="line">                            + Leaf.Cache.BranchMerge + 0, data))
+</span><span class="line">
+</span><span class="line">Call:
+</span><span class="line">lm(formula = log(Cycles, 2) ~ Size.Scatter + Shuffle.Quick + 
+</span><span class="line">    Leaf.Cache.BranchMerge + 0, data = data)
+</span><span class="line">
+</span><span class="line">Residuals:
+</span><span class="line">    Min      1Q  Median      3Q     Max 
+</span><span class="line">-1.5650 -0.2395 -0.0186  0.2233  2.1683 
+</span><span class="line">
+</span><span class="line">Coefficients:
+</span><span class="line">                               Estimate Std. Error t value Pr(&gt;|t|)    
+</span><span class="line">Size.Scatter32x10              12.60101    0.02431  518.30  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter32x500             12.65034    0.02414  523.98  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter32xF               12.57545    0.02431  517.19  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter32xT               12.64220    0.02423  521.78  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter138x10             14.76927    0.02422  609.70  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter138x500            14.81878    0.02433  609.04  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter138xF              14.76646    0.02440  605.16  &lt; 2e-16 ***
+</span><span class="line">Size.Scatter138xT              14.86926    0.02441  609.04  &lt; 2e-16 ***
+</span><span class="line">[...]
+</span><span class="line">Shuffle.QuickFx8               -2.13508    0.02287  -93.37  &lt; 2e-16 ***
+</span><span class="line">Shuffle.QuickFx16              -1.87832    0.02285  -82.19  &lt; 2e-16 ***
+</span><span class="line">Shuffle.QuickFx32              -1.71007    0.02284  -74.86  &lt; 2e-16 ***
+</span><span class="line">Shuffle.QuickFxF               -0.64569    0.02286  -28.24  &lt; 2e-16 ***
+</span><span class="line">Shuffle.Quick1x8               -1.60291    0.02286  -70.12  &lt; 2e-16 ***
+</span><span class="line">Shuffle.Quick1x16              -1.48993    0.02284  -65.22  &lt; 2e-16 ***
+</span><span class="line">Shuffle.Quick1x32              -1.39072    0.02282  -60.95  &lt; 2e-16 ***
+</span><span class="line">Shuffle.Quick1xF               -0.55361    0.02284  -24.24  &lt; 2e-16 ***
+</span><span class="line">[...]
+</span><span class="line">Leaf.Cache.BranchMergeCMOVxFxT -0.64106    0.01248  -51.37  &lt; 2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMergeCMOVxTxF  0.02932    0.01248    2.35   0.0188 *  
+</span><span class="line">Leaf.Cache.BranchMergeCMOVxTxT -0.65298    0.01248  -52.32  &lt; 2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMergeFxFxF     0.30856    0.01248   24.72  &lt; 2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMergeFxFxT    -0.43997    0.01248  -35.25  &lt; 2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMergeFxTxF     0.29306    0.01248   23.48  &lt; 2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMergeFxTxT    -0.44372    0.01248  -35.55  &lt; 2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMergeTxFxF     0.01703    0.01248    1.36   0.1725    
+</span><span class="line">Leaf.Cache.BranchMergeTxFxT    -0.70801    0.01248  -56.73  &lt; 2e-16 ***
+</span><span class="line">Leaf.Cache.BranchMergeTxTxF     0.02323    0.01248    1.86   0.0627 .  
+</span><span class="line">Leaf.Cache.BranchMergeTxTxT    -0.68746    0.01248  -55.08  &lt; 2e-16 ***
+</span><span class="line">---
+</span><span class="line">Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1 
+</span><span class="line">
+</span><span class="line">Residual standard error: 0.395 on 23910 degrees of freedom
+</span><span class="line">Multiple R-squared:    1,	Adjusted R-squared:    1 
+</span><span class="line">F-statistic: 8.95e+05 on 90 and 23910 DF,  p-value: &lt;2e-16</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The general aspect of the coefficients is pretty much the same as for
+generic sorts, except that differences are amplified now that the
+constant overhead of indirect calls is eliminated.</p>
+
+<p>The coefficients for crossed list length and scattering level
+coefficients are plotted below.  The graph shows that fully shuffling
+long lists around slows sort down by a factor of 8.  The initial check
+for crossed effect gave good reasons to believe that this effect is
+fairly homogeneous throughout all implementations.</p>
+
+<p><a href="/images/2012-08-13-engineering-a-list-merge-sort/inline-size-large.png"><img class="center" src="/images/2012-08-13-engineering-a-list-merge-sort/inline-size.png" /></a></p>
+
+<p>Checking for sorted inputs before merge still helps, even on short
+lists (of length 8 or more).  In fact even on completely shuffled
+lists, looking for quick merge on short lists very probably
+accelerates the sort compared to not looking for pre-sorted inputs,
+although the speed up compared to other cutoff values isn’t
+significant to a 99.99% confidence level.</p>
+
+<p><a href="/images/2012-08-13-engineering-a-list-merge-sort/inline-shuffle-large.png"><img class="center" src="/images/2012-08-13-engineering-a-list-merge-sort/inline-shuffle.png" /></a></p>
+
+<p>The key function is the identity, and is inlined into nothing in these
+measurements.  It’s not surprising that the difference between cached
+and uncached key values is tiny.  The versions with larger base cases
+(C or T) sorts, and branchful merge are quicker than the others at
+99.99% confidence level; compared to the initial code, they’re at
+least 13% faster with 99.99% confidence.</p>
+
+<p><a href="/images/2012-08-13-engineering-a-list-merge-sort/inline-tweak-large.png"><img class="center" src="/images/2012-08-13-engineering-a-list-merge-sort/inline-tweak.png" /></a></p>
+
+<p>When the sort is specialised, I probably want to use a merge function
+that checks for pre-sorted inputs very early, to implement larger base
+cases (with conditional moves or branches), and to keep the merge loop
+branchful.</p>
+
+<h2 id="putting-it-all-together">Putting it all together</h2>
+
+<p>Comparison counts are minimised by avoiding sorting networks, and by
+enabling opportunistic constant-time merges as early as possible.
+Generic sorts are fastest with larger base cases (with or without
+branches), cached calls to the key function, a branchful merge loop
+and early checks for constant-time merges.  Specialised sorts are,
+similarly, fastest with larger base cases, a branchful merge loop
+and early checks when merging (without positive or negative effect
+from caching calls to the key function, even if it’s the identity).</p>
+
+<p>Overall, these result point me toward one implementation: branchful
+size-2 and size-3 base cases that let me avoid redundant comparisons,
+cached calls to the key function, branchful merge loop, and checks
+for constant-time merges when the result is of length eight or more.</p>
+
+<p>The compound effect of these choices is linear time complexity on
+sorted inputs, speed-ups (and reduction in comparison counts) by
+factors of 2 to 4 on nearly-sorted inputs, and by 5% to 30% on
+shuffled lists.</p>
+
+<p>The resulting code follows.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>new merge function </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun merge-lists* (head list1 list2 test key &amp;aux (tail head))
+</span><span class="line">  (declare (type cons head list1 list2)
+</span><span class="line">           (type function test key)
+</span><span class="line">           (optimize speed))
+</span><span class="line">  (let ((key1 (funcall key (car list1)))
+</span><span class="line">        (key2 (funcall key (car list2))))
+</span><span class="line">    (macrolet ((merge-one (l1 k1 l2)
+</span><span class="line">                 `(progn
+</span><span class="line">                    (setf (cdr tail) ,l1
+</span><span class="line">                          tail       ,l1)
+</span><span class="line">                    (let ((rest (cdr ,l1)))
+</span><span class="line">                      (cond (rest
+</span><span class="line">                             (setf ,l1 rest
+</span><span class="line">                                   ,k1 (funcall key (first rest))))
+</span><span class="line">                            (t
+</span><span class="line">                             (setf (cdr ,l1) ,l2)
+</span><span class="line">                             (return (cdr head))))))))
+</span><span class="line">      (loop
+</span><span class="line">       (if (funcall test key2           ; this way, equivalent
+</span><span class="line">                         key1)          ; values are first popped
+</span><span class="line">           (merge-one list2 key2 list1) ; from list1
+</span><span class="line">           (merge-one list1 key1 list2))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>size-specialised sort functions </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun stable-sort-list-2 (list test key)
+</span><span class="line">  (declare (type cons list)
+</span><span class="line">           (type function test key))
+</span><span class="line">  (let ((second (cdr list)))
+</span><span class="line">    (declare (type cons second))
+</span><span class="line">    (when (funcall test (funcall key (car second))
+</span><span class="line">                        (funcall key (car list)))
+</span><span class="line">      (rotatef (car list) (car second)))
+</span><span class="line">    (values list second (shiftf (cdr second) nil))))
+</span><span class="line">
+</span><span class="line">(defun stable-sort-list-3 (list test key)
+</span><span class="line">  (declare (type cons list)
+</span><span class="line">           (type function test key))
+</span><span class="line">  (let* ((second (cdr list))
+</span><span class="line">         (third  (cdr second))
+</span><span class="line">         (x (car list))
+</span><span class="line">         (y (car second))
+</span><span class="line">         (z (car third)))
+</span><span class="line">    (declare (type cons second third))
+</span><span class="line">    (when (funcall test (funcall key y)
+</span><span class="line">                        (funcall key x))
+</span><span class="line">      (rotatef x y))
+</span><span class="line">    (let ((key-z (funcall key z)))
+</span><span class="line">      (when (funcall test key-z
+</span><span class="line">                          (funcall key y))
+</span><span class="line">        (if (funcall test key-z
+</span><span class="line">                          (funcall key x))
+</span><span class="line">            (rotatef x z y)
+</span><span class="line">            (rotatef z y))))
+</span><span class="line">    (setf (car list)   x
+</span><span class="line">          (car second) y
+</span><span class="line">          (car third)  z)
+</span><span class="line">    (values list third (shiftf (cdr third) nil))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>new sort function </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defconstant +stable-sort-fast-merge-limit+ 8)
+</span><span class="line">
+</span><span class="line">(defun stable-sort-list (list test key &amp;aux (head (cons :head list)))
+</span><span class="line">  (declare (type list list)
+</span><span class="line">           (type function test key)
+</span><span class="line">           (dynamic-extent head))
+</span><span class="line">  (labels ((merge* (size list1 tail1 list2 tail2 rest)
+</span><span class="line">             (declare (optimize speed)
+</span><span class="line">                      (type (and fixnum unsigned-byte) size)
+</span><span class="line">                      (type cons list1 tail1 list2 tail2))
+</span><span class="line">             (when (&gt;= size +stable-sort-fast-merge-limit+)
+</span><span class="line">               (cond ((not (funcall test (funcall key (car list2))   ; stability
+</span><span class="line">                                         (funcall key (car tail1)))) ; trickery
+</span><span class="line">                      (setf (cdr tail1) list2)
+</span><span class="line">                      (return-from merge* (values list1 tail2 rest)))
+</span><span class="line">                     ((funcall test (funcall key (car tail2))
+</span><span class="line">                                    (funcall key (car list1)))
+</span><span class="line">                      (setf (cdr tail2) list1)
+</span><span class="line">                      (return-from merge* (values list2 tail1 rest)))))
+</span><span class="line">               (values (merge-lists* head list1 list2 test key)
+</span><span class="line">                       (if (null (cdr tail1))
+</span><span class="line">                           tail1
+</span><span class="line">                           tail2)
+</span><span class="line">                       rest))
+</span><span class="line">           (recur (list size)
+</span><span class="line">             (declare (optimize speed)
+</span><span class="line">                      (type cons list)
+</span><span class="line">                      (type (and fixnum unsigned-byte) size))
+</span><span class="line">             (cond ((&gt; size 3)
+</span><span class="line">                    (let ((half (ash size -1)))
+</span><span class="line">                      (multiple-value-bind (list1 tail1 rest)
+</span><span class="line">                          (recur list half)
+</span><span class="line">                        (multiple-value-bind (list2 tail2 rest)
+</span><span class="line">                            (recur rest (- size half))
+</span><span class="line">                          (merge* size list1 tail1 list2 tail2 rest)))))
+</span><span class="line">                   ((= size 3)
+</span><span class="line">                    (stable-sort-list-3 list test key))
+</span><span class="line">                   ((= size 2)
+</span><span class="line">                    (stable-sort-list-2 list test key))
+</span><span class="line">                   (t ; (= size 1)
+</span><span class="line">                    (values list list (shiftf (cdr list) nil))))))
+</span><span class="line">    (when list
+</span><span class="line">      (values (recur list (length list))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>It’s somewhat longer than the original, but not much more complicated:
+the extra code mostly comes from the tedious but simple leaf sorts.
+Particularly satisfying is the absence of conditional move hack: SBCL
+only recognizes trivial forms, and only on X86 or X86-64, so the code
+tends to be ugly and sometimes sacrifices performance on other
+platforms.  SBCL’s bad support for conditional moves may explain the
+lack of any speed up from converting branches to select expressions:
+the conditional swaps had to be implemented as pairs of independent
+test with T/NIL and conditional moves.  Worse, when the comparison is
+inlined, an additional conditional move converted the result of the
+integer comparison to a boolean value; in total, three pairs of
+comparison/conditional move were then executed instead of one
+comparison and two conditional moves.
+<a href="http://www.cphstl.dk/Paper/Quicksort/sea12.pdf">Previous work [PDF]</a>
+on out-of-place array merge sort in C found it useful to switch to
+conditional move-based merge loop and sorting networks.  Some of the
+difference is probably caused by SBCL’s weaker code generation, but
+the additional overhead inherent to linked list manipulations
+(compared to linear accesses in arrays) may also play a part.</p>
+
+<p>Another code generation issue is caused by the way the initial version
+called the comparison function in exactly one place.  This meant that
+arbitrary comparators would almost always be inlined in the
+specialised sort’s single call site.  We lose that property with
+accelerated merge and larger base cases.  That issue doesn’t worry me
+too much: functions can be declared inline explicitly, and the key
+function was already called from multiple sites.</p>
+
+<p>I’m a bit surprised that neither the sorting networks nor the merge loop
+were appreciably sped-up by rewriting them with conditional moves.  I’m
+a lot more surprised by the fact that it pays off to try and detect
+pre-sorted lists even on tiny merges, and even when the comparator is
+inlined.  The statistical tests were useful here, with results that
+defy my initial expectations and let me keep the code simpler.  I
+would be pleasantly surprised if complex performance improvement
+patches, in SBCL and otherwise, went through similar testing.  Code is
+a long-term liability, and we ought to be convinced the additional
+complexity is worth the trouble.</p>
+
+<p>Independently of that, the Latin square design was very helpful: it
+easily saved me a couple CPU-weeks, and I can see myself using it
+regularly in the future.  The approach only works if we already have a
+rough (and simple) performance model, but I have a hard time
+interpreting complex models with hundreds of interacting parameters
+anyway.  Between a simplistic, but still useful, model and a complex
+one with a much stronger fit, I’ll usually choose the former… as long
+as I can be fairly certain the simple model isn’t showing me a mirage.</p>
+
+<p>More generally, research domains that deal with the real world have
+probably already hit the kind of scaling issues we’re now facing when
+we try to characterise how computers and digital systems function.
+Brute forcing is easier with computers than with interns, but it can
+still pay off to look elsewhere.</p>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Aug
+  
+13th, 
+2012
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/" title="Previous Post: Binary search is a pathological case for caches">&laquo; Binary search is a pathological case for caches</a>
+      
+      
+        <a class="basic-alignment right" href="/Blog/2012/08/14/a-one-instruction-write-barrier/" title="Next Post: A one-instruction write barrier">A one-instruction write barrier &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2020 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2012/08/13/engineering-a-list-merge-sort/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2012/08/13/engineering-a-list-merge-sort/';
+      this.page.title = 'Engineering a list merge sort';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>

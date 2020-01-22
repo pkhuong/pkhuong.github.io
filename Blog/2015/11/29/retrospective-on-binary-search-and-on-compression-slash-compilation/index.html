@@ -1,0 +1,425 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Retrospective on binary search and comp{ress,ilat}ion - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2015/11/29/retrospective-on-binary-search-and-on-compression-slash-compilation/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Retrospective on binary search and comp{ress,ilat}ion</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Nov
+  
+29th, 
+2015
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2015/11/29/retrospective-on-binary-search-and-on-compression-slash-compilation/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>I never know whether to prefer closure or fresh questions, in
+research.  I got a little of both lately.  First, closure on searching
+in permutations of sorted arrays, and second, more avenues on the
+compilation as compression angle.</p>
+
+<h2 id="array-layouts-for-comparison-based-searching">Array Layouts for Comparison-Based Searching</h2>
+
+<p>In July 2012, I started really looking into searching in static sorted
+sets, and found the literature disturbingly useless.  I reviewed a lot
+of code, and it turned out that most binary searches out there are not
+only unsafe for overflow, but also happen to be badly
+micro-optimised for small arrays with simple comparators.  That lead
+to <a href="http://pvk.ca/Blog/2012/07/03/binary-search-star-eliminates-star-branch-mispredictions/">Binary Search <em>eliminates</em> Branch Mispredictions</a>,
+a reaction to popular assertions that binary search has bad constant
+factors (compared to linear search or a breadth first layout) on modern
+microarchitecture, mostly due to branch mispredictions.  That post has code
+for really riced up searches on fixed array sizes,
+so here’s the size generic inner loop I currently use.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">const</span> <span class="kt">uint32_t</span> <span class="n">x</span> <span class="o">=</span> <span class="p">...;</span>
+</span><span class="line"><span class="k">const</span> <span class="kt">uint32_t</span> <span class="o">*</span><span class="n">base</span> <span class="o">=</span> <span class="p">...;</span>
+</span><span class="line"><span class="kt">size_t</span> <span class="n">n</span> <span class="o">=</span> <span class="p">...;</span>
+</span><span class="line"><span class="kt">size_t</span> <span class="n">half</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"><span class="k">while</span> <span class="p">((</span><span class="n">half</span> <span class="o">=</span> <span class="n">n</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">    <span class="k">const</span> <span class="kt">uint32_t</span> <span class="o">*</span><span class="n">mid</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">base</span><span class="p">[</span><span class="n">half</span><span class="p">];</span>
+</span><span class="line">    <span class="n">base</span> <span class="o">=</span> <span class="p">(</span><span class="o">*</span><span class="n">mid</span> <span class="o">&lt;</span> <span class="n">x</span><span class="p">)</span> <span class="o">?</span> <span class="nl">mid</span> <span class="p">:</span> <span class="n">base</span><span class="p">;</span>
+</span><span class="line">    <span class="n">n</span> <span class="o">-=</span> <span class="n">half</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The snippet above implements a binary search, instead of <a href="http://pvk.ca/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/">dividing by three to avoid aliasing issues</a>.  That issue only shows up with array sizes that are
+(near) powers of two.  I know of two situations where that happens a lot:</p>
+
+<ol>
+  <li>bad benchmarks;</li>
+  <li>data structures built around powers of two (e.g., <a href="http://repository.cmu.edu/cgi/viewcontent.cgi?article=3453&amp;context=compsci">Saxe &amp; Bentley dynamisation</a>).</li>
+</ol>
+
+<p>The fix for the first case is to do proper benchmarking on a wide
+range of input sizes.  Ternary or offset binary search are only really
+useful in the second case.  There’s actually a third case: when I’m
+about to repeatedly search in the same array, I dispatch to unrolled
+ternary searches, with one routine for each power of two.  I can
+reduce any size to a power of two with one initial iteration on an
+off-center “midpoint.”  Ternary search has a high overhead for small
+arrays, unless we can precompute offsets by unrolling the whole thing.</p>
+
+<p>My work on binary search taught me how to implement binary search not
+stupidly–unlike real implementations–and that most experiments on
+searching in array permutations seem broken in their very design (they
+focus on full binary trees).</p>
+
+<p>I don’t think I ever make that explicit, but the reason I even started
+looking into binary search is that I wanted to have a fast
+implementation of searching in a van Emde Boas layout!  However,
+none of the benchmarks (or analyses) I found were convincing, and
+I kind of lost steam as I improved sorted arrays: sortedness tends
+to be useful for operations other than predecessor/successor search.</p>
+
+<p>Some time in May this year, I found <a href="http://cglab.ca/~morin/misc/arraylayout-v2/">Pat Morin’s fresh effort</a> on the
+exact question I had abandoned over the years: how do popular
+permutations work in terms of raw CPU time?  The code was open,
+and even good by research standards!  Pat had written the annoying
+part (building the permutations), generated a bunch of tests I could
+use to check correctness, and avoided obvious microbenchmarking
+pitfalls.  He also found a <a href="https://github.com/patmorin/arraylayout/blob/master/src/eytzinger_array.h#L137">really nice way to find the return value for BFS searches</a> from the location where the search ends with fast
+bit operations (<code>j = (i + 1) &gt;&gt; __builtin_ffs(~(i + 1));</code>, which he
+explains in the paper).</p>
+
+<p>I took that opportunity to improve constant factors for all the
+implementations, and to really try and explain in detail the
+performance of each layout with respect to each other, as well as how they
+respond to the size of the array.  That sparked a very interesting
+back and forth with Pat from May until September (!).  Pat eventually took
+the time to turn our informal exchange into a <a href="http://arxiv.org/abs/1509.05053">coherent paper</a>.  More than 3 years after I
+started spending time on the question of array layouts for implicit
+search trees, I found the research I was looking for… all it took was
+a bit of collaboration (:</p>
+
+<p>Bonus: the results were unexpected! Neither usual suspects (B-tree or
+van Emde Boas) came out on top, even for very large arrays.  I was
+also surprised to see the breadth-first layout perform much better
+than straight binary search: none of the usual explanations made sense
+to me.  It turns out that the improved performance (when people weren’t
+testing on round, power of two, array sizes) was probably an
+unintended consequence of bad code!  Breadth-first is fast,
+faster than layouts with better cache efficiency, because it prefetches well
+enough to hide latency even when it extracts only one bit of
+information from each cache line; its performance has nothing to do with
+cachability.  Our code prefetches explicitly, but slower branchy
+implementations in the wild get implicit prefetching, thanks to
+speculative execution.</p>
+
+<p>Conclusion: if you need to do a lot of comparison-based searches in &gt;
+L2-sized arrays, use a breadth-first order and prefetch.  If you need
+sorted arrays, consider sticking some prefetches in a decent binary
+search loop.  If only I’d known that in 2012!</p>
+
+<h2 id="compressilation">Comp{ress,ilat}ion</h2>
+
+<p>A couple months ago, I found <a href="http://www.dcc.uchile.cl/~gnavarro/ps/dcc10.1.pdf">LZ77-like Compression with Fast Random Access</a> by Kreft and Navarro.  They
+describe a Lempel-Ziv approach that is similar to LZ77, but
+better suited to decompressing arbitrary substrings.  The hard part about
+<a href="http://pvk.ca/Blog/2014/03/30/refactoring-with-lz77-compilation-is-compression/">applying LZ77 compression to (byte)code</a>
+is that parses may reuse any substring that happens to appear
+earlier in the original text.  That’s why I had to use Jez’s algorithm
+to convert the LZ77 parse into a (one word) grammar.</p>
+
+<p>LZ-End fixes that.</p>
+
+<p>Kreft and Navarro improve random access decompression by restricting
+the format of “backreferences” in the LZ parse.  The parse decomposes
+the original string into a sequence of phrases; concatenating the
+phrases yields the string back, and phrases have a compact
+representation.  In LZ77, phrases are compressed because they refer
+back to substrings in prior phrases.  LZ-End adds another constraint:
+the backreferences cannot end in the middle of phrases.</p>
+
+<p>For example, LZ77 might have a backreference like</p>
+
+<pre><code>[abc][def][ghi]
+   ---------
+</code></pre>
+
+<p>to represent “cdefg.”  LZ-End would be forced to end the new phrase at “f”</p>
+
+<pre><code>[abc][def][ghi]
+   -------
+</code></pre>
+
+<p>and only represent “cdef.”  The paper shows that this additional
+restriction has a marginal impact on compression rate, and uses the
+structure to speed up operations on compressed data.  (The formal
+definition also forbids the cute/annoying self-reference-as-loop idiom
+of LZ77, without losing too much compression power!)</p>
+
+<p>We can apply the same idea to compress code.  Each phrase is now a
+subroutine with a <code>return</code> at the end.  A backreference is a series
+of calls to subroutines; the first call might begin in the middle, but
+matches always end on <code>return</code>, exactly like normal code does!  A
+phrase might begin in the middle of a phrase that itself consists of
+calls.  That’s still implementable: the referrer can see through the
+indirection and call in the middle of the callee’s callee (etc.), and
+then go back to the callee for a suitably aligned submatch.</p>
+
+<p>That last step looks like it causes a space blowup, and I can’t bound it (yet).</p>
+
+<p>But that’s OK, because I was only looking into compressing traces as a
+last resort.  I’m much more interested in expression trees, but
+couldn’t find a way to canonicalize sets (e.g., arguments to integer
+<code>+</code>) and sequences (e.g., floating point <code>*</code>) so that similar
+collections have similar subtrees… until I read Hammer et al’s work
+on <a href="http://arxiv.org/abs/1503.07792">Nominal Adapton</a>, which solves a
+similar problem in a different context.</p>
+
+<p>They want a tree representation for lists and tries (sets/maps) such
+that a small change in the list/trie causes a small change in the
+tree that mostly preserves identical subtrees.  They also want the
+representation to be a deterministic function of the list/trie.  That
+way, they can efficiently reuse computations after incremental changes
+to inputs.</p>
+
+<p>That’s exactly my sequence/set problem!  I want a tree-based
+representation for sequences (lists) and sets (tries) such that
+similar sequences and sets have mostly identical subtrees for which I
+can reuse pre-generated code.</p>
+
+<p>Nominal Adapton uses a hash-based construction described by Pugh and
+Teitelbaum in 1989 (Incremental computation via function caching) to
+represent lists, and extends the idea for tries.  I can “just” use the
+same trick to canonicalise lists and sets into binary trees, and
+(probabilistically) get common subexpressions for free, even across
+expressions trees!  It’s not perfect, but it should scale pretty well.</p>
+
+<p>That’s what I’m currently exploring when it comes to using compression
+to reduce cache footprint while doing aggressive specialisation.
+Instead of finding redundancy in linearised bytecode after the fact,
+induce identical subtrees for similar expressions, and directly reuse
+code fragments for subexpressions.</p>
+
+<h2 id="more-to-come">More to come</h2>
+
+<p>I thought I’d post a snippet on the effect of alignment and virtual
+memory tricks on TLBs, but couldn’t find time for that.  Perhaps later
+this week.  In the meantime, I have to prepare a short talk on the
+software transactional memory system we built at AppNexus.  Swing by
+<a href="http://meetup.com/TechTalks-AppNexus-NYC/">23rd Street on December 15</a> if you’re in New York!</p>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Nov
+  
+29th, 
+2015
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/Blog/2015/06/27/linear-log-bucketing-fast-versatile-simple/" title="Previous Post: Linear-log bucketing: fast, versatile, simple">&laquo; Linear-log bucketing: fast, versatile, simple</a>
+      
+      
+        <a class="basic-alignment right" href="/Blog/2017/04/02/three-universal-hashing-in-four-instructions/" title="Next Post: Three-universal hashing in four instructions">Three-universal hashing in four instructions &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2020 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2015/11/29/retrospective-on-binary-search-and-on-compression-slash-compilation/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2015/11/29/retrospective-on-binary-search-and-on-compression-slash-compilation/';
+      this.page.title = 'Retrospective on binary search and comp{ress,ilat}ion';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>

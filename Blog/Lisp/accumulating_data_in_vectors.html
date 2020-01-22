@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<link href="http://www.pvk.ca/Blog/stylesheet.css" rel="stylesheet" type="text/css" />
+ <title>Another way to accumulate data in vectors - Paul Khuong mostly on Lisp</title>
+<link rel="alternate" type="application/rss+xml" title="RSS" href="index.rss20" />
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-20468541-1']);
+  _gaq.push(['_trackPageview']);
+</script>
+</head>
+<body>
+<div class="content">
+    <h1>Paul Khuong mostly on Lisp</h1>
+<p />
+<small><a href="index.rss20">rss feed</a></small>
+<h2>Tue, 28 Dec 2010</h2>
+<div class="entry">
+  <a id="accumulating_data_in_vectors" style="text-decoration: none">&nbsp;</a>
+  <div class="entry-body">
+    <div class="entry-head">
+      <div class="entry-title">
+        <h3>Another way to accumulate data in vectors</h3>
+      </div>
+    </div>
+    <div class="entry-text">
+
+<!--l. 11--><p style="text-indent:0em">From time to time, some #lisp-ers debate whether it&#8217;s faster to accumulate a
+sequence of values using <code style="font-family:monospace">cons</code>/<code style="font-family:monospace">nreverse</code>, or <code style="font-family:monospace">cons</code>/<code style="font-family:monospace">(setf cdr)</code>. To me, if that&#8217;s an
+issue, you simply shouldn&#8217;t use a linked list; as <a href="http://factor-language.blogspot.com/">Slava</a> once wrote, &#8220;single linked lists
+are simply the wrong data structure in 99% of cases.&#8221; A vector won&#8217;t be much or any
+slower to build, and traversing a long vector is often far quicker than traversing an
+equally long linked list, if only because the vector uses half as much space (and thus
+memory bandwidth). The obvious question is then: how should we accumulate data
+in vectors? <span style="font-size:90%">(clearly, building a linked list and coercing it to a vector, as SBCL sometimes</span>
+<span style="font-size:90%">does, isn&#8217;t ideal)</span>
+</p>
+   <h3><span>1   </span> <a id="x1-10001"></a>The simplest way</h3>
+<!--l. 26--><p style="text-indent:0em">Obviously, the ideal way is to know the size of the final vector (or a reasonable
+overapproximation) ahead of time. The whole vector can then be preallocated, and, if
+needed, trimmed a posteriori. In terms of memory accesses, this pretty much achieves
+the lower bound of exactly one access per vector element. It&#8217;s also rarely
+applicable.
+</p><!--l. 32--><p style="text-indent:0em">
+</p>
+   <h3><span>2   </span> <a id="x1-20002"></a>The usual way</h3>
+<!--l. 33--><p style="text-indent:0em">The usual way to approach the problem of an unknown vector size is to begin with
+an underapproximation of the final size, and grow the vector geometrically (and copy
+from the old one) when needed. That&#8217;s the approach usually shown in textbooks, and
+almost necessarily used by <code style="font-family:monospace">std::vector</code>.
+</p><!--l. 39--><p style="text-indent:1.5em">   Unless the initial guess is very accurate (or too high), this method has a
+noticeable overhead in terms of memory access per vector element. Asymptotically,
+the best case is when the last grow is exactly the size of the final vector. For
+instance, when growing temporary vectors by powers of two, this happens when
+the final vector size is also a power of two. Then, in addition to the one
+write per element, half are copied once, a quarter once again, etc., for a
+total of <span>&#8776; </span>2 writes per element. The worst case is when the final vector has
+exactly one more element; for powers of two, all but one vector element are
+then copied once, half of that once again, etc., resulting in <span>&#8776; </span>3 writes per
+element.
+</p><!--l. 51--><p style="text-indent:1.5em">   C programs can often do much better by using <code style="font-family:monospace">realloc </code>(or even <code style="font-family:monospace">mremap</code>)
+to avoid copies. High level languages can, in principle, do as well by also
+hooking in the memory allocator. C++&#8217;s <code style="font-family:monospace">std::vector</code>, however, can&#8217;t exploit
+either: it must go through constructors and <code style="font-family:monospace">operator= </code>(or <code style="font-family:monospace">std::swap</code>, or
+<code style="font-family:monospace">std::move</code>). A variant of <code style="font-family:monospace">realloc </code>that fails instead of moving the data could be
+useful in those situations; I don&#8217;t know of allocators that provide such a
+                                                                  
+
+                                                                  
+function.
+</p><!--l. 60--><p style="text-indent:0em">
+</p>
+   <h3><span>3   </span> <a id="x1-30003"></a>A lazier way</h3>
+<!--l. 61--><p style="text-indent:0em">Another way to build a vector incrementally is to postpone copying to a single
+contiguous vector until the very end. Instead, a sequence of geometrically larger
+temporary vectors can be accumulated, and only copied once to a final vector of
+exactly the right size. Since the temporary vectors grow geometrically, there aren&#8217;t
+too many of them (proportional to the logarithm of the final vector size), and the
+sequence can be represented simply, as a linked list, a flat preallocated vector, or a
+vector that&#8217;s copied when resized.
+</p><!--l. 70--><p style="text-indent:1.5em">   This yields, in all cases, exactly one write and one copy per element, and
+<span><img src="http://www.pvk.ca/Blog/resources/cmsy10-4f.png" alt="O"></img></span>(lg <em style="font-style:italic">n</em>) bookkeeping operations for the sequence, for a total of <span>&#8776; </span>2 writes per
+element.
+</p><!--l. 74--><p style="text-indent:0em">
+</p>
+   <h3><span>4   </span> <a id="x1-40004"></a>Testing the hypothesis</h3>
+<!--l. 75--><p style="text-indent:0em">I used my trusty X5660 to test all three implementations, in C, when building a
+vector of around 2<sup><span style="font-size:70%">24</span></sup><code style="font-family:monospace">unsigned </code>elements (enough to overflow the caches). The table
+below summarizes the results, in cycles per vector element (median value of 256).
+The row for 2<sup><span style="font-size:70%">24</span></sup><span>- </span>1 and 2<sup><span style="font-size:70%">24</span></sup> elements represent the best case for the usual growable
+vector, 2<sup><span style="font-size:70%">24</span></sup> + 1 the worst case, and 2<sup><span style="font-size:70%">24</span></sup><span>&#8901;</span><img src="http://www.pvk.ca/Blog/resources/accumulating_data_in_vectors0x.png" alt="3&#10;2" align="middle"></img> an intermediate value (usual case). The
+relative values were similar with implementations in SBCL, both on a X5660 and on
+a Core 2.
+</p>
+   <div style="margin-top:0.5em; margin-bottom:0.5em; text-align:center" align="center"> <table id="TBL-1" cellspacing="0" cellpadding="0" rules="groups" style="margin-right:auto; border-right:solid black 0.4pt; margin-left:auto; border-left:solid black 0.4pt"><colgroup id="TBL-1-1g"><col id="TBL-1-1"></col></colgroup><colgroup id="TBL-1-2g"><col id="TBL-1-2"></col><col id="TBL-1-3"></col><col id="TBL-1-4"></col></colgroup><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-1-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-1-1" align="left">size (n)</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-2" align="center">preallocate (c/n)</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-3" align="center">grow (c/n)</td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-1-4" align="center">lazy (c/n)</td>
+</tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-2-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-2-1" align="left">2<sup><span style="font-size:70%">24</span></sup><span>- </span>1 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-2" align="center">     7.52        </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-3" align="center">  13.39    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-2-4" align="center">  15.01   </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-3-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-3-1" align="left">2<sup><span style="font-size:70%">24</span></sup></td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-2" align="center">     7.55        </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-3" align="center">  13.39    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-3-4" align="center">  15.29   </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-4-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-4-1" align="left">2<sup><span style="font-size:70%">24</span></sup> + 1 </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-2" align="center">     7.55        </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-3" align="center">  19.63    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-4-4" align="center">  13.91   </td>
+</tr><tr style="vertical-align:baseline;" id="TBL-1-5-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-5-1" align="left">2<sup><span style="font-size:70%">24</span></sup><span>&#8901;</span><img src="http://www.pvk.ca/Blog/resources/accumulating_data_in_vectors1x.png" alt="3&#10;2" align="middle"></img></td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-2" align="center">     7.54        </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-3" align="center">  15.51    </td><td style="white-space:nowrap; text-align:center; padding-right:5pt; padding-left:5pt" id="TBL-1-5-4" align="center">  15.35   </td></tr><tr><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td><td><hr style="margin:0px; height:1px"></hr></td></tr><tr style="vertical-align:baseline;" id="TBL-1-6-"><td style="white-space:nowrap; text-align:left; padding-right:5pt; padding-left:5pt" id="TBL-1-6-1" align="left"> </td> </tr></table></div>
+<!--l. 96--><p style="text-indent:1.5em">   The numbers for preallocated vectors are reassuringly stable, at 7.5 cycles per
+vector element (2 cycles per byte). The usual way to grow a vector ends up
+using a bit less than twice as many cycles in the best cases, almost exactly
+twice in the usual case, and nearly three times as many cycles in the worst
+case. In contrast, lazy copying consistently uses twice as many cycles as
+the preallocated vector. These figures fit nicely with the theoretical cost in
+memory accesses. The main discrepancy is that growable vectors seem to do
+slightly better than expected for the best cases; this is probably due to the
+data caches, which significantly accelerate copying the first few temporary
+vectors.
+                                                                  
+
+                                                                  
+</p><!--l. 108--><p style="text-indent:0em">
+</p>
+   <h3><span>5   </span> <a id="x1-50005"></a>Conclusion</h3>
+<!--l. 109--><p style="text-indent:0em">The usual way to implement growable vectors has issues with performance on vectors
+slightly longer than powers of two; depending on the computation:bandwidth cost
+ratio, a task could become 50% slower when the number of outputs crosses a power of
+two. Lazy copying, on the other hand, has very similar performance in most cases,
+without the glass jaw around powers of two. The effect is even more important
+when copying is more expensive, be it due to copy constructors, or to slower
+implementations of <code style="font-family:monospace">memcpy </code>(e.g. SBCL).
+</p><!--l. 119--><p style="text-indent:1.5em">   I&#8217;ve been working on a library for SERIES-style fusion of functional sequence
+operations, lately (in fact, that&#8217;s what lead me to benchmark lazy copying), and
+decided to spend the time needed to implement accumulation of values with
+lazily-copied vectors. The cost is mostly incurred by myself, while there isn&#8217;t any
+difference in the interface, and the user notices, at worst, a slight slowdown compared
+to the usual implementation. For instance,
+                                                                  
+
+                                                                  
+</p>
+   <pre style="white-space:pre; clear:both; font-family:monospace; text-align:left" align="left">(pipes (let ((x (from-vector x))) 
+         (to-vector (remove-if-not (plusp x) x))))</pre>
+<!--l. 129--><p style="text-indent:0em"> will accumulate only the strictly positive values in <code style="font-family:monospace">x</code>, without any unexpected major
+slowdown around powers of two.
+</p><!--l. 133--><p style="text-indent:1.5em">   Growable vectors are often provided by (standard) libraries, and used by
+programmers without giving explicit thought to their implementation. Glass jaws
+should probably be avoided as much as possible in this situation, even at the cost of
+additional code off the hot path and a little pessimisation in the best cases.
+</p> 
+
+
+    </div>
+<p>
+  posted at: 00:49 | <a href="http://www.pvk.ca/Blog/Lisp" title="path">/Lisp</a> | <a href="http://www.pvk.ca/Blog/Lisp/accumulating_data_in_vectors.html">permalink</a>
+</p>
+  </div>
+</div>
+<p>
+  <a href="http://pyblosxom.bluesock.org/"><img src="http://pyblosxom.bluesock.org/images/pb_pyblosxom.gif" alt="Made with PyBlosxom" /></a>
+  <small>Contact me by email: pvk@pvk.ca.</small>
+</p>
+</div>
+<script type="text/javascript">
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+</body>
+</html>
