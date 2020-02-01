@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-02-01T17:50:58-05:00</updated>
+  <updated>2020-02-01T17:51:52-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -22,7 +22,7 @@
 
 <p>I’ve been responsible for <a href="https://backtrace.io/">Backtrace.io</a>’s crash analytic database for a couple months now.<sup id="fnref:started-work"><a href="#fn:started-work" class="footnote">1</a></sup>
 I have focused my recent efforts on improving query times for in-memory grouped aggregations, i.e.,
-the archetypal Map-Reduce use-case where we generate key-value pairs, and <a href="https://en.wikipedia.org/wiki/Fold_(higher-order_function)">fold</a> over the values
+the archetypal MapReduce use-case where we generate key-value pairs, and <a href="https://en.wikipedia.org/wiki/Fold_(higher-order_function)">fold</a> over the values
 for each key in some <a href="https://en.wikipedia.org/wiki/Semigroup">(semi)</a><a href="https://en.wikipedia.org/wiki/Group_(mathematics)">group</a>.
 We have a cute cache-efficient data structure for this type of workload;
 the inner loop is simply inserting in a small hash table with <a href="/Blog/more_numerical_experiments_in_hashing.html">Robin Hood linear probing</a>,
