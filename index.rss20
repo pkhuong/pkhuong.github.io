@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-02-01T17:49:24-05:00</updated>
+  <updated>2020-02-01T17:50:58-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -18,7 +18,7 @@
     <link href="https://www.pvk.ca/Blog/2020/02/01/too-much-locality-for-store-forwarding/"/>
     <updated>2020-02-01T17:29:19-05:00</updated>
     <id>https://www.pvk.ca/Blog/2020/02/01/too-much-locality-for-store-forwarding</id>
-    <content type="html"><![CDATA[<p><small>Apologies for the failed <a href="https://www.youtube.com/watch?v=K3DRkVjuqmc">Cake reference</a></small></p>
+    <content type="html"><![CDATA[<p><small>Apologies for the failed <a href="https://www.youtube.com/watch?v=K3DRkVjuqmc">Cake reference</a>.</small></p>
 
 <p>I’ve been responsible for <a href="https://backtrace.io/">Backtrace.io</a>’s crash analytic database for a couple months now.<sup id="fnref:started-work"><a href="#fn:started-work" class="footnote">1</a></sup>
 I have focused my recent efforts on improving query times for in-memory grouped aggregations, i.e.,
