@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/08/16/how-to-define-new-intrinsics-in-sbcl/">How to define new intrinsics in SBCL</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/05/11/integer-division-step-0-no-remainder/">Integer division, step 0: no remainder</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Aug
+May
   
-16th, 
+11th, 
 2014
 
 
 
 
         
-         | <a href="/Blog/2014/08/16/how-to-define-new-intrinsics-in-sbcl/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/08/16/how-to-define-new-intrinsics-in-sbcl/"
+         | <a href="/Blog/2014/05/11/integer-division-step-0-no-remainder/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/05/11/integer-division-step-0-no-remainder/"
 	      >Comments</a>
         
         
@@ -116,42 +116,96 @@ Aug
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>This
-<a href="http://stackoverflow.com/questions/25078285/replacing-a-32-bit-loop-count-variable-with-64-bit-introduces-crazy-performance">Stack Overflow</a>
-post points out an obscure and undocumented weakness in Intel’s
-implementation of the POPCNT instruction: although the population
-count (number of bits equal to 1) is only a function of the source
-argument, hardware schedules it as though it also depended on the
-destination.  GCC, clang and MSVC all fail to take this issue into
-account.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>Exciting times in SBCL-land!  Not only will Google Summer of Code
+support two students to work on SBCL (one will improve our support for
+correct Unicode manipulation, and the other our strength reduction for
+integer division), but we also sprouted a
+<a href="http://sourceforge.net/p/sbcl/sbcl/ci/b793e2b291ee55ec43399d0367f59d6a56b27433/tree/NEWS?diff=2971347c95b8910019f43a0ba6de7b2e36997c85">new Linux/ARM port</a>!
+As
+<a href="http://christophe.rhodes.io/notes/blog/posts/2014/just_like_old_times/">Christophe</a>
+points out, this a nice coincidence: (most?) ARM chips lack hardware
+integer division units.  I find the integer division project even more
+interesting because I believe we can cover all three standard division
+operators (floor, truncate, and ceiling) with an unified code
+generator.</p>
 
-<p>Until a new patched version of my favourite C compiler is released,
-there aren’t many tasteful workarounds for this performance bug.  I’d
-have to switch to inline asm, and either force the compiler to
-allocate the same register to the input and the result, or force
-different registers and clear the spurious dependency with a xor.
-Ideally, I wouldn’t impose any additional constraint on the register
-allocator and only insert a xor if the destination and source
-registers don’t match.</p>
+<p>I first looked into integer division by constants four years ago, and
+I was immediately struck by the ad hoc treatment of the
+transformation: I have yet to find a paper that summarises and relates
+algorithms that are currently in use.  Worse, the pseudocode tends to
+assume fixed-width integer, which drowns the interesting logic in
+bignum-management noise.  Back when I had free time, I uploaded
+<a href="http://discontinuity.info/~pkhuong/fast-truncate-4.pdf">an early draft</a>
+of what may become a more enlightening introduction to the topic.  My
+goal was to unite all the simplification algorithms I’d seen and
+to generalise them to SBCL’s needs: our optimisers benefit from
+precise integer range derivation, and codegen ought to deal with
+tagged fixnums.  The draft should take shape as the GSoC
+project progresses.</p>
 
-<p>SBCL easily supports this use case, without having to re-release or
-even recompile the implementation: VOPs (virtual operations) execute
-arbitrary CL code during code generation and they can be defined at
-runtime.</p>
+<p>There is one widespread – but very specialised – integer division
+algorithm that does not fit in the draft: multiplication by modular
+inverses.  I’m guessing it’s common because it’s the first thing that
+comes to mind when we say division-by-multiplication.  The
+transformation is also so specialised that I find it’s usually
+mentioned in contexts where it wouldn’t work.  Still, it’s a nice
+application of algebra and the coefficients are simple enough to
+generate at runtime (even in C or assembly language), so here goes.</p>
 
-<p>The first step is to make sure that SBCL’s assembler knows how to emit
-popcnt: the assembler can also be extended at runtime, but that’s more
-hairy and a topic for another post.  Instruction encodings are defined
-in <code>src/compiler/$ARCH/insts.lisp</code>, and a quick grep reveals
-<code>(define-instruction popcnt (segment dst src) ...)</code>: the x86-64
-backend learned about popcnt in May 2013 (thanks to Douglas Katzman).</p>
+<h1 id="multiplicative-inverses-for-integer-division">Multiplicative inverses for integer division</h1>
 
-<p>We define VOPs via <code>define-vop</code>, a macro that exposes many options.
-Most of the time, it’s easiest to look at a pre-existing definition
-for an operation that’s similar to the one we want to add.  Popcount
-looks like integer negation: it has a single (machine integer)
-argument and returns another integer.  Integer negation is defined in
-<code>src/compiler/$ARCH/arith.lisp</code>:</p>
+<p>Let \(a\) and \(m\) be naturals.  The multiplicative inverse of
+\(a\) modulo \(m\) is a natural \(b\) such that 
+\(a \times b \equiv 1 \mod m\).  Machine arithmetic is naturally modular 
+(e.g., mod \(m = 2\sp{32}\)).  This seems perfect!</p>
+
+<p>There are a couple issues here:</p>
+
+<ol>
+  <li>we have to find the modular inverse;</li>
+  <li>the modular inverse only exists if \(\mathop{gcd}(a, m) = 1\);</li>
+  <li>multiplicative inversion and integer division only coincide when
+the remainder is zero.</li>
+</ol>
+
+<p>For a concrete example of the third issue, consider
+\(11\), the multiplicative inverse of \(3 \mod 16\): \(3\times 11
+= 33 \equiv 1 \mod 16\) and \(6 \times 11 = 66 \equiv 2 \mod 16\).
+However, \(4 \times 11 = 44 \equiv 12 \mod 16\), and \(12\) is
+nowhere close to \(4 \div 3\).</p>
+
+<p>This post addresses the first two points.  There is no workaround
+for the last one.</p>
+
+<p>We can generate a modular inverse with the
+<a href="http://en.wikipedia.org/wiki/Extended_Euclidean_algorithm">extended Euclidean algorithm</a>.
+Wikipedia shows the iterative version, which I can never remember, so I’ll
+instead construct the simple recursive one.</p>
+
+<p>We already assume that
+\[\mathop{gcd}(a, b) = 1 \]
+and we wish to find \(x, y\) such that
+\[ax + by = 1.\]
+<a href="http://en.wikipedia.org/wiki/B%C3%A9zout%27s_identity">Bézout’s identity</a>
+guarantees that such coefficients exist.</p>
+
+<p>Things are simpler if we assume that \(a &lt; b\) (they can only be
+equal if \(a = b = 1\), and that case is both annoying and
+uninteresting).</p>
+
+<p>If \(a = 1\), \(a + b0 = 1\).</p>
+
+<p>Otherwise, let \(q = \lfloor b/a\rfloor\) and \(r = b - qa\).
+\[\mathop{gcd}(a, r) = \mathop{gcd}(a, b) = 1,\]
+and, given
+\[ax’ + ry’ = 1,\]
+we can revert our change to find
+\[ax’ + (b - qa)y’ = a(x’ - qy’) + by’ = 1.\]</p>
+
+<p>We’re working in modular arithmetic, so we can sprinkle <code>mod m</code>
+without changing the result.  In C, this will naturally happen for
+unsigned integers, via overflows.  In CL, we can still force modular
+reduction, just to convince ourselves that we don’t need bignums.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
@@ -173,92 +227,42 @@ argument and returns another integer.  Integer negation is defined in
 <span class="line-number">18</span>
 <span class="line-number">19</span>
 <span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-<span class="line-number">31</span>
-<span class="line-number">32</span>
-<span class="line-number">33</span>
-<span class="line-number">34</span>
-<span class="line-number">35</span>
-<span class="line-number">36</span>
-<span class="line-number">37</span>
-<span class="line-number">38</span>
-<span class="line-number">39</span>
-<span class="line-number">40</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">;;;; unary operations
-</span><span class="line">
-</span><span class="line">(define-vop (fast-safe-arith-op)
-</span><span class="line">  (:policy :fast-safe)
-</span><span class="line">  (:effects)
-</span><span class="line">  (:affected))
-</span><span class="line">
-</span><span class="line">(define-vop (fixnum-unop fast-safe-arith-op)
-</span><span class="line">  (:args (x :scs (any-reg) :target res))
-</span><span class="line">  (:results (res :scs (any-reg)))
-</span><span class="line">  (:note "inline fixnum arithmetic")
-</span><span class="line">  (:arg-types tagged-num)
-</span><span class="line">  (:result-types tagged-num))
-</span><span class="line">
-</span><span class="line">(define-vop (signed-unop fast-safe-arith-op)
-</span><span class="line">  (:args (x :scs (signed-reg) :target res))
-</span><span class="line">  (:results (res :scs (signed-reg)))
-</span><span class="line">  (:note "inline (signed-byte 64) arithmetic")
-</span><span class="line">  (:arg-types signed-num)
-</span><span class="line">  (:result-types signed-num))
-</span><span class="line">
-</span><span class="line">(define-vop (fast-negate/fixnum fixnum-unop)
-</span><span class="line">  (:translate %negate)
-</span><span class="line">  (:generator 1
-</span><span class="line">    (move res x)
-</span><span class="line">    (inst neg res)))
-</span><span class="line">
-</span><span class="line">(define-vop (fast-negate/signed signed-unop)
-</span><span class="line">  (:translate %negate)
-</span><span class="line">  (:generator 2
-</span><span class="line">    (move res x)
-</span><span class="line">    (inst neg res)))
-</span><span class="line">
-</span><span class="line">(define-vop (fast-negate/unsigned signed-unop)
-</span><span class="line">  (:args (x :scs (unsigned-reg) :target res))
-</span><span class="line">  (:arg-types unsigned-num)
-</span><span class="line">  (:translate %negate)
-</span><span class="line">  (:generator 3
-</span><span class="line">    (move res x)
-</span><span class="line">    (inst neg res)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun inverse (a m)
+</span><span class="line">  (labels ((egcd (a b)
+</span><span class="line">             (cond ((= 1 a)
+</span><span class="line">                    (values 1 0))
+</span><span class="line">                   ((&gt; a b)
+</span><span class="line">                    (multiple-value-bind (y x)
+</span><span class="line">                        (egcd b a)
+</span><span class="line">                      (values x y)))
+</span><span class="line">                   (t
+</span><span class="line">                    (multiple-value-bind (q r)
+</span><span class="line">                        (truncate b a)
+</span><span class="line">                      (multiple-value-bind (y x)
+</span><span class="line">                          (egcd r a)
+</span><span class="line">                        (values (mod (- x (* y q)) m)
+</span><span class="line">                                y)))))))
+</span><span class="line">    (let* ((x (egcd a m))
+</span><span class="line">           (i (if (&lt; x 0) (+ x m) x)))
+</span><span class="line">      ;; i better be a's inverse...
+</span><span class="line">      (assert (= 1 (mod (* a i) m)))
+</span><span class="line">      i)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The code snippet above includes a bit of boilerplate to factor out
-commonalities via inheritance.  The first definition introduces
-<code>fast-safe-arith-op</code>, VOPs that apply in both high speed and high
-safety settings (the rest is copy/pasted noise from earlier ports that
-sport a scheduler); the second one extends <code>fast-safe-arith-op</code> to
-define <code>fixnum-unop</code>, a base definition for single-argument operations
-on fixnums, while the third one is the same, but for machine integers.
-The last three definitions fill in the blanks so the compiler can
-compile <code>%negate</code> of fixnum, signed and unsigned integers.  The
-<code>(:translate %negate)</code> bit means that these VOPs can be emitted
-instead of calls to <code>%negate</code>.  The integer after <code>:generator</code> defines
-the “cost” of each variant; the compiler will choose the (applicable)
-variant with the least cost and execute the code sequence that follows
-to convert a call to <code>%negate</code> into machine code.</p>
+<p>And a quick sanity check:</p>
 
-<p>This kind of implementation inheritance is fine for an SBCL backend,
-where we define many VOPs and expect developers to understand the
-system.  I doubt it’s a didactic win.  Let’s do something simpler for
-<code>popcnt</code>.  In the interest of simplicity, I’ll also completely
-disregard powerful details in <code>define-vop</code> that are rarely relevant
-when defining intrinsics that map directly to machine instructions.</p>
+<pre><code>CL-USER&gt; (loop for m from 2 upto (ash 1 10)
+               do (loop for i from 1 below m
+                        when (= 1 (gcd i m))
+                        do (inverse i m)))
+NIL ; no assertion failure
+</code></pre>
 
-<p>First, we need to tell the compiler that we’re about to do special
-things to a function named <code>popcnt</code> (and to blow away any pre-existing
-information if the <code>defknown</code> form is re-evaluated).</p>
+<p>The second issue is that the multiplicative inverse only exists if our
+divisor and our modulo (e.g., \(2\sp{32}\)) are coprime.  The good
+news is that \(\mathop{gcd}(a, 2\sp{w})\) can only be a power of
+two.  We only have to factor our divisor \(a = 2\sp{s} v\), and find
+\(i\), the multiplicative inverse of \(v\).  Division by \(a\)
+is then a right shift by \(s\) and a multiplication by \(i\).</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
@@ -269,23 +273,49 @@ information if the <code>defknown</code> form is re-evaluated).</p>
 <span class="line-number">7</span>
 <span class="line-number">8</span>
 <span class="line-number">9</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defpackage "POPCNT"
-</span><span class="line">  (:use "CL")
-</span><span class="line">  (:export "POPCNT"))
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun trailing-zeros (x)
+</span><span class="line">  "Return the largest integer s such that 2^s | x"
+</span><span class="line">  (assert (plusp x))
+</span><span class="line">  (1- (integer-length (logxor x (1- x)))))
 </span><span class="line">
-</span><span class="line">(in-package "POPCNT")
-</span><span class="line">
-</span><span class="line">(sb-c:defknown popcnt ((unsigned-byte 64)) (integer 0 64)
-</span><span class="line">    (sb-c:foldable sb-c:flushable sb-c:movable)
-</span><span class="line">  :overwrite-fndb-silently t)</span></code></pre></td></tr></table></div></figure></notextile></div>
+</span><span class="line">(defun divisor (d m)
+</span><span class="line">  (let* ((zeros (trailing-zeros d))
+</span><span class="line">         (inverse (inverse (ash d (- zeros)) m)))
+</span><span class="line">    (lambda (x)
+</span><span class="line">      (mod (* (ash x (- zeros)) inverse) m))))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>This says that <code>popcnt</code> accepts a 64-bit unsigned integer and returns
-an integer between 0 and 64 (inclusively), and that the function can
-be constant-folded, flushed (eliminated as dead code) and moved around
-(it’s pure).</p>
+<p>And now, a final round of tests:</p>
 
-<p>Now, to define a VOP that implements <code>popcnt</code>:</p>
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<pre><code>CL-USER&gt; (defun test-divisor (d m)
+           (let ((divisor (divisor d m)))
+             (loop for i upfrom 0
+                   for j from 0 by d below m
+                   do (assert (= (funcall divisor j) i)))))
+TEST-DIVISOR
+CL-USER&gt; (loop for width from 1 upto 20
+               for mod = (ash 1 width)
+               do (loop for x from 1 below mod
+                        do (test-divisor x mod)))
+NIL
+</code></pre>
+
+<p>A simple transformation from integer division to shift and
+multiplication… that works only in very specific conditions.</p>
+
+<h1 id="what-are-modular-inverses-good-for-then">What are modular inverses good for, then?</h1>
+
+<p>I’ve only seen this transformation used for pointer subtractions in
+C-like languages: machines count in chars and programs in
+whatever the pointers point to.  Pointer arithmetic is only
+defined within the same array, so the compiler can assume that the
+distance between the two pointers is a multiple of the object size.</p>
+
+<p>The following program is deep in undefined behaviour, for
+example.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>foo.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
 <span class="line-number">3</span>
 <span class="line-number">4</span>
@@ -298,173 +328,44 @@ be constant-folded, flushed (eliminated as dead code) and moved around
 <span class="line-number">11</span>
 <span class="line-number">12</span>
 <span class="line-number">13</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "SB-VM")
+<span class="line-number">14</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#include &lt;stdio.h&gt;</span>
 </span><span class="line">
-</span><span class="line">(define-vop (popcnt:popcnt)
-</span><span class="line">  (:policy :fast-safe)
-</span><span class="line">  (:translate popcnt:popcnt)
-</span><span class="line">  (:args (x :scs (unsigned-reg) :target r))
-</span><span class="line">  (:arg-types unsigned-num)
-</span><span class="line">  (:results (r :scs (unsigned-reg)))
-</span><span class="line">  (:result-types unsigned-num)
-</span><span class="line">  (:generator 3
-</span><span class="line">    (unless (location= r x) ; only break the spurious dep. chain
-</span><span class="line">      (inst xor r r))       ; if r isn't the same register as x.
-</span><span class="line">    (inst popcnt r x)))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>We define a new VOP named <code>popcnt:popcnt</code> (the name is arbitrary, as
-long as it doesn’t collide with another VOP) that is applicable at all
-optimization policies (both high speed and high debug level), and that
-implements <code>popcnt:popcnt</code>.  Its first and only argument, <code>x</code>, is an
-<code>unsigned-num</code>, an unsigned machine integer, that can only be stored
-in a register.  Moreover, if possible, we’d like <code>x</code> to be allocated
-the same register as the result, <code>r</code>.  There’s only one result (<code>r</code>)
-and it’s an unsigned machine integer in a register, just like <code>x</code>.
-The generator, of cost 3 (a common default for arithmetic operations),
-breaks any dependency chain in <code>r</code> if necessary, and stores the
-population count of <code>x</code> in <code>r</code>.</p>
-
-<p>At first sight, the <code>defknown</code> form seems to conflict with the VOP.
-We declare that the return value of <code>popcnt</code> is a small integer,
-clearly a fixnum, and then define a VOP that returns a machine
-integer.  The subtlety is that <code>defknown</code> is concerned with IR1, the
-higher level intermediate representation, which works on CL types
-(i.e, types as sets) and abstract values.  VOPs, on the other hand,
-are defined for the lower level IR2, where types describe concrete
-representations (like C).  It is perfectly meaningful to say that a
-small integer will be represented as an untagged machine integer.</p>
-
-<p>The next step isn’t strictly necessary, but helps people who like
-their REPL.  The compiler knows how to compile calls to <code>popcnt</code>, so
-we can define <code>popcnt</code>… as a call to <code>popcnt</code>.  Our new function is
-now a first-class value that can be called from interpreted code and
-passed to higher-order functions, like the compiler’s constant-folding
-pass.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "POPCNT")
+</span><span class="line"><span class="k">struct</span> <span class="n">foo</span> <span class="p">{</span>
+</span><span class="line">	<span class="kt">char</span> <span class="n">buffer</span><span class="p">[</span><span class="mi">7</span><span class="p">];</span>
+</span><span class="line"><span class="p">};</span>
 </span><span class="line">
-</span><span class="line">(defun popcnt (x)
-</span><span class="line">  (popcnt x))</span></code></pre></td></tr></table></div></figure></notextile></div>
+</span><span class="line"><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">	<span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="n">x</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="p">)</span><span class="mi">0</span><span class="p">;</span>
+</span><span class="line">	<span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="n">y</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="p">)</span><span class="mi">9</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">	<span class="n">printf</span><span class="p">(</span><span class="s">&quot;%zd %i</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">y</span> <span class="o">-</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="o">&lt;</span> <span class="n">x</span><span class="p">);</span>
+</span><span class="line">	<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<pre><code>CL-USER&gt; (disassemble 'popcnt:popcnt)
-; disassembly for POPCNT:POPCNT
-; Size: 25 bytes
-; 07FCDB6E:       4831D2           XOR RDX, RDX               ; no-arg-parsing entry point
-;       71:       F3480FB8D1       POPCNT RDX,RCX
-;       76:       48D1E2           SHL RDX, 1
-;       79:       488BE5           MOV RSP, RBP
-;       7C:       F8               CLC
-;       7D:       5D               POP RBP
-;       7E:       C3               RET
-[ error trap noise ]
-CL-USER&gt; (popcnt:popcnt 42)
-3
+<pre><code>pkhuong:tmp pkhuong $ clang foo.c &amp;&amp; ./a.out
+-2635249153387078801 0
 </code></pre>
 
-<p>The disassembly shows that we get the code that we expect, including
-the dependency-breaking workaround, and the smoke test passes.
-There’s one interesting detail: we only defined a VOP that returns a
-machine integer.  However, <code>popcnt</code> returns a tagged value (a fixnum),
-and does so with an efficient shift.  IR2 takes care of inserting any
-coercion needed between VOPs (e.g., between <code>popcnt</code> and the VOP used to
-return boxed values from functions), and the IR1 <code>defknown</code> guarantees
-that the result of <code>popcnt</code>, despite being <em>represented</em> in an
-unsigned machine integer, is small enough for a fixnum.</p>
+<p>What I find interesting is that, if we pay attention to the
+correctness analysis, it’s clear that general div-by-mul
+transformations benefit from known common factors between the divisor
+and the dividend.  In the extreme case, when the dividend is always a
+multiple of the divisor, we can convert the division to a single
+double-wide multiplication, without any shift or additional multi-word
+arithmetic.  On architectures with fast multipliers or ones that let
+us compute the high half of product without the low part, the general
+case (coupled with a tight analysis) may be marginally quicker than
+this specialised transformation.  Yet, both GCC and clang convert
+pointer subtractions to shifts and multiplications by modular
+inverses.</p>
 
-<p>Let’s see what happens when we feed arithmetic into <code>popcnt</code>, e.g.:</p>
-
-<pre><code>CL-USER&gt; (disassemble (lambda (x y)
-                        (declare (type (unsigned-byte 32) x y))
-                        (popcnt:popcnt (+ x y))))
-; disassembly for (LAMBDA (X Y))
-; Size: 55 bytes
-; 0752BD59:       4801FA           ADD RDX, RDI               ; no-arg-parsing entry point
-;       5C:       48D1FA           SAR RDX, 1
-;       5F:       F3480FB8D2       POPCNT RDX,RDX
-;       64:       48D1E2           SHL RDX, 1
-;       67:       488BE5           MOV RSP, RBP
-;       6A:       F8               CLC
-;       6B:       5D               POP RBP
-;       6C:       C3               RET
-</code></pre>
-
-<p>After adding two fixnums, an automatic coercion unboxes the resulting
-fixnum into a machine integer which is then passed to <code>popcnt</code>
-(note the lack of dependency-breaking <code>xor</code> now that the source and
-destination are the same register).</p>
-
-<p>That’s pretty good code, but we can do better: fixnums are tagged with
-0, so we can simply pass fixnums to <code>popcnt</code> without untagging.</p>
-
-<p>This is where the cost parameter to <code>:generator</code> comes in: we can
-define another VOP for <code>popcnt</code> of fixnums and bias the compiler to
-prefer the fixnum VOP.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "SB-VM")
-</span><span class="line">
-</span><span class="line">(define-vop (popcnt/fx)
-</span><span class="line">  (:policy :fast-safe)
-</span><span class="line">  (:translate popcnt:popcnt)
-</span><span class="line">  (:args (x :scs (any-reg) :target r))
-</span><span class="line">  (:arg-types positive-fixnum)
-</span><span class="line">  (:results (r :scs (unsigned-reg)))
-</span><span class="line">  (:result-types unsigned-num)
-</span><span class="line">  (:generator 2 ; 2 is lower than 3, so popcnt/fx is preferable to popcnt
-</span><span class="line">    (unless (location= r x)
-</span><span class="line">      (inst xor r r))
-</span><span class="line">    (inst popcnt r x)))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<pre><code>CL-USER&gt; (disassemble (lambda (x y)
-                        (declare (type (unsigned-byte 32) x y))
-                        (popcnt:popcnt (+ x y))))
-; disassembly for (LAMBDA (X Y))
-; Size: 47 bytes
-; 07BEABE9:       4801FA           ADD RDX, RDI               ; no-arg-parsing entry point
-;      BEC:       F3480FB8D2       POPCNT RDX,RDX
-;      BF1:       48D1E2           SHL RDX, 1
-;      BF4:       488BE5           MOV RSP, RBP
-;      BF7:       F8               CLC
-;      BF8:       5D               POP RBP
-;      BF9:       C3               RET
-</code></pre>
-
-<p>Unlike many low-level languages, CL includes a standard function for
-population count, <code>logcount</code>.  SBCL includes a VOP for <code>logcount</code>
-(with a cost of 14), which we can supersede with our own <code>popcnt</code>-based
-VOPs: we only have to replace <code>(:translate popcnt:popcnt)</code> with 
-<code>(:translate logcount)</code>.  That’s an easy improvement but isn’t in trunk
-because <code>popcnt</code> is a recent x86 extension.</p>
-
-<p>Adding VOPs for (ad-hoc) polymorphic or otherwise generic functions
-can be surprising: a VOP will only be considered if the arguments <em>and
-the return values</em> are known to have CL types that are compatible with
-the VOP’s representation specification.  For <code>popcnt</code>, we guarantee
-that the return value is a positive integer between 0 and 64; for
-<code>cl:logcount</code>, the <code>defknown</code> guarantees that the return value is a
-positive fixnum.  In both cases, the return values can always be
-represented as an unsigned machine integer, so our new VOPs will
-always match if the argument fits in positive fixnums or unsigned
-machine integers (and will have priority over the generic x86-64 VOP
-because their cost is lower).  More complex cases depend on
-<code>derive-type</code> optimizers, but that’s rarely necessary when defining
-instrinsics for low-level code.</p>
+<p>In the end multiplicative inverses seem mostly useful as a red
+herring, and as a minimal-complexity low hanging fruit.  The only
+reason I use them is that it’s easy to generate the coefficients in C,
+which is helpful when allocation sizes are determined at runtime.</p>
 </div>
   
   

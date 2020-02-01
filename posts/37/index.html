@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2013/06/23/bitsets-match-regular-expressions/">Bitsets match regular expressions, compactly</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2013/06/05/fresh-in-sbcl-1-dot-1-8-sse-intrinsics/">Fresh in SBCL 1.1.8: SSE intrinsics!</a></h1>
     
     
       <p class="meta">
@@ -99,15 +99,15 @@
 
 June
   
-23rd, 
+5th, 
 2013
 
 
 
 
         
-         | <a href="/Blog/2013/06/23/bitsets-match-regular-expressions/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2013/06/23/bitsets-match-regular-expressions/"
+         | <a href="/Blog/2013/06/05/fresh-in-sbcl-1-dot-1-8-sse-intrinsics/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2013/06/05/fresh-in-sbcl-1-dot-1-8-sse-intrinsics/"
 	      >Comments</a>
         
         
@@ -116,15 +116,503 @@ June
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>This post describes how graph and automata theory can help compile a
-regular expression like “ab(cd|e)*fg” into the following
-asymptotically (linear-time) and practically (around 8
-cycles/character on my E5-4617) efficient machine code.  The technique
-is easily amenable to SSE or AVX-level vectorisation, and doesn’t rely
-on complicated bit slicing tricks nor on scanning multiple streams in
-parallel.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><blockquote class="twitter-tweet"><p>Huge month for <a href="https://twitter.com/search/%23SBCL">#SBCL</a>: devious bugs fixed, new optimisations, new features. Help us find regressions in HEAD!<a href="http://t.co/GNBITGg8Y4" title="http://sbcl.git.sourceforge.net/git/gitweb.cgi?p=sbcl/sbcl.git">sbcl.git.sourceforge.net/git/gitweb.cgi…</a></p>&mdash; Paul Khuong (@pkhuong) <a href="https://twitter.com/pkhuong/status/338013156238565376">May 24, 2013</a></blockquote>
+<script async="" src="//platform.twitter.com/widgets.js" charset="utf-8"></script>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>matcher inner loop </span></figcaption>
+<p>One feature I’m particularly excited about is the basic support for
+SSE intrinsics on x86-64.  It’s only the fundamental infrastructure
+needed for the compiler and runtime to manipulate and compile
+operations on SIMD packs (the platform-independent name suggested by
+<a href="http://kpreid.livejournal.com/">Kevin Reid</a>).  However, now that it’s
+merged in, we can easily add new functionality that maps (more or
+less) directly to SSE assembly in a running image, like the
+sb-rotate-byte contrib does for bitwise rotations.</p>
+
+<p>There is currently no such contrib in SBCL, although Alexander
+Gavrilov has been maintaining
+<a href="https://github.com/angavrilov/cl-simd">cl-simd</a>, an extension for
+SBCL and ECL (he also kept an old SSE/SBCL branch of mine on life
+support since 2008).  I’m really not sure what the right interface
+will look like for Common Lisp, so I decided to only provide the
+mechanism to implement such an interface; when something emerges that
+looks sane and has been used in anger, we can merge it in.</p>
+
+<p>In the meantime, we get to define our own interface and see where that
+experience leads us.  In this post, I’ll use a classic example to
+guide my first stab at an interface: the
+<a href="http://en.wikipedia.org/wiki/Mandelbrot_set">Mandelbrot set</a>.  I’ll
+only define as much of an interface as I need, and adapt it along the
+way if I see the need for more sophistication; I prefer to build
+programs and libraries bottom-up and iteratively, rather than trying
+to divine my requirements ahead of time.  A consequence of this
+approach is that I have to/am able to maintain a dynamic development
+style, even when working with (and working <em>on</em>) SSE intrinsics.  I
+know many people use REPLs as desktop calculators; maybe others can be
+persuaded to also use SBCL as an SIMD calculator, to doodle on SSE code
+sequences (:</p>
+
+<h2 id="packed-floating-point-arithmetic">Packed floating-point arithmetic</h2>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>definitions </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defpackage "MANDELBROT"
+</span><span class="line">  (:use "CL" "SB-EXT" "SB-C")) ; SB-EXT for SIMD-PACK, SB-C for DEFKNOWN etc
+</span><span class="line">
+</span><span class="line">(in-package "MANDELBROT")
+</span><span class="line">
+</span><span class="line">(defknown (f4+ f4* f4-) ((simd-pack single-float) (simd-pack single-float))
+</span><span class="line">    (simd-pack single-float)
+</span><span class="line">    (movable flushable always-translatable)
+</span><span class="line">  :overwrite-fndb-silently t)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The last form adds three new functions (<code>f4+</code>, <code>f4*</code> and <code>f4-</code>) to the
+compiler’s database (fndb).  Each function accepts two packs of
+single floats as arguments, and returns another single float pack (the
+result of element-wise addition, multiplication or subtraction).
+Moreover, the functions can be reordered and flushed as dead code by
+the compiler, and, whenever they appear in code, they should
+ultimately be translated to assembly code.  The last bit is so the
+runtime system silently overwrites the database if the functions
+are already there, rather than warning at load-time.</p>
+
+<p>Next, we add a template (VOP) to convert calls to <code>f4+</code> into assembly
+code.  This task is so deeply tied with the internals that it makes
+sense to just do it from SB-VM.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>vops </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "SB-VM")
+</span><span class="line">
+</span><span class="line">(define-vop (mandelbrot::f4+)
+</span><span class="line">  (:translate mandelbrot::f4+)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:args (x :scs (single-sse-reg) :target r) (y :scs (single-sse-reg)))
+</span><span class="line">  (:arg-types simd-pack-single simd-pack-single)
+</span><span class="line">  (:results (r :scs (single-sse-reg)))
+</span><span class="line">  (:result-types simd-pack-single)
+</span><span class="line">  (:generator 4
+</span><span class="line">    (cond ((location= r y)
+</span><span class="line">           (inst addps y x))
+</span><span class="line">          (t
+</span><span class="line">           (move r x)
+</span><span class="line">           (inst addps r y)))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The first line defines a VOP with name <code>mandelbrot::f4+</code> (it’s an
+arbitrary symbol and the important bit is only to avoid collisions,
+but good naming is useful when reading compiler traces or optimisation
+notes).</p>
+
+<p>Then, we specify that it’s to be automatically considered when there
+is a call to <code>mandelbrot::f4+</code>, and that it can be used both in fast
+and in safe code.</p>
+
+<p>The template converts a call with two arguments, <code>x</code> and <code>y</code>, that
+must both be in SSE registers of single floats.  Both value must be
+represented as single floats in SIMD packs: when defining VOPs,
+types refer to primitive types, and primitive types are concerned with
+representation (like C types) rather than only sets of values (a
+given CL value or type can be mapped to many primitive types
+depending on the context).  We also declare a preference for <code>x</code> to be
+allocated in the same register as the result <code>r</code>, if possible.</p>
+
+<p>The template has a single result, which is also an SIMD pack of single
+floats allocated in an SSE register of single floats.</p>
+
+<p>Finally, we have code to emit assembly.  If <code>r</code> and <code>y</code> were packed
+(register-allocated) in the same register, we exploit commutativity to
+add <code>x</code> into <code>y</code>.  Otherwise, we move <code>x</code> into <code>r</code> if necessary (the
+<code>move</code> function takes care of checking for equivalent locations), and
+emit a packed single float addition (<code>addps</code>) of <code>y</code> into <code>r</code> (which
+has just been overwritten with the contents of <code>x</code>).</p>
+
+<p>The reason we have to specify that the SSE registers hold single
+float values (rather than doubles or integers) is for functions like
+<code>move</code> to emit a move of FP SSE registers rather than integer, for
+example.  However, this additional information doesn’t really affect
+register allocation: the three storage classes (SC) –
+<code>single-sse-reg</code>, <code>double-sse-reg</code> and <code>int-sse-reg</code> – all map to the
+same storage base (SB), and the same SSE register can be used for an
+<code>simd-pack-single</code> value at one program point, an <code>simd-pack-int</code> at
+another, and a <code>double-float</code> at yet another.</p>
+
+<p>This VOP is the bare minimum for a useful packed addition of single
+floats: in the future, it will probably make sense to add support for
+a constant argument, which could be directly loaded from a
+RIP-relative address to save a register (SBCL isn’t clever enough to
+determine when it makes sense to keep a constant in a register across
+a basic block or a loop).</p>
+
+<p>We do the same for multiplication and subtraction.  There’s one last
+twist for <code>f4-</code>.  We can’t exploit commutativity there, so we have to
+make sure <code>y</code> and <code>r</code> aren’t packed in the same register; this is
+achieved by extending the live range of <code>r</code> from the end of the
+(default) live range for <code>x</code>.  There are obvious opportunities for
+macro-isation, but, again, I can refactor when I have a clear need
+(e.g. when I decide to add a dozen more intrinsics).</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>vops </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(define-vop (mandelbrot::f4*)
+</span><span class="line">  (:translate mandelbrot::f4*)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:args (x :scs (single-sse-reg) :target r) (y :scs (single-sse-reg)))
+</span><span class="line">  (:arg-types simd-pack-single simd-pack-single)
+</span><span class="line">  (:results (r :scs (single-sse-reg)))
+</span><span class="line">  (:result-types simd-pack-single)
+</span><span class="line">  (:generator 4
+</span><span class="line">    (cond ((location= r y)
+</span><span class="line">           (inst mulps y x))
+</span><span class="line">          (t
+</span><span class="line">           (move r x)
+</span><span class="line">           (inst mulps r y)))))
+</span><span class="line">
+</span><span class="line">(define-vop (mandelbrot::f4-)
+</span><span class="line">  (:translate mandelbrot::f4-)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:args (x :scs (single-sse-reg) :target r) (y :scs (single-sse-reg)))
+</span><span class="line">  (:arg-types simd-pack-single simd-pack-single)
+</span><span class="line">  (:results (r :scs (single-sse-reg) :from (:argument 0)))
+</span><span class="line">  (:result-types simd-pack-single)
+</span><span class="line">  (:generator 4
+</span><span class="line">    (move r x)
+</span><span class="line">    (inst subps r y)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Now that we’ve declared the functions and defined one way to convert
+each to machine code, we can define stubs to interact with them from
+interpreted code or as normal first-class functions.  The compiler
+already has all the information needed to convert any call to <code>f4+</code> et
+al to machine code; however, no such function is actually defined.  We
+can define them with what looks like infinite recursion: the
+<code>defknown</code> will ensure the compiler inserts type checks for
+<code>(simd-pack single-float)</code> as needed and infers that the result is
+also an <code>(simd-pack single-float)</code>, so the templates will be
+applicable.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>intrinsics </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "MANDELBROT")
+</span><span class="line">
+</span><span class="line">(macrolet ((define-stub (name)
+</span><span class="line">             `(defun ,name (x y)
+</span><span class="line">                (,name x y))))
+</span><span class="line">  (define-stub f4+)
+</span><span class="line">  (define-stub f4*)
+</span><span class="line">  (define-stub f4-))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Now, we can call our new functions at the REPL, pass them to
+higher-order functions, etc., like any normal function.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">MANDELBROT&gt; (%make-simd-pack-single 1.0 2.0 3.0 4.0) ; from sb-ext
+</span><span class="line">#&lt;SIMD-PACK 1.0000000e+0 2.0000000e+0 3.0000000e+0 4.0000000e+0&gt;
+</span><span class="line">MANDELBROT&gt; (f4+ * *)
+</span><span class="line">#&lt;SIMD-PACK 2.0000000e+0 4.0000000e+0 6.0000000e+0 8.0000000e+0&gt;</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The first form makes an <code>simd-pack</code> from four single float values.  We
+must already track at compile-time whether each SIMD pack value is a
+pack of singles, doubles or integers, so it makes sense to do the same
+at runtime: that way we preserve type information when constant
+folding, and that we can print them nicely.  Thus, we can call <code>f4+</code>
+on that value, and see that <code>1.0 + 1.0 = 2.0</code>.  We can also
+disassemble the function <code>f4*</code> to confirm that it is a normal function
+that can be passed around (in this case to <code>disassemble</code>), and that it
+doesn’t endlessly recurse.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">MANDELBROT&gt; (disassemble #'f4*)
+</span><span class="line">; disassembly for F4*                                         ; type checks hidden in the prologue
+</span><span class="line">; Size: 112 bytes
+</span><span class="line">; 08581B29:       0F28D0           MOVAPS XMM2, XMM0          ; no-arg-parsing entry point
+</span><span class="line">;       2C:       0F59D1           MULPS XMM2, XMM1
+</span><span class="line">;       2F:       49896C2440       MOV [R12+64], RBP          ; allocate a boxed return value
+</span><span class="line">;       34:       4D8B5C2418       MOV R11, [R12+24]
+</span><span class="line">;       39:       498D5320         LEA RDX, [R11+32]
+</span><span class="line">;       3D:       4939542420       CMP [R12+32], RDX
+</span><span class="line">;       42:       7641             JBE L2
+</span><span class="line">;       44:       4989542418       MOV [R12+24], RDX
+</span><span class="line">;       49:       498D530F         LEA RDX, [R11+15]
+</span><span class="line">;       4D: L0:   48C742F165030000 MOV QWORD PTR [RDX-15], 869
+</span><span class="line">;       55:       48C742F902000000 MOV QWORD PTR [RDX-7], 2
+</span><span class="line">;       5D:       0F295201         MOVAPS [RDX+1], XMM2
+</span><span class="line">;       61:       49316C2440       XOR [R12+64], RBP
+</span><span class="line">;       66:       7403             JEQ L1
+</span><span class="line">;       68:       0F0B09           BREAK 9                    ; pending interrupt trap
+</span><span class="line">;       6B: L1:   488BE5           MOV RSP, RBP
+</span><span class="line">;       6E:       F8               CLC
+</span><span class="line">;       6F:       5D               POP RBP
+</span><span class="line">;       70:       C3               RET</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h2 id="a-first-stab-at-the-mandelbrot-inner-loop">A first stab at the Mandelbrot inner loop</h2>
+
+<p>The inner loop body to approximate the Mandelbrot set is simply <code>z' =
+z*z + c</code>, where <code>z</code> and <code>c</code> are complex values.  If we expand the
+complexes into their real and imaginary parts (<code>zr + i zi</code>, <code>cr + i
+ci</code>), we find <code>z*z+c = (zr*zr - zi*zi + cr) + i(2*zr*zi + ci)</code>.  That’s easily
+vectorised if we have a pack of four <code>zr</code> values, another for the
+<code>zi</code>, and similarly for <code>cr</code> and <code>ci</code>.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>intrinsics </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(deftype f4 ()
+</span><span class="line">  '(simd-pack single-float))
+</span><span class="line">
+</span><span class="line">(declaim (inline %mandelbrot-iter replicate-float))
+</span><span class="line">(defun replicate-float (x)
+</span><span class="line">  (%make-simd-pack-single x x x x))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>mandelbrot </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun %mandelbrot-iter (zr zi cr ci)
+</span><span class="line">  (declare (optimize speed)
+</span><span class="line">           (type f4 zr zi cr ci))
+</span><span class="line">  (let* ((r (f4- (f4* zr zr)
+</span><span class="line">                 (f4* zi zi)))
+</span><span class="line">         (i/2 (f4* zr zi))
+</span><span class="line">         (i   (f4+ i/2 i/2)))
+</span><span class="line">    (values (f4+ r cr)
+</span><span class="line">            (f4+ i ci))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>This is a straight translation of the scalar formula above, but it
+computes four values in parallel (that’s why struct of array layouts
+lead to easy to vectorisation).  Crucially, a disassembly reveals we
+get the code we expect:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">MANDELBROT&gt; (disassemble '%mandelbrot-iter)
+</span><span class="line">; disassembly for %MANDELBROT-ITER
+</span><span class="line">; Size: 248 bytes
+</span><span class="line">; 0BCEACD5:       0F28E0           MOVAPS XMM4, XMM0          ; no-arg-parsing entry point
+</span><span class="line">;      CD8:       0F59E0           MULPS XMM4, XMM0
+</span><span class="line">;      CDB:       0F28E9           MOVAPS XMM5, XMM1
+</span><span class="line">;      CDE:       0F59E9           MULPS XMM5, XMM1
+</span><span class="line">;      CE1:       0F5CE5           SUBPS XMM4, XMM5
+</span><span class="line">;      CE4:       0F59C1           MULPS XMM0, XMM1
+</span><span class="line">;      CE7:       0F58C0           ADDPS XMM0, XMM0
+</span><span class="line">;      CEA:       0F58E2           ADDPS XMM4, XMM2
+</span><span class="line">;      CED:       0F58C3           ADDPS XMM0, XMM3
+</span><span class="line">[... allocate boxed return values]</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The beauty of Python’s representation selection capabilities is that
+we can specify multiple representations (unboxed in a register or on
+stack, or boxed as a generic pointer to a heap-allocated value) for
+SIMD packs, and the right (usually…) one will be chosen depending on
+context.  In this case, the function receives boxed SIMD packs,
+unboxes them into SSE registers in the prologue, performs its
+FP arithmetic only on SSE registers, and converts the results back
+into boxed SIMD packs.</p>
+
+<p>Even better: it seems to compute the right thing (:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">MANDELBROT&gt; (let ((z (complex 1.0 2.0))
+</span><span class="line">                  (c (complex 3.0 4.0)))
+</span><span class="line">              (+ (* z z) c))
+</span><span class="line">#C(0.0 8.0)
+</span><span class="line">MANDELBROT&gt; (replicate-float 1.0)
+</span><span class="line">#&lt;SIMD-PACK 1.0000000e+0 1.0000000e+0 1.0000000e+0 1.0000000e+0&gt;
+</span><span class="line">MANDELBROT&gt; (let ((zr (replicate-float 1.0))
+</span><span class="line">                  (zi (replicate-float 2.0))
+</span><span class="line">                  (cr (replicate-float 3.0))
+</span><span class="line">                  (ci (replicate-float 4.0)))
+</span><span class="line">              (%mandelbrot-iter zr zi cr ci))
+</span><span class="line">#&lt;SIMD-PACK 0.0000000e+0 0.0000000e+0 0.0000000e+0 0.0000000e+0&gt;
+</span><span class="line">#&lt;SIMD-PACK 8.0000000e+0 8.0000000e+0 8.0000000e+0 8.0000000e+0&gt;</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The first return value is a pack of real components, and the second a
+pack of imaginary components, and the values do correspond to the
+scalar computation in normal complex arithmetic.</p>
+
+<h2 id="comparisons-and-packed-integers">Comparisons and packed integers</h2>
+
+<p>The next step is to compute the (squared) norm of complex values, in
+order to detect escape from the orbit.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>mandelbrot </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(declain (inline %norm^2))
+</span><span class="line">(defun %norm^2 (r i)
+</span><span class="line">  (declare (optimize speed) (type f4 r i))
+</span><span class="line">   (f4+ (f4* r r) (f4* i i)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Again, a couple smoke tests, and a disassembly</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">MANDELBROT&gt; (apply '%norm^2 /)
+</span><span class="line">#&lt;SIMD-PACK 6.4000000e+1 6.4000000e+1 6.4000000e+1 6.4000000e+1&gt;
+</span><span class="line">MANDELBROT&gt; (%norm^2 (%make-simd-pack-single 1.0 2.0 3.0 4.0)
+</span><span class="line">                     (%make-simd-pack-single -5.0 -6.0 -7.0 -9.0))
+</span><span class="line">#&lt;SIMD-PACK 2.6000000e+1 4.0000000e+1 5.8000000e+1 9.7000000e+1&gt;
+</span><span class="line">MANDELBROT&gt; (disassemble '%norm^2)
+</span><span class="line">; disassembly for %NORM^2
+</span><span class="line">; Size: 115 bytes
+</span><span class="line">; 05FA04D9:       0F59C0           MULPS XMM0, XMM0           ; no-arg-parsing entry point
+</span><span class="line">;      4DC:       0F59C9           MULPS XMM1, XMM1
+</span><span class="line">;      4DF:       0F58C1           ADDPS XMM0, XMM1
+</span><span class="line">[... boxing ...]</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Finally, we have to compare floats (squared norms) against a limit
+(4.0), and perform some integer arithmetic to count the number of
+iterations until escape.  <code>f4-sign-mask</code> is the first instance of a
+function that accepts arbitrary SIMD pack types: singles, integers, or
+even doubles, it’ll extract sign bits from the four 32-bit chunks.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>definitions </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defknown f4&lt;= ((simd-pack single-float) (simd-pack single-float))
+</span><span class="line">    (simd-pack (signed-byte 32))
+</span><span class="line">    (movable flushable always-translatable)
+</span><span class="line">  :overwrite-fndb-silently t)
+</span><span class="line">
+</span><span class="line">(defknown i4- ((simd-pack (signed-byte 32)) (simd-pack (signed-byte 32)))
+</span><span class="line">    (simd-pack (signed-byte 32))
+</span><span class="line">    (movable flushable always-translatable)
+</span><span class="line">  :overwrite-fndb-silently t)
+</span><span class="line">
+</span><span class="line">(defknown f4-sign-mask (simd-pack) (unsigned-byte 4)
+</span><span class="line">    (movable flushable always-translatable)
+</span><span class="line">  :overwrite-fndb-silently t)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The VOPs are really straightforward and somewhat repetitive, again: we
+only want the bare minimum to get something working, and fancy special
+cases can wait until they actually show up.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>vops </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
 <span class="line-number">3</span>
@@ -155,331 +643,563 @@ parallel.</p>
 <span class="line-number">28</span>
 <span class="line-number">29</span>
 <span class="line-number">30</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">;     8F70: L1:   4839D9           CMP RCX, RBX  ; look for end of string
-</span><span class="line">;     8F73:       7D6C             JNL L5
-</span><span class="line">;     8F75:       488BC1           MOV RAX, RCX
-</span><span class="line">;     8F78:       48D1F8           SAR RAX, 1
-</span><span class="line">;     8F7B:       410FB6440001     MOVZX EAX, BYTE PTR [R8+RAX+1] ; read character
-</span><span class="line">;     8F81:       48D1E2           SHL RDX, 1
-</span><span class="line">;     8F84:       488B35F5FEFFFF   MOV RSI, [RIP-267]         ; #(0 0 0 0
-</span><span class="line">                                                              ;   ...)
-</span><span class="line">;     8F8B:       0FB6440601       MOVZX EAX, BYTE PTR [RSI+RAX+1] ; load mask from LUT
-</span><span class="line">;     8F90:       48D1E0           SHL RAX, 1    ; only data-dependent part of
-</span><span class="line">;     8F93:       4821C2           AND RDX, RAX  ;  transition
-</span><span class="line">;     8F96:       F6C258           TEST DL, 88   ; if any of states 2,3,5 are active
-</span><span class="line">;     8F99:       BE00000000       MOV ESI, 0    ;  [fixnums are tagged with a low 0 bit]
-</span><span class="line">;     8F9E:       41BB58000000     MOV R11D, 88  ; all of them are
-</span><span class="line">;     8FA4:       490F45F3         CMOVNE RSI, R11
-</span><span class="line">;     8FA8:       4809F2           OR RDX, RSI   ; now active
-</span><span class="line">;     8FAB:       4885D2           TEST RDX, RDX ; if no state is active
-</span><span class="line">;     8FAE:       751C             JNE L3
-</span><span class="line">;     8FB0:       488BD1           MOV RDX, RCX  ; return... :'( 
-</span><span class="line">;     8FB3:       BF17001020       MOV EDI, 537919511 ; we're working on
-</span><span class="line">;     8FB8: L2:   488D5D10         LEA RBX, [RBP+16]  ; moving such code block
-</span><span class="line">;     8FBC:       B904000000       MOV ECX, 4         ; out of inner loops.
-</span><span class="line">;     8FC1:       BE17001020       MOV ESI, 537919511
-</span><span class="line">;     8FC6:       F9               STC
-</span><span class="line">;     8FC7:       488BE5           MOV RSP, RBP
-</span><span class="line">;     8FCA:       5D               POP RBP
-</span><span class="line">;     8FCB:       C3               RET
-</span><span class="line">;     8FCC: L3:   4883C102         ADD RCX, 2
-</span><span class="line">;     8FD0: L4:   480FBAE208       BT RDX, 8     ; if we're not at the accept state
-</span><span class="line">;     8FD5:       7399             JNB L1        ; loop back</span></code></pre></td></tr></table></div></figure></notextile></div>
+<span class="line-number">31</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(define-vop (mandelbrot::f4&lt;=)
+</span><span class="line">  (:translate mandelbrot::f4&lt;=)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:args (x :scs (single-sse-reg) :target r) (y :scs (single-sse-reg)))
+</span><span class="line">  (:arg-types simd-pack-single simd-pack-single)
+</span><span class="line">  (:results (r :scs (int-sse-reg) :from (:argument 0)))
+</span><span class="line">  (:result-types simd-pack-int)
+</span><span class="line">  (:generator 4
+</span><span class="line">    (move r x)
+</span><span class="line">    (inst cmpps :le r y)))
+</span><span class="line">
+</span><span class="line">(define-vop (mandelbrot::i4-)
+</span><span class="line">  (:translate mandelbrot::i4-)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:args (x :scs (int-sse-reg) :target r) (y :scs (int-sse-reg)))
+</span><span class="line">  (:arg-types simd-pack-int simd-pack-int)
+</span><span class="line">  (:results (r :scs (int-sse-reg) :from (:argument 0)))
+</span><span class="line">  (:result-types simd-pack-int)
+</span><span class="line">  (:generator 4
+</span><span class="line">    (move r x)
+</span><span class="line">    (inst psubd r y)))
+</span><span class="line">
+</span><span class="line">(define-vop (mandelbrot::f4-sign-mask)
+</span><span class="line">  (:translate mandelbrot::f4-sign-mask)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:args (x :scs (int-sse-reg single-sse-reg double-sse-reg)))
+</span><span class="line">  (:arg-types simd-pack)
+</span><span class="line">  (:results (r :scs (unsigned-reg)))
+</span><span class="line">  (:result-types unsigned-num)
+</span><span class="line">  (:generator 4
+</span><span class="line">    (inst movmskps r x)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<h2 id="bitap-algorithms">Bitap algorithms</h2>
+<p>Again, we add stubs to easily work at the REPL</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>intrinsics </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(macrolet ((define-stub (name)
+</span><span class="line">             `(defun ,name (x y)
+</span><span class="line">                (,name x y))))
+</span><span class="line">  (define-stub f4+)
+</span><span class="line">  (define-stub f4*)
+</span><span class="line">  (define-stub f4-)
+</span><span class="line">  (define-stub f4&lt;=)
+</span><span class="line">  (define-stub i4-))
+</span><span class="line">
+</span><span class="line">(defun f4-sign-mask (x)
+</span><span class="line">  (f4-sign-mask x))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The
-<a href="http://en.wikipedia.org/wiki/Bitap_algorithm">canonical bitap algorithm</a>
-matches literal strings, e.g. “abad”.  Like other bitap algorithms, it
-exploits the fact that, given a bitset representation of states, it’s
-easy to implement transfer functions of the form “if state \( i \) was
-previously active and we just consumed character \( c \), state \(
-i+1 \) is now active”.  It suffices to shift the bitset
-representation of the set of active states by 1, and to mask out
-transitions that are forbidden by the character that was just
-consumed.</p>
+<p>And some smoke tests</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">MANDELBROT&gt; (f4&lt;= (%make-simd-pack-single 1.0 2.0 0.0 4.0)
+</span><span class="line">                  (%make-simd-pack-single 1.0 1.0 -0.0 5.0))
+</span><span class="line">#&lt;SIMD-PACK  FF FF FF FF  00 00 00 00  FF FF FF FF  FF FF FF FF&gt;
+</span><span class="line">MANDELBROT&gt; (i4- (%make-simd-pack-ub32 0 0 0 0) *)
+</span><span class="line">#&lt;SIMD-PACK  01 00 00 00  00 00 00 00  01 00 00 00  01 00 00 00&gt; ; little-endian
+</span><span class="line">MANDELBROT&gt; (f4-sign-mask **)
+</span><span class="line">13
+</span><span class="line">MANDELBROT&gt; (format t "~2,4,'0r~%" *)
+</span><span class="line">1101 ; the 4 bits
+</span><span class="line">NIL
+</span><span class="line">MANDELBROT&gt; (%simd-pack-ub32s ***)
+</span><span class="line">1 ; least significant word
+</span><span class="line">0
+</span><span class="line">1
+</span><span class="line">1</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>For example, when matching the literal string “abad”, a state is
-associated with each position in the pattern.  0 is the initial state,
-1 is the state when we’ve matched the first ‘a’, 2 after we’ve also
-matched ‘b’, 3 after the second ‘a’, and 4 after ‘d’, the final
-character, has been matched.  Transposing this information gives us
-the information we really need: ‘a’ allows a transition from 0 to 1
-and from 2 to 3, ‘b’ a transition from 1 to 2, and ‘d’ from 3 to 4.</p>
+<p><code>f4&lt;=</code> compares two packs of single floats element by element, and
+returns a pack of integers with all 32 bits set to 1 for pairs that
+are <code>&lt;=</code>, and 0 otherwise.  <code>i4-</code> subtracts 32-bit signed integers
+element-wise; subtracting -1 (<code>#xffff...</code>) is equivalent to adding 1.
+Finally, <code>f4-sign-mask</code> extracts the topmost (sign) bit from each
+chunk of 32 bits, and returns the 4 bits as a normal integer (i.e. in
+a general purpose register).  The function <code>sb-ext:%simd-pack-ub32s</code>
+is useful to extract the four 32 bit unsigned values from an SIMD pack
+– in this case the result of subtracting the comparison masks from
+zero – and work on them in a scalar context.</p>
 
-<p>A trivial state machine is probably clearer.</p>
+<h2 id="a-complete-mandelbrot-inner-loop">A complete Mandelbrot inner loop</h2>
 
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/abad.png" /></p>
+<p>The idea is that we’ll want to compare the result of <code>%norm^2</code> with
+the limit (4.0), and stop iterating when the maximal iteration count
+is reached, or when all four norms are greater than 4.0 (all sign bits
+are zero).  Until then, we can subtract from the counter to increment
+the number of unescaped iterations.  When we’re done, we can easily
+extract individual iteration counts from the packed counters.</p>
 
-<p>The initial state is in grey, the accept state is a double circle, and
-transitions are labelled with the character they accept.</p>
+<p>This yields</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>mandelbrot </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(declaim (maybe-inline mandelbrot-escape))
+</span><span class="line">(defun mandelbrot-escape (cr ci n)
+</span><span class="line">  (declare (type f4 cr ci)
+</span><span class="line">           (type (and unsigned-byte fixnum) n))
+</span><span class="line">  (let* ((zr cr)
+</span><span class="line">         (zi ci)
+</span><span class="line">         (limit zr)
+</span><span class="line">         (counts (%make-simd-pack-ub32 0 0 0 0)))
+</span><span class="line">    (setf limit (replicate-float 4f0)) ; bamboozle the compiler into
+</span><span class="line">    (dotimes (i n)                     ; keeping that in a register
+</span><span class="line">      (setf (values zr zi) (%mandelbrot-iter zr zi cr ci))
+</span><span class="line">      (let ((still-in-orbit (f4&lt;= (%norm^2 zr zi) limit)))
+</span><span class="line">        (setf counts (i4- counts still-in-orbit))
+</span><span class="line">        (when (zerop (f4-sign-mask still-in-orbit))
+</span><span class="line">          (return))))
+</span><span class="line">    (%simd-pack-ub32s counts)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Finding the substring “abad” in a long string thus reduces to a bunch
-of bitwise operations.  At each step, we OR bit 0 in the set of
-states: we’re always looking for the beginning of a new match.  Then,
-we consume a character.  If it’s ‘a’, the mask is 0b01010; if it’s
-‘b’, mask is 0b00100; if it’s ‘d’, mask is 0b10000; otherwise, its
-mask is 0.  Then, we shift the set of state left by 1 bit, and AND
-with mask.  The effect is that bit 1 is set iff mask has bit 1 set
-(and that only happens if the character is ‘a’), and bit 0 was
-previously set (… which is always the case), bit 2 is set iff mask has
-bit 2 set (i.e. we consumed a ‘b’) and bit 1 was previously set, etc.</p>
+<p>We can run a couple random tests and compare with a straightforward
+scalar version:</p>
 
-<p>We declare victory whenever state 4 is reached, after a simple bit
-test.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>mandelbrot </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun scalar-mandelbrot (c n)
+</span><span class="line">  (let ((z c))
+</span><span class="line">    (dotimes (i n n)
+</span><span class="line">      (setf z (+ (* z z) c))
+</span><span class="line">      (when (&gt; (abs z) 2)
+</span><span class="line">        (return i)))))
+</span><span class="line">
+</span><span class="line">(defun random-test-mandelbrot (n)
+</span><span class="line">  (let* ((z (complex (- (random 4.0) 2.0)
+</span><span class="line">                     (- (random 4.0) 2.0)))
+</span><span class="line">         (value (scalar-mandelbrot z n)))
+</span><span class="line">    (flet ((almost-replicate (x)
+</span><span class="line">             (%make-simd-pack-single 0.0 x x 10.0)))
+</span><span class="line">      (multiple-value-bind (v1 v2 v3 v4)
+</span><span class="line">          (mandelbrot-escape (almost-replicate (realpart z))
+</span><span class="line">                             (almost-replicate (imagpart z))
+</span><span class="line">                             n)
+</span><span class="line">        (declare (ignore v1 v4))
+</span><span class="line">        (assert (= value v2 v3))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>It’s pretty clear that this idea can be extended to wildcards or even
-character classes: multiple characters can have the same bit set to 1
-in their mask.  Large alphabets are also straightforward to handle:
-the mapping from character to mask can be any associative dictionary,
-e.g. a perfect hash table (wildcards and inverted character classes
-then work by modifying the default mask value).  This works not only
-with strings, but with any sequence of objects, as long as we can
-easily map objects to attributes, and attributes to masks.  Some
-thinking shows it’s even possible to handle the repetition operator
-“+”: it’s simply a conditional transition from state \( i \) to
-state \( i \).</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+<span class="line-number">61</span>
+<span class="line-number">62</span>
+<span class="line-number">63</span>
+<span class="line-number">64</span>
+<span class="line-number">65</span>
+<span class="line-number">66</span>
+<span class="line-number">67</span>
+<span class="line-number">68</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">MANDELBROT&gt; (mandelbrot-escape (%make-simd-pack-single 1.0 -1.0 3.0 0.0)
+</span><span class="line">                               (replicate-float 0.0)
+</span><span class="line">                               256)
+</span><span class="line">1 ; ok: sequence 1, 2, 5, 26 escapes after two iterations
+</span><span class="line">256 ; doesn't escape
+</span><span class="line">0 ; escapes at the first iteration
+</span><span class="line">256 ; doesn't escape
+</span><span class="line">MANDELBROT&gt; (dotimes (i 10000)
+</span><span class="line">              (random-test-mandelbrot 256))
+</span><span class="line">NIL ; no discrepancy
+</span><span class="line">MANDELBROT&gt; (disassemble 'mandelbrot-escape)
+</span><span class="line">; disassembly for MANDELBROT-ESCAPE
+</span><span class="line">; Size: 311 bytes
+</span><span class="line">; 0CABDFD1:       0F28C3           MOVAPS XMM0, XMM3          ; no-arg-parsing entry point
+</span><span class="line">;     DFD4:       0F28CC           MOVAPS XMM1, XMM4
+</span><span class="line">;     DFD7:       0F28E8           MOVAPS XMM5, XMM0
+</span><span class="line">;     DFDA:       660FEFD2         PXOR XMM2, XMM2
+</span><span class="line">;     DFDE:       0F282D0B010000   MOVAPS XMM5, [RIP+267]
+</span><span class="line">;     DFE5:       31C9             XOR ECX, ECX
+</span><span class="line">;     DFE7:       EB4F             JMP L1
+</span><span class="line">;     DFE9:       0F1F8000000000   NOP
+</span><span class="line">;     DFF0: L0:   0F28F0           MOVAPS XMM6, XMM0          ; Mandelbrot loop
+</span><span class="line">;     DFF3:       0F59F0           MULPS XMM6, XMM0
+</span><span class="line">;     DFF6:       0F28F9           MOVAPS XMM7, XMM1
+</span><span class="line">;     DFF9:       0F59F9           MULPS XMM7, XMM1
+</span><span class="line">;     DFFC:       0F5CF7           SUBPS XMM6, XMM7
+</span><span class="line">;     DFFF:       0F59C1           MULPS XMM0, XMM1
+</span><span class="line">;     E002:       0F28C8           MOVAPS XMM1, XMM0
+</span><span class="line">;     E005:       0F58C8           ADDPS XMM1, XMM0
+</span><span class="line">;     E008:       0F28C6           MOVAPS XMM0, XMM6
+</span><span class="line">;     E00B:       0F58C3           ADDPS XMM0, XMM3
+</span><span class="line">;     E00E:       0F58CC           ADDPS XMM1, XMM4
+</span><span class="line">;     E011:       0F28F0           MOVAPS XMM6, XMM0
+</span><span class="line">;     E014:       0F59F0           MULPS XMM6, XMM0
+</span><span class="line">;     E017:       0F28F9           MOVAPS XMM7, XMM1
+</span><span class="line">;     E01A:       0F59F9           MULPS XMM7, XMM1
+</span><span class="line">;     E01D:       0F58F7           ADDPS XMM6, XMM7
+</span><span class="line">;     E020:       0FC2F502         CMPLEPS XMM6, XMM5
+</span><span class="line">;     E024:       660FFAD6         PSUBD XMM2, XMM6
+</span><span class="line">;     E028:       480F50C6         MOVMSKPS RAX, XMM6         ; test for early exit
+</span><span class="line">;     E02C:       48D1E0           SHL RAX, 1
+</span><span class="line">;     E02F:       4885C0           TEST RAX, RAX
+</span><span class="line">;     E032:       7409             JEQ L2
+</span><span class="line">;     E034:       4883C102         ADD RCX, 2
+</span><span class="line">;     E038: L1:   4C39C1           CMP RCX, R8                ; iteration limit
+</span><span class="line">;     E03B:       7CB3             JL L0
+</span><span class="line">;     E03D: L2:   66480F7ED0       MOVD RAX, XMM2
+</span><span class="line">;     E042:       660F6FC2         MOVDQA XMM0, XMM2
+</span><span class="line">;     E046:       660F73D808       PSRLDQ XMM0, 8             ; extract 32 bit components
+</span><span class="line">;     E04B:       66480F7EC1       MOVD RCX, XMM0
+</span><span class="line">;     E050:       488D1400         LEA RDX, [RAX+RAX]
+</span><span class="line">;     E054:       482315A5000000   AND RDX, [RIP+165]         ; #x1FFFFFFFE
+</span><span class="line">;     E05B:       488BF8           MOV RDI, RAX
+</span><span class="line">;     E05E:       48C1EF20         SHR RDI, 32
+</span><span class="line">;     E062:       48D1E7           SHL RDI, 1
+</span><span class="line">;     E065:       488D3409         LEA RSI, [RCX+RCX]
+</span><span class="line">;     E069:       48233590000000   AND RSI, [RIP+144]         ; #x1FFFFFFFE
+</span><span class="line">;     E070:       48C1E920         SHR RCX, 32
+</span><span class="line">;     E074:       48D1E1           SHL RCX, 1
+</span><span class="line">;     E077:       48894DF0         MOV [RBP-16], RCX          ; return them as four fixnums
+</span><span class="line">;     E07B:       488D5D10         LEA RBX, [RBP+16]
+</span><span class="line">;     E07F:       B908000000       MOV ECX, 8
+</span><span class="line">;     E084:       F9               STC
+</span><span class="line">;     E085:       488D65F0         LEA RSP, [RBP-16]
+</span><span class="line">;     E089:       488B6D00         MOV RBP, [RBP]
+</span><span class="line">;     E08D:       FF73F8           PUSH QWORD PTR [RBX-8]
+</span><span class="line">;     E090:       C3               RET
+</span><span class="line">[... error traps ...]</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>What I find amazing is that the technique extends naturally to
-arbitrary regular expressions (or nondeterministic finite automata).</p>
+<p>So, there’s some register allocation oddities (mostly because the VOPs
+don’t handle the case when both arguments are the same, I think), but
+it’s pretty good.  The one issue that bothers me is <code>(zerop
+(f4-sign-mask still-in-orbit))</code>: it’s a common operation, and there’s
+a slight miscompile (the result of <code>f4-sign-mask</code> is converted to a
+fixnum before comparison… an instance of bad representation
+selection).  These two reasons – factoring code out and improving
+code generation for a medium-level operation – are enough for me to
+add a specialised function to test if all the sign bits are zero.</p>
 
-<h2 id="shift-and-mask-for-regular-expressions">Shift and mask for regular expressions</h2>
+<h2 id="a-new-predicate">A new predicate</h2>
 
-<p>Simulating an NFA by advancing a set of states in lockstep is an old
-technique.  Russ Cox has written a
-<a href="http://swtch.com/~rsc/regexp/">nice review of classic techniques to parse or recognize regular languages</a>.
-The NFA simulation was first described by
-<a href="http://www.fing.edu.uy/inco/cursos/intropln/material/p419-thompson.pdf">Thomson in 1977</a>,
-but it’s regularly being rediscovered as taking the Brzozowski
-derivative of regular expressions ;)</p>
+<p>We define predicates simply as functions that return boolean
+values (this one is prefixed with <code>f4-</code> because the instruction
+officially works on single floats).</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>definitions </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defknown f4-sign-all-zero (simd-pack) boolean
+</span><span class="line">    (movable flushable always-translatable)
+</span><span class="line">  :overwrite-fndb-silently t)</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p><a href="http://neil.fraser.name/software/diff_match_patch/bitap.ps">Fast Text Searching With Errors</a>
-by Sun Wu and Udi Manber is a treasure trove of clever ideas to
-compile pattern matching, a symbolic task, into simple bitwise
-operations.  For regular expressions, the key insight is that the set
-of states can be represented with a bitset such that the transition
-table for the NFA’s states can be factored into a simple data-dependent
-part followed by \( \epsilon \)-transitions that are the same,
-regardless of the character consumed.  Even better: the NFA’s state
-can be numbered so that each character transition is from state \( i
-\) to \( i+1 \), and such a numbering falls naturally from the
-obvious way to translate regular expression ASTs into NFAs.</p>
+<p>However, VOPs for such functions shouldn’t return values; instead,
+they can define how to determine that their result is true.  In this
+case, if the <code>:z</code> (zero) flag is set.  Code generation will take care of
+using that information in conditional branches or conditional moves.</p>
 
-<p>For the initial example “ab(cd|e)*fg”, the AST looks like a node to
-match ‘a’, succeeded by a node to match ‘b’, then a repetition node
-into either “cd”, “e” or \( \epsilon \), and the repetition node is
-succeeded by “fg” (and, finally, accept).  Again, a drawing is much
-clearer!</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>vops </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(define-vop (mandelbrot::f4-sign-all-zero)
+</span><span class="line">  (:translate mandelbrot::f4-sign-all-zero)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:args (x :scs (int-sse-reg single-sse-reg double-sse-reg)))
+</span><span class="line">  (:arg-types simd-pack)
+</span><span class="line">  (:temporary (:sc unsigned-reg) bits)
+</span><span class="line">  (:conditional :z)
+</span><span class="line">  (:generator 4
+</span><span class="line">    (inst movmskps bits x)
+</span><span class="line">    (inst test bits bits)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/naive-regexp.png" /></p>
+<p>For example, in this stub, the compiler will emit the template,
+followed by a conditional move to return T or NIL.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>intrinsics </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun f4-sign-all-zero (x)
+</span><span class="line">  (f4-sign-all-zero x))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Circles correspond to character-matching states, the square to a
-repetition node, the diamond to a choice node, and the pointy boxes to
-dummy states.  The final accept state is, again, a double circle.
-\( \epsilon \)-transitions are marked in blue, and regular
-transitions are labelled with the character they consume.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">MANDELBROT&gt; (disassemble 'f4-sign-all-zero)
+</span><span class="line">; disassembly for F4-SIGN-ALL-ZERO
+</span><span class="line">; Size: 40 bytes
+</span><span class="line">; 0CB11978:       480F50C0         MOVMSKPS RAX, XMM0         ; no-arg-parsing entry point
+</span><span class="line">;       7C:       4885C0           TEST RAX, RAX
+</span><span class="line">;       7F:       BA17001020       MOV EDX, 537919511
+</span><span class="line">;       84:       41BB4F001020     MOV R11D, 537919567
+</span><span class="line">;       8A:       490F44D3         CMOVEQ RDX, R11
+</span><span class="line">;       8E:       488BE5           MOV RSP, RBP
+</span><span class="line">;       91:       F8               CLC
+</span><span class="line">;       92:       5D               POP RBP
+</span><span class="line">;       93:       C3               RET</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The nodes are numbered according to a straight depth-first ordering in
-which children are traversed before the successor.  As promised,
-character transitions are all from \( i \) to \( i+1 \), e.g. 0 to
-1, 1 to 2, 6 to 7, … This is a simple consequence of the fact that
-character-matching nodes have no children and a single successor.</p>
+<h2 id="wrapping-up">Wrapping up</h2>
 
-<p>This numbering is criminally wasteful.  States 3, 6 and 10 serves no
-purpose, except forwarding \( \epsilon \) transitions to other
-states.  The size of the state machine matters because bitwise
-operations become less efficient when values larger than a machine
-word must be manipulated.  Using fewer states means that larger
-regular expressions will be executed more quickly.</p>
+<p>Now, we can slightly adjust <code>mandelbrot-escape</code> to exploit this new
+function:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>mandelbrot </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun mandelbrot-escape (cr ci n)
+</span><span class="line">  (declare (type (simd-pack single-float) cr ci)
+</span><span class="line">           (type (and unsigned-byte fixnum) n))
+</span><span class="line">  (let* ((zr cr)
+</span><span class="line">         (zi ci)
+</span><span class="line">         (limit zr)
+</span><span class="line">         (counts (%make-simd-pack-ub32 0 0 0 0)))
+</span><span class="line">    (setf limit (replicate-float 4f0))
+</span><span class="line">    (dotimes (i n)
+</span><span class="line">      (setf (values zr zi) (%mandelbrot-iter zr zi cr ci))
+</span><span class="line">      (let ((still-in-orbit (f4&lt;= (%norm^2 zr zi) limit)))
+</span><span class="line">        (setf counts (i4- counts still-in-orbit))
+</span><span class="line">        (when (f4-sign-all-zero still-in-orbit) ; ** change here
+</span><span class="line">          (return))))
+</span><span class="line">    (%simd-pack-ub32s counts)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Eliminating them and sliding the numbers back yields the something
-equivalent to the more reasonable 11-state machine shown in Wu and
-Manber (Figure 3 on page 10).  Simply not assigning numbers to states
-that don’t match characters and don’t follow character states suffices
-to obtain such decent numberings.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">MANDELBROT&gt; (disassemble 'mandelbrot-escape)
+</span><span class="line">; disassembly for MANDELBROT-ESCAPE
+</span><span class="line">; Size: 311 bytes
+</span><span class="line">[...]
+</span><span class="line">;      B90:       0FC2F502         CMPLEPS XMM6, XMM5
+</span><span class="line">;      B94:       660FFAD6         PSUBD XMM2, XMM6
+</span><span class="line">;      B98:       480F50C6         MOVMSKPS RAX, XMM6
+</span><span class="line">;      B9C:       4885C0           TEST RAX, RAX
+</span><span class="line">;      B9F:       7409             JEQ L2
+</span><span class="line">;      BA1:       4883C102         ADD RCX, 2
+</span><span class="line">;      BA5: L1:   4C39C1           CMP RCX, R8
+</span><span class="line">;      BA8:       7CB6             JL L0
+</span><span class="line">[...]
+</span><span class="line">MANDELBROT&gt; (mandelbrot-escape (%make-simd-pack-single 1.0 -1.0 3.0 0.0)
+</span><span class="line">                               (replicate-float 0.0)
+</span><span class="line">                               256)
+</span><span class="line">1    ;; all four values are correct
+</span><span class="line">256
+</span><span class="line">0
+</span><span class="line">256
+</span><span class="line">MANDELBROT&gt; (dotimes (i 10000)
+</span><span class="line">              (random-test-mandelbrot 256))
+</span><span class="line">NIL ; all OK</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/ok-regexp.png" /></p>
+<p>This all looks like a lot of work, but the vast majority of it is
+reusable code to define SSE operations: 22 LOC of defknown, 83 LOC for
+assembly templates, 20 LOC in stubs and utility code. There’s only 31
+LOC for the SIMD mandelbrot loop (<code>%mandelbrot-iter</code>, <code>%norm^2</code> and
+<code>mandelbrot-escape</code>), 6 for the naïve scalar loop, and 12 for the
+random test harness.  I uploaded all the files on
+<a href="https://github.com/pkhuong/sse-mandelbrot">github</a> to simplify
+further experimentation; just fork and play around!  The function
+names could certainly be improved, for one.</p>
 
-<p>Some more thinking shows we can do better, and shave three more states.
-State 2 could directly match against character ‘e’, instead of only
-forwarding into state 3; what is currently state 4 could match against
-character ‘c’, instead of only forwarding into state 8, then 2 and
-then 5 (which itself matches against ‘c’); and similarly for state 7
-into state 8.  The result wastes not a single state: each state is
-used to match against a character, except for the accept state.
-Interestingly, the \( \epsilon \) transitions are also more regular:
-they form a complete graph between states 2, 3 and 5.</p>
+<h2 id="miscellaneous-notes">Miscellaneous notes</h2>
 
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/compressed-regexp.png" /></p>
+<p>My request for extra-hard bug shaking in SBCL 1.1.8 didn’t function as
+well as I’d wish: only a few hours after release (and after a week of
+code freeze), we received a new bug report (with fixes committed very
+rapidly, at least).  We observed the same phenomenon in 1.1.6, and
+wound up being extremely conservative for 1.1.7.  I’m not sure what’s
+the best way to encourage testing (binary release candidates during
+freeze?), but I am starting to see the point of the old odd/even
+policy for Linux.  For now, the result is that 1.1.8 offers a lot of
+exciting improvements, but also more than its share of bugs; for
+production code, it’s probably best to either build an early
+1.1.8.git-commit, or wait for 1.1.9.</p>
 
-<p>It’s possible to use fewer states than the naïve translation, and it’s
-useful to do so.  How can a program find compact numberings?</p>
+<p>Long-time readers might remember that I first blogged about SSE
+intrinsics in
+<a href="http://pvk.ca/Blog/Lisp/hacking_SSE_intrinsics-part_1.html">2008</a>.
+The problem is that I hit some issues with representing type
+information (whether an SIMD pack contains integer, single float or
+double float data), and didn’t manage to find a nice resolution.  I
+also had trouble with type operations (intersection, union, negation)
+on <code>(simd-pack [type])</code>.  For the first problem, I bit the bullet and
+created many storage classes and primitive types; as shown above, a
+function can accept arbitrary <code>simd-pack</code>, and so can VOPs: when
+converting to primitive types, unspecialised <code>simd-pack</code> are
+treated like integer <code>simd-pack</code>.  The second, I solved by moving to
+a type upgrading system inspired by array types.  There are really only
+three specialised <code>simd-pack</code> types: on integers, single floats and
+double floats.  Any specialised <code>simd-pack</code> type specifier must be
+specialised on a recognisable subtype of one of these three types.
+It’s a hack, but all type operations become trivial and easy to think
+about.</p>
 
-<h2 id="compact-bitap-automata">Compact bitap automata</h2>
+<p>The reason I finally sat down, re-read my code and thought hard for a
+few days is Google’s Summer of Code.  A student proposed to build on
+that work to vectorise standard sequence operations in CL, and I
+really didn’t want to be blocking their work.  In the end we were only
+allotted two slots, and had to select a pair of extremely strong
+proposals from ten interesting submissions… more on that soon!</p>
 
-<p>The natural impulse for functional programmers (particularly
-functional compiler writers ;) is probably to start matching patterns
-to iteratively reduce the graph.  If they’ve had bad experience with
-slow fixpoint computations, there might also be some attempts at
-recognising patterns before even emitting them.</p>
+<p>In the meantime, I hope the recent burst of activity and outside
+interest can motivate others to contribute to SBCL, even without
+Google support.  We already have one person working on a contrib to
+exploit GMP for bignum and rational arithmetic, instead of our
+hand-rolled routines; I expect to see it merged in 1.1.9 or in 1.1.10.</p>
 
-<p>This certainly describes my first couple stabs; they were either
-mediocre or wrong (sometimes both), and certainly not easy to reason
-about.  It took me a while to heed age-old advice about crossing the
-street and compacting state machines.</p>
-
-<p><a href="http://www.brighton-hove.gov.uk/content/parking-and-travel/travel-transport-and-road-safety/child-pedestrian-training"><img class="center" src="http://www.brighton-hove.gov.uk/sites/brighton-hove.gov.uk/files/roadsafetymeerkatposter.jpg" /></a></p>
-
-<p>Really, what we’re trying to do when compacting the state machine is
-to determine equivalence classes of states: sets of states that can be
-tracked as an atomic unit.  With rewrite rules, we start by assuming
-that all the states are distinct, and gradually merge them.  In other
-words, we’re computing a fixed point starting from the initial
-hypothesis that nothing is equivalent.</p>
-
-<p>Problem is,
-<a href="/Blog/2012/02/19/fixed-points-and-strike-mandates/">we should be doing the opposite</a>!
-If we assume that all the states can be tracked as a single unit, and
-break equivalence classes up in as we’re proven wrong, we’ll get
-maximal equivalence classes (and thus as few classes as possible).</p>
-
-<p>To achieve this, I start with the naïvely numbered state machine.
-I’ll refer to the start state and character states as “interesting
-sources”, and to the accept state and character states as “interesting
-destinations”.  Ideally, we’d be able to eliminate everything but
-interesting destinations: the start state can be preprocessed away by
-instead working with all the interesting destinations transitively
-reachable from the start state via \( \epsilon \) transitions
-(including itself if applicable).</p>
-
-<p>The idea is that two states are equivalent iff they are always active
-after the same set of interesting sources.  For example, after the
-start state 0, only state 1 is active (assuming that the character
-matches).  After state 1, however, all of 2, 3, 4, 6, 7, 10 and 11 are
-active.  We have the same set after states 4 and 8.  Finally, only one
-state is alive after each of 11 and 12.</p>
-
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/naive-regexp.png" /></p>
-
-<p>Intersecting the equivalence relations thus defined give a few trivial
-equivalence classes (0, 1, 5, 8, 9, 12, 13), and one huge equivalence
-class comprised of {2,3,4,6,7,10,11} made of all the states that are
-active exactly after 1, 5 and 9.  For simplicity’s sake, I’ll refer to
-that equivalence class as K.  After contraction, we find this smaller
-state graph.</p>
-
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon-regexp.png" /></p>
-
-<p>We can renumber this reasonably to obey the restriction on character
-edges: K is split into three nodes (one for each outgoing
-character-consuming edge) numbered 2, 4 and 7.</p>
-
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon2-regexp.png" /></p>
-
-<p>We could do even better if 5 and 9 (3 and 6 above) in the earlier
-contracted graph were also in equivalence class K: they only exist to
-forward back into K!  I suggest to achieve that with a simple
-post-processing pass.</p>
-
-<p>Equivalence classes are found by find determining after which
-interesting node each state is live.  States that are live after
-exactly the same sets of interesting nodes define an equivalence
-class.  I’ll denote this map from state to transitive interesting
-predecessors \( pred(state) \).</p>
-
-<p>We can coarsen the relationship a bit, to obtain \(
-pred\sp{\prime}(state) \).  For interesting destinations, \(
-pred\sp{\prime} = pred \).  For other nodes,
-\(pred\sp{\prime}(state) = \cap\sb{s\in reachable(state)}pred(s)\), where
-\(reachable(state)\) is the set of interesting destinations reachable via
-\( \epsilon \) transitions from \(state\).  This widening makes
-sense because \(state\) isn’t interesting (we never want to know
-whether it is active, only whether its reachable set is), so it
-doesn’t matter if \(state\) is active when it shouldn’t, as long as
-its destinations would all be active anyway.</p>
-
-<p>This is how we get the final set of equivalence classes.</p>
-
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon3-regexp.png" /></p>
-
-<p>We’re left with a directed multigraph, and we’d like to label nodes
-such that each outgoing edge goes from its own label \( i \) to \(
-i+1 \).  We wish to do so while using the fewest number of labels.
-I’m pretty sure we can reduce something NP-Hard like the minimum path
-cover problem to this problem, but we can still attempt a simple
-heuristic.</p>
-
-<p>If there were an Eulerian directed path in the multigraph, that path
-would give a minimal set of labels: simply label the origin of each
-arc with its rank in the path.  An easy way to generate an Eulerian
-circuit, if there is one, is to simply keep following any unvisited
-outgoing arc.  If we’re stuck in a dead end, restart from any vertex
-that has been visited and still has unvisited outgoing arcs.</p>
-
-<p>There’s a fair amount of underspecification there.  Whenever many
-equivalence classes could be chosen, I choose the one that corresponds
-to the lexicographically minimal (sorted) set of regexp states (with
-respect to their depth-first numbering).  This has the effect of
-mostly following the depth-first traversal, which isn’t <em>that</em> bad.
-There’s also no guarantee that there exists an Eulerian path.  If
-we’re completely stuck, I start another Eulerian path, again starting
-from the lexicographically minimal equivalence class with an unvisited
-outgoing edge.</p>
-
-<p>Finally, once the equivalence states are labelled, both character and
-\( \epsilon \) transitions are re-expressed in terms of these
-labels.  The result is a nice 8-state machine.</p>
-
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/compressed-regexp.png" /></p>
-
-<h2 id="but-thats-just-theory">But that’s just theory</h2>
-
-<p>This only covers the abstract stuff. There’s a
-<a href="https://github.com/pkhuong/bitap-regexp">CL code dump</a> on github.
-You’re probably looking for <code>compile-regexp3.lisp</code> and
-<code>scalar-bitap.lisp</code>; the rest are failed experiments.</p>
-
-<p>Once a small labeling is found, generating a matcher is really
-straightforward.  The data-dependent masks are just a dictionary
-lookup (probably in a vector or in a perfect hash table), a shift and
-a mask.</p>
-
-<p>Traditionally, epsilon transitions have been implemented with a few
-table lookups.  For example, the input state can be cut up in bytes;
-each byte maps to a word in a different lookup table, and all the
-bytes are ORed together.  The tables can be pretty huge (<code>n-states/8</code>
-lookup tables of 256 state values each), and the process can be slow
-for large states (bitsets).  This makes it even more important to
-reduce the size of the state machine.</p>
-
-<p>When runtime compilation is easy, it seems to make sense to instead
-generate a small number of test and conditional moves… even more so if
-SIMD is used to handle larger state sets.  A couple branch-free
-instructions to avoid some uncorrelated accesses to LUTs looks like a
-reasonable tradeoff, and, if SIMD is involved, the lookups would
-probably cause some slow cross-pipeline ping-ponging.</p>
-
-<p>There’s another interesting low-level trick.  It’s possible to handle
-large state sets without multi-word shifts: simply insert padding
-states (linked via \( \epsilon \) transitions) to avoid character
-transitions that straddle word boundaries.</p>
-
-<p>There’s a lot more depth to this bitap for regexp matching thing.  For
-example, bitap regular expressions can be adapted to fuzzy matchings
-(up to a maximum edit distance), by counting the edit distance in
-unary and working with one bitset for each edit distance value.  More
-important in practice, the approach described so far only handles
-recognising a regular language; parsing into capture groups and
-selecting the correct match is a complex issue about which <a href="http://swtch.com/~rsc/regexp/">Russ Cox has a lot to say</a>.</p>
-
-<p>What I find interesting is that running the NFA backward from accept
-states gives us a forward oracle: we can then tell whether a certain
-state at a given location in the string will eventually reach an
-accept state.  Guiding an otherwise deterministic parsing process with
-such a regular language oracle clearly suffices to implement capture
-groups (all non-deterministic choices become deterministic), but it
-also looks like it would be possible to parse useful non-regular
-languages without backtracking or overly onerous memoisation.</p>
+<p>P.S. I recently stumbled on
+<a href="http://www.sciencedirect.com/science/article/pii/0898122182900165?np=y">Glassman’s FFT</a>
+and it’s really nifty: an in-order general-size FFT (not so fast when
+prime factors are huge) in approximately 50 LOC.  The performance
+isn’t awesome on cached architectures, but shouldn’t be atrocious
+either… and it handles arbitrary DFT sizes.  There are issues with
+numerical stability when computing the twiddle factors on the fly, and
+the access patterns could be improved, but it’s a very simple and
+interesting foundation… especially given that the inner loop is
+naturally vectorisable.</p>
 </div>
   
   

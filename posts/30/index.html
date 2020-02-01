@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/03/08/reference-books-im-bringing-across-the-border/">Reference books I'm bringing across the border</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/02/18/how-bad-can-1gb-pages-be/">How bad can 1GB pages be?</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Mar
+Feb
   
-8th, 
+18th, 
 2014
 
 
 
 
         
-         | <a href="/Blog/2014/03/08/reference-books-im-bringing-across-the-border/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/03/08/reference-books-im-bringing-across-the-border/"
+         | <a href="/Blog/2014/02/18/how-bad-can-1gb-pages-be/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/02/18/how-bad-can-1gb-pages-be/"
 	      >Comments</a>
         
         
@@ -116,173 +116,526 @@ Mar
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I just spent the evening filling two boxes with books I’ll bring from
-Québec to my new apartment in New York.  To my surprise and delight,
-that’s less than a third of my collection (plus newer ones I have yet
-to make my mind about).  Perhaps this list of books that survived the
-cull can guide others in their acquisitions.  If you’re around NYC,
-I’d also be very happy to share my stash!</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>I joined the ad server team at <a href="http://www.appnexus.com/">AppNexus</a>
+two weeks ago.  It’s a new problem domain for me, one that I find
+pretty interesting so far: the workload is definitely on the
+branchy/pointer-chasing side of things, and, although aggregate
+throughput matters, we work under stringent latency goals.  There are
+a few hash table lookups on the code path I’ve been working on, and
+some micro-benchmarking revealed that 1GB pages could easily shave 25%
+off the latency for lookups in large (hundreds of MB) tables.</p>
 
-<p>EDIT: I was asked for feedback on some of these books, so I added some
-inline.</p>
+<p>That’s not too surprising.  Given any change, it’s usually easy to
+design a situation that makes it shine.  I find it just as important to
+ask the opposite question: what’s the worst slowdown I can get from
+switching from regular 4KB pages to huge 1GB pages?  This way, I can
+make more robust decisions, by taking into account both a good (if not
+best) and a worst case. By the end of this post, I’ll multiply runtime
+by 250% for the same operation, simply by switching from 4KB to 1GB
+pages… with a setup is so contrived that it seems unlikely to occur by
+accident.</p>
 
-<h1 id="fundamentals">Fundamentals</h1>
+<p>But first, a quick overview of the benefits and downsides of huge
+pages.</p>
 
-<p><a href="http://www.amazon.com/Fundamentals-Algorithmics-Gilles-Brassard/dp/0133350681">Brassard and Bratley, Fundamentals of Algorithmics</a>
-is my go-to reference book for basic algorithmic stuff.  I love the
-presentation, the authors are careful with Landau notation, and they
-specify in what circumstances hand-waving tricks apply.  The quality
-of Brassard’s lectures is probably a factor as well: the book reminds
-me of one of the best courses in
-<a href="http://diro.umontreal.ca/accueil/">Université de Montréal’s</a>
-undergraduate curriculum.</p>
+<h1 id="why-are-huge-pages-interesting">Why are huge pages interesting?</h1>
 
-<p><a href="http://www.amazon.com/Introduction-Algorithms-Thomas-H-Cormen/dp/0262033844">CLRS</a>
-for baseline implementations of classic data structures and
-algorithms.</p>
+<p>In short, manufacturers are adding huge pages because translating
+virtual addresses to physical ones is slow.</p>
 
-<p><a href="http://www.amazon.com/Computer-Programming-Volumes-1-4A-Boxed/dp/0321751043/">Knuth 1-4A</a>
-for its attention to minutiae.  Also very useful as a reference to
-point to: if something is so old or well known that I can’t think of a
-canonical reference, it’s probably in Knuth.</p>
+<p>On x86-64, the mapping from virtual to physical pages is represented
+with a trie; each level dispatches on 9 bits (i.e., each node has 512
+children), and leaves correspond to 4KB pages. There are 4 levels from
+the root node to the leaves, which covers the (currently) standard 48-bit
+virtual address space.</p>
 
-<p>Sedgewick, Algorithms (First edition) has an interesting section on
-geometric algorithms.  I also like the way many older data structure
-and algorithm books clearly take low-level coding consideration into
-account while discussing asymptotics.  I find nearly everything by
-Tarjan very good in that regard; his papers are among the few that
-describe (and painstakingly prove) algorithmic improvements (e.g., the
-inverse-Ackermann Union Find) only to reveal that a simpler
-implementation with a worse bound consistently performs better in
-practice.</p>
+<p>The address translation table is (mostly) stored in normal memory and
+is too large to fit in cache. Thus, translating a virtual address
+requires four reads, any of which can hit uncached memory.</p>
 
-<h1 id="correctness">Correctness</h1>
+<p>This is where the translation lookaside buffer (TLB) comes in. On my
+E5-4617, each core has 64 entries for regular 4KB pages in its L1
+dTLB, and 512 (shared) entries in its L2 TLB. I don’t know if the TLBs
+are exclusive or inclusive, but even if they’re exclusive, that’s only
+enough for 2.25MB worth of data. Assuming that the working set is
+completely contiguous (i.e., the best case), the TLB space for 4KB
+pages is less than the total cache/core (2.5MB L3/core + 256 KB L2 +
+32 KB L1D).</p>
 
-<p><a href="http://www.amazon.com/Interactive-Theorem-Proving-Program-Development/dp/3540208542">Bertot and Castéran, Interactive Theorem Proving and Program Development</a> is heavy and I’m still going through the book.</p>
+<p>2MB and 1GB “huge pages” address this imbalance: nine 2MB pages
+suffice to cover more address space than all the caches in a 6-core
+E5-4617. However, there are only 32 L1dTLB entries for 2MB pages –
+and 4 entries for 1GB pages – on my E5.</p>
 
-<p><a href="http://www.amazon.com/Types-Programming-Languages-Benjamin-Pierce/dp/0262162091">Pierce, Types and Programming Languages</a>
-should be mandatory skimming before entering a debate on “static” and
-“dynamic” types.</p>
+<p>In addition to covering more address space in the TLB, huge pages
+offer secondary benefits: there are fewer page table entries, and the
+trie is shallower. Fewer page table entries means that a larger
+fraction of memory can be used by data, rather than metadata, and that
+the page table walk is more likely to stay in cache. Moreover, larger
+pages are closer to the trie’s root: while the processor traverses 4
+levels to get to a 4KB page, it only traverses 3 levels to reach a 2MB
+page and 2 levels to for a 1GB page. These two effects compound to
+make TLB misses quicker to handle.</p>
 
-<p><a href="http://www.amazon.com/The-Science-Programming-Monographs-Computer/dp/0387964800">Gries, The Science of Programming</a>
-changed the way I write programs.  It’s not that I go full formal on
-my code, but that I try and structure it so it’s easier to reason
-about.  I was just reminded of
-<a href="http://www.amazon.com/Discipline-Programming-Edsger-W-Dijkstra/dp/013215871X">Dijkstra’s Discipline of Programming</a>.
-The first time I read both books, I did so concurrently.  It was a
-long time ago, and I was less mature mathematically, but I definitely
-remember finding Gries clearer and more directly applicable, while
-Dijkstra did a better job of making me think hard about how to best
-express the meaning of code.  Even now, I’d say they’re still
-complementary.</p>
+<h1 id="now-the-downsides">Now, the downsides…</h1>
 
-<p><a href="http://www.amazon.com/Software-Abstractions-Logic-Language-Analysis/dp/0262017156">Jackson, Software Abstraction</a>
-describes an interesting approach to interpolate between testing and
-formal methods.  This book changed the way I write tests.  It’s also
-based on a nice application of combinatorial optimisation ;)</p>
+<p>This idea that one must cover as much address space as possible with
+the TLB is most relevant in two settings: trivially, if the working
+set is completely covered by the (L1d)TLB, or, more interestingly,
+when the access patterns show a lot of locality.  Examples of the
+latter case are BLAS routines: with appropriate blocking, they can
+usually access each page once or twice, but read almost every byte in
+a page before switching to the next.</p>
 
-<p><a href="http://www.amazon.com/Beautiful-Code-Leading-Programmers-Practice/dp/0596510047">Oram and Wilson, Beautiful Code</a>
-feels uneven to me.  Some chapters cover inspiring gems, but many left
-no mark.  A friend suggests
-<a href="http://www.amazon.com/Programming-Pearls-Jon-Bentley/dp/8177588583">Bentley’s Programming Pearls</a>
-or
-<a href="http://www.amazon.com/Computer-Related-Risks-Peter-G-Neumann/dp/020155805X">Neuman’s Computer Related Risks</a>.</p>
+<p>The opposite, worst, case would be something like lookups in a large
+(too big for the TLB) hash table: we choose a virtual address
+pseudorandomly and painstakingly translate it to a physical address,
+only to read a handful of words from that page. In that situation, we
+want as many TLB entries as possible, regardless of the address space
+each one covers… and that’s where 4KB pages ought to shine. Taking
+into account both the L1DTLB and the L2TLB, each core has 576 TLB
+entries for 4KB (data) pages, versus 64x2MB and 4x1GB. Now, I don’t
+know if the TLBs are exclusive or not, so I’ll assume the worst case
+and work with 512*4KB entries.</p>
 
-<h1 id="performance">Performance</h1>
+<p>The thing is, 512 TLB entries aren’t that many. If, by chance, our
+hash table lookups keep hitting the same 512 pages, a contrived
+microbenchmark will show that 4KB pages are a big win (but really, a
+software cache might be a better way to exploit the situation). It’s
+more likely that it’ll be hard to avoid TLB misses regardless of page
+size, and huge pages then become useful because each TLB miss is
+handled more quickly. Regardless, I’ll try to approximate this
+worst-case behaviour to see how bad things can get.</p>
 
-<p><a href="http://www.amazon.com/Computations-Hopkins-Studies-Mathematical-Sciences/dp/1421407949">Golub and Van Loan, Matrix Computations</a>
-is obviously a good reference for the implementation of dense linear
-algebra.  However, I like this work even more for its clear and
-precise discussion of performance and numerical precision matters.
-One can’t hide behind big-Oh when discussing linear algebra.  Yet, the
-book is as enlightening and general as classic tomes on asymptotic
-analysis of algorithms and data structures.  Better: that is true for
-both the implementation and the use of the algorithms they describe.
-If all software engineering were as well understood as numerical
-linear algebra, our discipline would be in a good place.</p>
+<h1 id="a-first-stab-at-pessimising-huge-pages">A first stab at pessimising huge pages</h1>
 
-<p><a href="http://www.amazon.com/Guide-Experimental-Algorithmics-Catherine-McGeoch/dp/0521173019">McGeoch, A Guide to Experimental Algorithmics</a>
-was my bedside companion for the holiday season.  On several
-occasions, I told friends that this is the book I wish I had read ten
-years ago and that I dreamt of writing the past couple year.  It has
-good rules of thumb and suggestions for everything from designing
-proper experiments to deriving robust performance models.</p>
+<p>Ideally, I would want to read from 512 (or a bit fewer) locations 1GB
+apart, but I don’t have that much RAM. In the interest of realism, I
+decided to “only” allocate 24GB.</p>
 
-<p><a href="http://www.amazon.com/Hackers-Delight-Edition-Henry-Warren/dp/0321842685">Warren, Hacker’s Delight</a>
-is really a fundamental book for me.  It’s not that bit twiddling
-tricks are that important, but that I know I can count on Warren’s
-nice exposition if I need to direct someone to a reference.  Now
-nicely complemented by Knuth 4A.</p>
+<p>My first microbenchmark follows: I allocate 24GB, divide that space in
+512 chunks, and read the first word of each chunk in a loop. At first,
+I didn’t even randomise the traversal order (so as to abuse LRU), but
+there seems to be some prefetching for 1GB pages.</p>
 
-<h1 id="operations-research">Operations research</h1>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">#define _GNU_SOURCE
+</span><span class="line">#include &lt;assert.h&gt;
+</span><span class="line">#include &lt;stddef.h&gt;
+</span><span class="line">#include &lt;stdlib.h&gt;
+</span><span class="line">#include &lt;stdio.h&gt;
+</span><span class="line">#include &lt;string.h&gt;
+</span><span class="line">#include &lt;sys/mman.h&gt;
+</span><span class="line">
+</span><span class="line">#include "cycle.h"
+</span><span class="line">
+</span><span class="line">#ifndef MAP_HUGETLB
+</span><span class="line"># define MAP_HUGETLB 0x40000
+</span><span class="line">#endif
+</span><span class="line">
+</span><span class="line">#ifndef MAP_HUGE_1GB
+</span><span class="line"># define MAP_HUGE_1GB (30 &lt;&lt; 26)
+</span><span class="line">#endif
+</span><span class="line">
+</span><span class="line">#if defined(ONE_G)
+</span><span class="line"># define FLAGS MAP_ANONYMOUS | MAP_PRIVATE | MAP_HUGETLB | MAP_HUGE_1GB
+</span><span class="line">#elif defined(TWO_M)
+</span><span class="line"># define FLAGS MAP_ANONYMOUS | MAP_PRIVATE | MAP_HUGETLB
+</span><span class="line">#else
+</span><span class="line"># define FLAGS MAP_ANONYMOUS | MAP_PRIVATE
+</span><span class="line">#endif
+</span><span class="line">
+</span><span class="line">int main (int argc, char **argv)
+</span><span class="line">{
+</span><span class="line">        (void)argc;
+</span><span class="line">        (void)argv;
+</span><span class="line">
+</span><span class="line">        char acc = 0;
+</span><span class="line">        size_t stride = (24ul &lt;&lt; 30)/512;
+</span><span class="line">        char *data = mmap(NULL, 24ul &lt;&lt; 30,
+</span><span class="line">                          PROT_READ | PROT_WRITE, FLAGS,
+</span><span class="line">                          -1, 0);
+</span><span class="line">        assert(data != MAP_FAILED);
+</span><span class="line">        memset(data, 0, 24ul &lt;&lt; 30);
+</span><span class="line">
+</span><span class="line">        size_t *indices = calloc(1ul&lt;&lt;20, sizeof(size_t));
+</span><span class="line">        for (size_t i = 0; i &lt; 1ul&lt;&lt;20; i++) {
+</span><span class="line">                size_t x = 512.0*random()/RAND_MAX;
+</span><span class="line">                indices[i] = x*stride;
+</span><span class="line">        }
+</span><span class="line">
+</span><span class="line">        ticks begin = getticks();
+</span><span class="line">        for (size_t i = 0; i &lt; 1ul &lt;&lt; 7; i++) {
+</span><span class="line">                for (size_t j = 0; j &lt; 1ul&lt;&lt;20; j++) {
+</span><span class="line">                        acc += data[indices[j]];
+</span><span class="line">                }
+</span><span class="line">        }
+</span><span class="line">        ticks end = getticks();
+</span><span class="line">
+</span><span class="line">        printf("%g %i\n", elapsed(end, begin), acc);
+</span><span class="line">
+</span><span class="line">        return acc;
+</span><span class="line">}</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<h2 id="continuous-optimisation">Continuous optimisation</h2>
+<p>The results: 1.13e10 cycles for 4KB pages, 1.60e10 for 2MB and 1.56e10
+for 1GB. That’s only 40% more cycles… it’s bad, but not horrible. The
+reason is that the data vector spans only 24x1GB, so 1/6th of the
+random lookups will hit the 1GB TLB. Instead, let’s try and load from
+each of these 24 pages, in random order. 24 pages will easily fit in
+the L1DTLB for 4KB pages, but not in the 4 slots for 1GB pages.</p>
 
-<p><a href="http://www.amazon.com/Network-Flows-Theory-Algorithms-Applications/dp/013617549X">Ahuja, Magnanti and Orlin, Network Flows</a>
-because it describes all the classics.  In particular, if an
-optimisation problem is in P, it’s probably in there.</p>
+<h1 id="takes-two-to-six">Takes two to six</h1>
 
-<p><a href="http://www.amazon.com/Nonlinear-Programming-Algorithms-Mokhtar-Bazaraa/dp/0471486000">Bazaraa, Sherali and Shetty, Nonlinear Programming</a>
-mostly for a couple convergence proofs and as a reference.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">#define NCHUNKS 24
+</span><span class="line">
+</span><span class="line">int main (int argc, char **argv)
+</span><span class="line">{
+</span><span class="line">        (void)argc;
+</span><span class="line">        (void)argv;
+</span><span class="line">
+</span><span class="line">        char acc = 0;
+</span><span class="line">        size_t stride = (24ul &lt;&lt; 30)/NCHUNKS;
+</span><span class="line">        char *data = mmap(NULL, 24ul &lt;&lt; 30,
+</span><span class="line">                          PROT_READ | PROT_WRITE, FLAGS,
+</span><span class="line">                          -1, 0);
+</span><span class="line">        assert(data != MAP_FAILED);
+</span><span class="line">        memset(data, 0, 24ul &lt;&lt; 30);
+</span><span class="line">
+</span><span class="line">        size_t *indices = calloc(1ul&lt;&lt;20, sizeof(size_t));
+</span><span class="line">        for (size_t i = 0; i &lt; 1ul&lt;&lt;20; i++) {
+</span><span class="line">                size_t x = NCHUNKS*random()/RAND_MAX;
+</span><span class="line">                indices[i] = (x*stride) % (24ul &lt;&lt; 30);
+</span><span class="line">        }
+</span><span class="line">
+</span><span class="line">        ticks begin = getticks();
+</span><span class="line">        for (size_t i = 0; i &lt; 1ul &lt;&lt; 7; i++) {
+</span><span class="line">                for (size_t j = 0; j &lt; 1ul&lt;&lt;20; j++) {
+</span><span class="line">                        acc += data[indices[j]];
+</span><span class="line">                }
+</span><span class="line">        }
+</span><span class="line">        ticks end = getticks();
+</span><span class="line">
+</span><span class="line">        printf("%g %i\n", elapsed(end, begin), acc);
+</span><span class="line">        return acc;
+</span><span class="line">}</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p><a href="http://www.amazon.com/Linear-Programming-Series-Mathematical-Sciences/dp/0716715872">Chvátal, Linear Programming</a>
-for its unique (? rare, definitely) and insightful presentation of
-linear optimisation and of classic duality theorems.  I like the
-sections on Network flows and on Basis factorisation for similar
-reasons.</p>
+<p>The results are even worse (better)! 4.82e9 cycles for 4KB pages,
+versus 3.96e9 and 2.84e9 for 2MB and 1GB pages!</p>
 
-<p><a href="http://www.amazon.com/Convex-Analysis-Minimization-Algorithms-mathematischen/dp/3540568506">Hiriart-Urruty and Lemaréchal, Convex Analysis and Minimization Algorithms</a>
-because decomposition methods depend on convex nondifferentiable
-optimisation.  I rarely care about general convex optimisation, but
-it’s an unavoidable building block for Lagrangian decomposition
-methods.</p>
+<p>The problem is aliasing. The TLB on my E5 has limited way-ness (4-way,
+I believe), so, by aligning everything to a 1GB boundary, the
+effective size of the 4KB page TLB is 4 entries (same for 2MB). In a
+way, this highlights the effect of page size when TLBs are useless
+(random accesses to dozens or hundreds of GBs): 2MB pages shave 18%
+off the runtime, and 1GB pages another 30%, for a total of 60% as much
+time to handle a 1GB TLB miss versus 4KB.</p>
 
-<h2 id="combinatorial-optimisation">Combinatorial optimisation</h2>
+<p>Let’s try again, with <code>indices[i] = (x*stride + (x*4096)%(1ul&lt;&lt;30)) % (24ul &lt;&lt; 30);</code> on line 19.  I now find 1.14e9, 6.18e9 and 2.65e9 cycles. Much better!</p>
 
-<p><a href="http://www.amazon.com/Modern-Graph-Theory-Graduate-Mathematics/dp/0387984887">Bollobás, Modern Graph Theory</a>
-mostly as a reference for classic results.  I remember having a lot of
-fun with the section on matchings.</p>
+<p>For fun, I also tried to offset by 2MB increments, with <code>indices[i] =
+(x*stride + (x&lt;&lt;21)%(1ul&lt;&lt;30)) % (24ul &lt;&lt; 30);</code>, and found 2.76e9,
+1.30e9, and 2.85e9 cycles.</p>
 
-<p><a href="http://www.amazon.com/Combinatorial-Optimization-Networks-Matroids-Mathematics/dp/0486414531">Lawler, Combinatorial Optimization</a>
-is short but dense.  I don’t grok matroids, and someone I respect gave
-me this book and told me it would all make sense once I’d gone through
-it.</p>
+<p>Finally, I tried</p>
 
-<p><a href="http://www.amazon.com/Integer-Combinatorial-Optimization-Laurence-Wolsey/dp/0471359432">Nemhauser and Wolsey, Integer and Combinatorial Optimization</a>
-for the dark times when I need to directly think in terms of polytopes
-and facets, or when I try to generate fancy cuts.</p>
+<pre><code>            size_t offset = 4096 + (1ul&lt;&lt;21);
+            indices[i] = (x*stride + (x*offset)%(1ul&lt;&lt;30)) % (24ul &lt;&lt; 30);
+</code></pre>
 
-<p><a href="http://www.amazon.com/Combinatorial-Optimization-Alexander-Schrijver/dp/3540443894">Schrijver, Combinatorial Optimization</a>
-mostly as a reference for theoretical results.  It’s exhaustive, so I
-can use it like the TAoCP of optimisation and as a springboard to
-other work.</p>
+<p>so that neither 4KB nor 2MB pages would alias, and got 1.13e9, 1.08e9
+and 2.65e9 cycles. That’s 234% as much time for 1GB pages as for 4KB.</p>
 
-<p><a href="http://www.amazon.com/Integer-Programming-Laurence-A-Wolsey/dp/0471283665">Wolsey, Integer programming</a>
-when Nemhauser is hard to follow.</p>
+<p>We’re close: this setup is such that 1GB pages cause a lot of TLB
+misses, but neither 4KB nor 2MB pages do.  However, <code>perf stat</code> shows
+there’s a lot of cache misses, and that probably reduces the
+difference between 4KB and 1GB pages.</p>
 
-<h2 id="messy-stuff">Messy stuff</h2>
+<p>Let’s try one last thing, with <code>size_t offset = 4096 + (1ul&lt;&lt;21) +
+64;</code> (to avoid aliasing at the data cache level), and a smaller index
+vector that fits in cache.</p>
 
-<p>These books help me approach problems that don’t fit neatly in any
-box.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">int main (int argc, char **argv)
+</span><span class="line">{
+</span><span class="line">        (void)argc;
+</span><span class="line">        (void)argv;
+</span><span class="line">
+</span><span class="line">        char acc = 0;
+</span><span class="line">        size_t stride = (24ul &lt;&lt; 30)/NCHUNKS;
+</span><span class="line">        char *data = mmap(NULL, 24ul &lt;&lt; 30,
+</span><span class="line">                          PROT_READ | PROT_WRITE, FLAGS,
+</span><span class="line">                          -1, 0);
+</span><span class="line">        assert(data != MAP_FAILED);
+</span><span class="line">        memset(data, 0, 24ul &lt;&lt; 30);
+</span><span class="line">
+</span><span class="line">        size_t *indices = calloc(1ul&lt;&lt;10, sizeof(size_t));
+</span><span class="line">        for (size_t i = 0; i &lt; 1ul&lt;&lt;10; i++) {
+</span><span class="line">                size_t x = NCHUNKS*random()/RAND_MAX;
+</span><span class="line">                size_t offset = 4096 + (1ul&lt;&lt;21) + 64;
+</span><span class="line">                indices[i] = (x*stride + ((x*offset)%(1ul&lt;&lt;30))) % (24ul &lt;&lt; 30);
+</span><span class="line">        }
+</span><span class="line">
+</span><span class="line">        ticks begin = getticks();
+</span><span class="line">        for (size_t i = 0; i &lt; 1ul &lt;&lt; 17; i++) {
+</span><span class="line">                for (size_t j = 0; j &lt; 1ul&lt;&lt;10; j++) {
+</span><span class="line">                        acc += data[indices[j]];
+</span><span class="line">                }
+</span><span class="line">        }
+</span><span class="line">        ticks end = getticks();
+</span><span class="line">
+</span><span class="line">        printf("%g %i\n", elapsed(end, begin), acc);
+</span><span class="line">        return acc;
+</span><span class="line">}</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p><a href="http://www.amazon.com/Dynamic-Programming-Optimal-Control-Vol/dp/1886529086">Bertsekas, Dynamic Programming and Optimal Control</a>
-and
-<a href="http://www.amazon.com/Simulation-Modeling-Analysis-Expertfit-Software/dp/0073294411">Law, Simulation, Modeling and Analysis</a>
-fill holes left by my focusing on deterministic single-period
-problems.  I use Bertsekas and Law as refreshers when I remember that
-I’m forgetting something.  I can then decide whether to go more deeply
-in that direction.</p>
+<p>We get 1.06e9, 9.94e8, and 2.62e9 cycles, i.e., 250% as much time with
+1GB pages than 4KB ones.</p>
 
-<p><a href="http://www.amazon.com/How-Solve-It-Mathematical-Princeton/dp/069111966X">Polya, How to Solve It</a>.
-For the really dark times when it feels like I’m asked to do the
-impossible.  Perhaps it’s mostly useful because it distracts me from
-the immediate task for a couple minutes.  Either way, I like to
-re-read it when I get stuck.</p>
+<p>We can easily turn this around: we just have to loop over more than 4
+4KB-aligned locations in a 4GB space. For example, with</p>
 
-<p><a href="http://www.amazon.com/The-Visual-Display-Quantitative-Information/dp/0961392142">Tufte, The Visual Display of Quantitative Information</a>,
-along with <a href="http://ggplot2.org/">Hadley Wickham’s ggplot2</a>, taught me
-to think deliberately about presenting results.  Our visual cortex is
-pretty awesome but bad visualisation wastes our brain on distractions.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">#define NCHUNKS 4096
+</span><span class="line">
+</span><span class="line">int main (int argc, char **argv)
+</span><span class="line">{
+</span><span class="line">        (void)argc;
+</span><span class="line">        (void)argv;
+</span><span class="line">
+</span><span class="line">        char acc = 0;
+</span><span class="line">        size_t stride = (4ul &lt;&lt; 30)/NCHUNKS;
+</span><span class="line">        char *data = mmap(NULL, 4ul &lt;&lt; 30,
+</span><span class="line">                          PROT_READ | PROT_WRITE, FLAGS,
+</span><span class="line">                          -1, 0);
+</span><span class="line">        assert(data != MAP_FAILED);
+</span><span class="line">        memset(data, 0, 4ul &lt;&lt; 30);
+</span><span class="line">
+</span><span class="line">        size_t *indices = calloc(1ul&lt;&lt;10, sizeof(size_t));
+</span><span class="line">        for (size_t i = 0; i &lt; 1ul&lt;&lt;10; i++) {
+</span><span class="line">                size_t x = NCHUNKS*random()/RAND_MAX;
+</span><span class="line">                size_t offset = 64;
+</span><span class="line">                indices[i] = (x*stride + ((x*offset)%(1ul&lt;&lt;30))) % (4ul &lt;&lt; 30);
+</span><span class="line">        }
+</span><span class="line">
+</span><span class="line">        ticks begin = getticks();
+</span><span class="line">        for (size_t i = 0; i &lt; 1ul &lt;&lt; 17; i++) {
+</span><span class="line">                for (size_t j = 0; j &lt; 1ul&lt;&lt;10; j++) {
+</span><span class="line">                        acc += data[indices[j]];
+</span><span class="line">                }
+</span><span class="line">        }
+</span><span class="line">        ticks end = getticks();
+</span><span class="line">
+</span><span class="line">        printf("%g %i\n", elapsed(end, begin), acc);
+</span><span class="line">        return acc;
+</span><span class="line">}</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>With the above, I find 7.55e9 cycles for 4KB pages, 3.35e9 for 2MB and
+1.09e9 for 1GB pages. Here, 4KB pages are almost 7x as slow as 1GB
+pages.  If I instead let <code>size_t offset = 4096 + 64;</code> (to avoid
+aliasing in the 4KB TLB), I get 4.72e9 cycles for 4KB pages, so still
+433% as much time.</p>
+
+<p>We can also play the same trick over 32*2MB = 64MB.  On my E5, I find
+3.23e9 cycles for 4KB pages, versus 1.09e9 for 2MB and 1GB pages.
+Eliminating page-level aliasing only brings the 4KB case down to
+3.02e9 cycles, and doesn’t affect the other two cases.</p>
+
+<h1 id="so-are-1gb-pages-generally-useful">So, are 1GB pages generally useful?</h1>
+
+<p>The following table summarises the runtimes of all the variations above with
+2MB and 1GB pages (as a fraction of the number of cycles for 4KB
+pages).</p>
+
+<center>
+<table style="border-collapse: collapse;">
+<col style="border:1px solid #000000;" />
+<col style="border:1px solid #000000;" />
+<tr><td>2MB/4KB&nbsp;</td> <td>&nbsp;1GB/4KB</td></tr>
+<tr><td>1.42</td> <td>1.38</td></tr>
+<tr><td>0.82</td> <td>0.59</td></tr>
+<tr><td>5.42</td> <td>2.32</td></tr>
+<tr><td>0.47</td> <td>1.03</td></tr>
+<tr><td>0.96</td> <td>2.34</td></tr>
+<tr><td>0.94</td> <td>2.47</td></tr>
+<tr><td>0.44</td> <td>0.14</td></tr>
+<tr><td>0.72</td> <td>0.23</td></tr>
+<tr><td>0.34</td> <td>0.34</td></tr>
+<tr><td>0.36</td> <td>0.36</td></tr>
+</table>
+</center>
+
+<p>Overall, I think that I wouldn’t automatically switch to 2MB pages,
+but that 1GB pages are a solid choice for machines that basically run
+a single process at a time. When the data fits in 4GB, 1GB pages
+completely eliminate TLB misses. When the data is even larger, 2MB and
+1GB pages make page table walks quicker (by 18% and 40%,
+respectively). It takes a very contrived situation – in which a
+program keeps hitting fewer than 512 4KB-pages that are spread out
+across multiple GBs – for smaller pages to be preferable.  The worst
+I managed was 250% as much time for 1GB pages vs 4KB; in the other
+direction, I achieved 693% as much time for 4KB pages versus 1GB, and
+433% with a realistic situation (e.g., repeated lookups in a 4GB hash
+table). Plus, there’s another interesting benefits from larger pages
+that did not show up in this post: we get more control over aliasing
+in data caches.</p>
+
+<p>With multiple processes in play, there are fragmentation issues, and
+things aren’t as clear-cut… especially given that 1GB pages must
+currently be allocated at boot-time, on Linux.</p>
+
+<p>I’m also still unsure how 1GB pages interact with NUMA. I’m
+particularly worried about interleaving: interleaving at a 1GB
+granularity seems unlikely to smooth out the ratio of local:remote
+accesses as much as doing it at a 4KB granularity.</p>
 </div>
   
   

@@ -177,11 +177,29 @@ In theory, a chip with a wide enough instruction reordering window could pipelin
 In practice, real hardware can only <a href="http://blog.stuffedcow.net/2013/05/measuring-rob-capacity/">plan on the order of 100-200 instructions ahead</a>, and that mechanism depends on branches being predicted correctly.
 We have to explicitly insert slack in our dataflow schedule, and we must distribute it well enough for instruction reordering to see the gaps.</p>
 
+<p>As it is, the dataflow graph for each loop iteration is a pure chain:</p>
+
+<pre><code>         A1
+         |
+         v
+         B1
+         |
+         v
+         C1
+                A2
+                |
+                v
+                B2
+                |
+                v
+                C2
+</code></pre>
+
 <p>How does one add slack? With bounded queues!</p>
 
 <h1 id="experiment">Experiment</h1>
 
-<p>My first fix was to add a one-element buffer between steps B and C.  The inner loop became:</p>
+<p>My first fix was to add a one-element buffer between steps B and C.  The inner loop became</p>
 
 <pre><code>A1. Generate a new key-value pair
 C0. Insert the hash element from the previous iteration
@@ -190,6 +208,24 @@ A2.
 C1.
 B2
 etc.
+</code></pre>
+
+<p>which yields a dataflow graph like</p>
+
+<pre><code>        |     A1
+        v     |
+        C0    |
+              |
+              v
+              B1
+              |
+              |     A2
+              v     |
+              C1    |
+                    |
+                    v
+                    B2
+                    |
 </code></pre>
 
 <p>We’ve introduced slack between steps A and B (there’s now step C from the previous iteration between them), and between steps B and C (we shifted step A from the next iteration between them).
@@ -219,7 +255,7 @@ It doesn’t really matter if these instructions are slow: they’re still far f
 <p>I described two tools that I use regularly when optimising code for contemporary hardware.
 Finding ways to scatter around scheduling slack is always useful, both in software and in real life planning.<sup id="fnref:unless-people"><a href="#fn:unless-people" class="footnote">5</a></sup>
 However, I think the more powerful one is using buffering to expose bulk operations, which tends to open up more opportunities than just doing the same thing in a loop.
-In the case above, we found a 20% speed-up which, for someone who visit their <a href="https://help.backtrace.io/en/articles/2765535-triage">Backtrace dashboard</a> a couple times a day, adds up to an hour or two at the end of the year.</p>
+In the case above, we found a 20% speed-up which, for someone who visit their <a href="https://help.backtrace.io/en/articles/2765535-triage">Backtrace dashboard</a> a couple times a day, can add up to an hour or two at the end of the year.</p>
 
 <p>TL;DR: When a function is hot enough to look into, it’s worth asking why it’s called so often, in order to focus on higher level bulk operations.</p>
 
@@ -281,7 +317,7 @@ Feb
     
     <p class="meta">
       
-        <a class="basic-alignment left" href="/Blog/2020/02/01/too-much-locality-for-store-forwarding.markdown/" title="Previous Post: Too much locality for store forwarding">&laquo; Too much locality for store forwarding</a>
+        <a class="basic-alignment left" href="/Blog/2020/01/20/lazy-linear-knapsack/" title="Previous Post: Lazy Linear Knapsack">&laquo; Lazy Linear Knapsack</a>
       
       
     </p>

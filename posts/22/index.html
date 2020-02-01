@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/">Doodle: hybridising SBCL's GENCGC with mark and sweep</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/08/16/how-to-define-new-intrinsics-in-sbcl/">How to define new intrinsics in SBCL</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Sept
+Aug
   
-13th, 
+16th, 
 2014
 
 
 
 
         
-         | <a href="/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/"
+         | <a href="/Blog/2014/08/16/how-to-define-new-intrinsics-in-sbcl/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/08/16/how-to-define-new-intrinsics-in-sbcl/"
 	      >Comments</a>
         
         
@@ -116,201 +116,355 @@ Sept
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><em>Meta-note: this is more of a journal entry than the usual post
-here.  I’ll experiment with the format and see if I like publishing
-such literal and figurative doodles.</em></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>This
+<a href="http://stackoverflow.com/questions/25078285/replacing-a-32-bit-loop-count-variable-with-64-bit-introduces-crazy-performance">Stack Overflow</a>
+post points out an obscure and undocumented weakness in Intel’s
+implementation of the POPCNT instruction: although the population
+count (number of bits equal to 1) is only a function of the source
+argument, hardware schedules it as though it also depended on the
+destination.  GCC, clang and MSVC all fail to take this issue into
+account.</p>
 
-<p>Garbage collection is in the air.  My friend
-<a href="http://pointersgonewild.wordpress.com/2014/09/09/ds-garbage-collector-problem/">Maxime</a>
-is having issues with D’s garbage collector, and Martin Cracauer has a
-large patch to improve SBCL’s handling of conservative references.  I
-started reviewing that patch today, and, after some discussion with
-Alastair Bridgewater, I feel like adding a mark-and-sweep component to
-SBCL’s GC might be easier than what the patch does, while achieving
-its goal of reducing the impact of conservative references.  That lead
-to the whiteboarding episode below and a plan to replace the garbage
-collecting half of SBCL’s generational GC.  But first, a summary of
-the current implementation.</p>
+<p>Until a new patched version of my favourite C compiler is released,
+there aren’t many tasteful workarounds for this performance bug.  I’d
+have to switch to inline asm, and either force the compiler to
+allocate the same register to the input and the result, or force
+different registers and clear the spurious dependency with a xor.
+Ideally, I wouldn’t impose any additional constraint on the register
+allocator and only insert a xor if the destination and source
+registers don’t match.</p>
 
-<p><img src="/images/2014-09-13-doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/gc_notes.png" /></p>
+<p>SBCL easily supports this use case, without having to re-release or
+even recompile the implementation: VOPs (virtual operations) execute
+arbitrary CL code during code generation and they can be defined at
+runtime.</p>
 
-<h1 id="the-present-and-how-we-got-here">The present, and how we got here</h1>
+<p>The first step is to make sure that SBCL’s assembler knows how to emit
+popcnt: the assembler can also be extended at runtime, but that’s more
+hairy and a topic for another post.  Instruction encodings are defined
+in <code>src/compiler/$ARCH/insts.lisp</code>, and a quick grep reveals
+<code>(define-instruction popcnt (segment dst src) ...)</code>: the x86-64
+backend learned about popcnt in May 2013 (thanks to Douglas Katzman).</p>
 
-<p>CMUCL started out with a Cheney-style two-space collector.  Two-space
-collectors free up space for more allocations by copying objects that
-might still be useful (that are reachable from “roots,” e.g.,
-variables on the stack) from the old space to the new space.  Cheney’s
-algorithm elegantly simplifies this task by storing bookkeeping
-information in the data itself.  When we copy an object to the new
-space (because it is reachable), we want to make sure that all other
-references to that object are also replaced with references to the
-copy.  Cheney’s solution to that desideratum is obvious: overwrite the
-old object with a broken heart (forwarding pointer), a marker that</p>
+<p>We define VOPs via <code>define-vop</code>, a macro that exposes many options.
+Most of the time, it’s easiest to look at a pre-existing definition
+for an operation that’s similar to the one we want to add.  Popcount
+looks like integer negation: it has a single (machine integer)
+argument and returns another integer.  Integer negation is defined in
+<code>src/compiler/$ARCH/arith.lisp</code>:</p>
 
-<ol>
-  <li>the object has already been copied to the new space;</li>
-  <li>the copy lives at address <code>x</code>.</li>
-</ol>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">;;;; unary operations
+</span><span class="line">
+</span><span class="line">(define-vop (fast-safe-arith-op)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:effects)
+</span><span class="line">  (:affected))
+</span><span class="line">
+</span><span class="line">(define-vop (fixnum-unop fast-safe-arith-op)
+</span><span class="line">  (:args (x :scs (any-reg) :target res))
+</span><span class="line">  (:results (res :scs (any-reg)))
+</span><span class="line">  (:note "inline fixnum arithmetic")
+</span><span class="line">  (:arg-types tagged-num)
+</span><span class="line">  (:result-types tagged-num))
+</span><span class="line">
+</span><span class="line">(define-vop (signed-unop fast-safe-arith-op)
+</span><span class="line">  (:args (x :scs (signed-reg) :target res))
+</span><span class="line">  (:results (res :scs (signed-reg)))
+</span><span class="line">  (:note "inline (signed-byte 64) arithmetic")
+</span><span class="line">  (:arg-types signed-num)
+</span><span class="line">  (:result-types signed-num))
+</span><span class="line">
+</span><span class="line">(define-vop (fast-negate/fixnum fixnum-unop)
+</span><span class="line">  (:translate %negate)
+</span><span class="line">  (:generator 1
+</span><span class="line">    (move res x)
+</span><span class="line">    (inst neg res)))
+</span><span class="line">
+</span><span class="line">(define-vop (fast-negate/signed signed-unop)
+</span><span class="line">  (:translate %negate)
+</span><span class="line">  (:generator 2
+</span><span class="line">    (move res x)
+</span><span class="line">    (inst neg res)))
+</span><span class="line">
+</span><span class="line">(define-vop (fast-negate/unsigned signed-unop)
+</span><span class="line">  (:args (x :scs (unsigned-reg) :target res))
+</span><span class="line">  (:arg-types unsigned-num)
+</span><span class="line">  (:translate %negate)
+</span><span class="line">  (:generator 3
+</span><span class="line">    (move res x)
+</span><span class="line">    (inst neg res)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>This adds a constraint that heap-allocated objects can never be
-smaller than a broken heart, but they’re usually one or two words (two
-in SBCL’s case) so the constraint is rarely binding.</p>
+<p>The code snippet above includes a bit of boilerplate to factor out
+commonalities via inheritance.  The first definition introduces
+<code>fast-safe-arith-op</code>, VOPs that apply in both high speed and high
+safety settings (the rest is copy/pasted noise from earlier ports that
+sport a scheduler); the second one extends <code>fast-safe-arith-op</code> to
+define <code>fixnum-unop</code>, a base definition for single-argument operations
+on fixnums, while the third one is the same, but for machine integers.
+The last three definitions fill in the blanks so the compiler can
+compile <code>%negate</code> of fixnum, signed and unsigned integers.  The
+<code>(:translate %negate)</code> bit means that these VOPs can be emitted
+instead of calls to <code>%negate</code>.  The integer after <code>:generator</code> defines
+the “cost” of each variant; the compiler will choose the (applicable)
+variant with the least cost and execute the code sequence that follows
+to convert a call to <code>%negate</code> into machine code.</p>
 
-<p>When the garbage collector traverses the roots (the stack, for
-example) and finds a pointer, the code only has to dereference that
-pointer to determine if the objects it points to has been moved.  If
-so, the GC replaces the root pointer with a pointer to the copy in the
-new space.  Otherwise, the GC copies the object to the new space,
-repoints to that copy, and overwrites the old object with a broken heart.</p>
+<p>This kind of implementation inheritance is fine for an SBCL backend,
+where we define many VOPs and expect developers to understand the
+system.  I doubt it’s a didactic win.  Let’s do something simpler for
+<code>popcnt</code>.  In the interest of simplicity, I’ll also completely
+disregard powerful details in <code>define-vop</code> that are rarely relevant
+when defining intrinsics that map directly to machine instructions.</p>
 
-<p>We also need to traverse objects recursively: when we find that an
-object is live and copy it to the new space, we must also make sure
-that anything that objects points to is also preserved, and that any
-pointer in that object is updated with pointers to copies in the new
-space.</p>
+<p>First, we need to tell the compiler that we’re about to do special
+things to a function named <code>popcnt</code> (and to blow away any pre-existing
+information if the <code>defknown</code> form is re-evaluated).</p>
 
-<p>That’s a graph traversal, and the obvious implementation
-maintains a workset of objects to visit which, in the worst case,
-could include all the objects in old space.  The good news is we don’t have
-to worry about objects re-entering that workset: we always
-overwrite objects (in old space) with a broken heart when we visit
-them for the first time.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defpackage "POPCNT"
+</span><span class="line">  (:use "CL")
+</span><span class="line">  (:export "POPCNT"))
+</span><span class="line">
+</span><span class="line">(in-package "POPCNT")
+</span><span class="line">
+</span><span class="line">(sb-c:defknown popcnt ((unsigned-byte 64)) (integer 0 64)
+</span><span class="line">    (sb-c:foldable sb-c:flushable sb-c:movable)
+</span><span class="line">  :overwrite-fndb-silently t)</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Cheney proposed a clever trick to implement this workset.  Whenever an
-object enters the workset, it has just been copied to the new space;
-as long as we allocate in the new space by incrementing an allocation
-pointer, the new space itself can serve as the workset!  In addition
-to the allocation pointer, we now need a “to-scan” pointer.  Any
-object in the new space that’s below the to-scan pointer has already
-been scanned for pointers and fixed to point in the new space; any object
-between the to-scan pointer and the allocation pointer must be scanned
-for pointers to the old space.  We pop an element from the workset by
-looking at the next object (in terms of address) after the to-scan
-pointer and incrementing that pointer by the object’s size.  When the
-to-scan and the allocation pointers meet, the workset is empty
-and GC terminates.</p>
+<p>This says that <code>popcnt</code> accepts a 64-bit unsigned integer and returns
+an integer between 0 and 64 (inclusively), and that the function can
+be constant-folded, flushed (eliminated as dead code) and moved around
+(it’s pure).</p>
 
-<p>Some SBCL platforms still use this two-space collector, but it doesn’t
-scale very well to large heaps (throughput is usually fine, but we
-waste a lot of space and GC pauses can be long).  The generational
-conservative garbage collector (GENCGC, GENGC on
-precise/non-conservative platforms) is a hack on top of that Cheney GC.</p>
+<p>Now, to define a VOP that implements <code>popcnt</code>:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "SB-VM")
+</span><span class="line">
+</span><span class="line">(define-vop (popcnt:popcnt)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:translate popcnt:popcnt)
+</span><span class="line">  (:args (x :scs (unsigned-reg) :target r))
+</span><span class="line">  (:arg-types unsigned-num)
+</span><span class="line">  (:results (r :scs (unsigned-reg)))
+</span><span class="line">  (:result-types unsigned-num)
+</span><span class="line">  (:generator 3
+</span><span class="line">    (unless (location= r x) ; only break the spurious dep. chain
+</span><span class="line">      (inst xor r r))       ; if r isn't the same register as x.
+</span><span class="line">    (inst popcnt r x)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The GC is “generational” because most passes only collect garbage from
-a small fraction of the heap, and “conservative” because we have to
-deal with values that may or may not be pointers (e.g., we don’t always
-know if the value in a register is a Lisp reference or just a machine
-integer) by considering some objects as live (not up for collection)
-while pinning them at their current address.</p>
+<p>We define a new VOP named <code>popcnt:popcnt</code> (the name is arbitrary, as
+long as it doesn’t collide with another VOP) that is applicable at all
+optimization policies (both high speed and high debug level), and that
+implements <code>popcnt:popcnt</code>.  Its first and only argument, <code>x</code>, is an
+<code>unsigned-num</code>, an unsigned machine integer, that can only be stored
+in a register.  Moreover, if possible, we’d like <code>x</code> to be allocated
+the same register as the result, <code>r</code>.  There’s only one result (<code>r</code>)
+and it’s an unsigned machine integer in a register, just like <code>x</code>.
+The generator, of cost 3 (a common default for arithmetic operations),
+breaks any dependency chain in <code>r</code> if necessary, and stores the
+population count of <code>x</code> in <code>r</code>.</p>
 
-<p>The runtime uses mprotect to record writes to the heap, except for the
-nursery (newly allocated objects) where we expect most writes to land.
-The heap is partitioned in pages, and the first write to a page after
-a GC triggers a protection fault; the signal handler marks that page
-as mutated and changes the protection to allow writes.</p>
+<p>At first sight, the <code>defknown</code> form seems to conflict with the VOP.
+We declare that the return value of <code>popcnt</code> is a small integer,
+clearly a fixnum, and then define a VOP that returns a machine
+integer.  The subtlety is that <code>defknown</code> is concerned with IR1, the
+higher level intermediate representation, which works on CL types
+(i.e, types as sets) and abstract values.  VOPs, on the other hand,
+are defined for the lower level IR2, where types describe concrete
+representations (like C).  It is perfectly meaningful to say that a
+small integer will be represented as an untagged machine integer.</p>
 
-<p>When a GC is triggered, we usually want to collect only the nursery,
-i.e., only objects that were allocated after the previous GC pass.
-GEN(C)GC adapts Cheney to this use case by building the set of all
-pages that might have been mutated to point somewhere in the nursery
-(thanks to the mprotect write barrier) and scanning them for roots,
-like the stack in Cheney GC.  The default GENGC configuration has 7
-generations and we extend this scheme by flagging pages with pointers
-to younger generations (newer objects), without noting what these
-generations might be.</p>
+<p>The next step isn’t strictly necessary, but helps people who like
+their REPL.  The compiler knows how to compile calls to <code>popcnt</code>, so
+we can define <code>popcnt</code>… as a call to <code>popcnt</code>.  Our new function is
+now a first-class value that can be called from interpreted code and
+passed to higher-order functions, like the compiler’s constant-folding
+pass.</p>
 
-<p>Pinned objects are also handled by abusing the root set: pages that
-contain at least one pinned object don’t undergo garbage collection
-and are directly scanned for pointers, like the stack in Cheney GC.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "POPCNT")
+</span><span class="line">
+</span><span class="line">(defun popcnt (x)
+</span><span class="line">  (popcnt x))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Instead of having two heaps, an old space and a new space, we now have
-a lot of pages, and each page belongs to a generation.  When we want
-to collect a given generation, pages in that generation form the old
-space, and pages allocated during GC the new space.  This means that
-we lose the simplicity of Cheney’s new-space-is-the-workset trick: the
-new space isn’t contiguous, so a single to-scan pointer doesn’t cut it
-anymore!  GENGC works around that by scanning the page table, but it’s
-not pretty and I really don’t know if Cheney is a good fit anymore.</p>
+<pre><code>CL-USER&gt; (disassemble 'popcnt:popcnt)
+; disassembly for POPCNT:POPCNT
+; Size: 25 bytes
+; 07FCDB6E:       4831D2           XOR RDX, RDX               ; no-arg-parsing entry point
+;       71:       F3480FB8D1       POPCNT RDX,RCX
+;       76:       48D1E2           SHL RDX, 1
+;       79:       488BE5           MOV RSP, RBP
+;       7C:       F8               CLC
+;       7D:       5D               POP RBP
+;       7E:       C3               RET
+[ error trap noise ]
+CL-USER&gt; (popcnt:popcnt 42)
+3
+</code></pre>
 
-<h1 id="martin-cracauers-patch">Martin Cracauer’s patch</h1>
+<p>The disassembly shows that we get the code that we expect, including
+the dependency-breaking workaround, and the smoke test passes.
+There’s one interesting detail: we only defined a VOP that returns a
+machine integer.  However, <code>popcnt</code> returns a tagged value (a fixnum),
+and does so with an efficient shift.  IR2 takes care of inserting any
+coercion needed between VOPs (e.g., between <code>popcnt</code> and the VOP used to
+return boxed values from functions), and the IR1 <code>defknown</code> guarantees
+that the result of <code>popcnt</code>, despite being <em>represented</em> in an
+unsigned machine integer, is small enough for a fixnum.</p>
 
-<p>GENCGC’s approach to pinned objects is stupid.  If a page has no
-reference except for one conservative pointer, the whole page is
-considered live and scanned for references.</p>
+<p>Let’s see what happens when we feed arithmetic into <code>popcnt</code>, e.g.:</p>
 
-<p>Martin’s solution is to allocate additional temporary metadata only
-for pinned pages and track the pinned status of individual objects.
-When the GC encounters a pointer to a page with pinned objects, it
-checks if it’s a pointer to a pinned object.  If so, the pointee is
-left in place.  Otherwise, it’s copied normally.</p>
+<pre><code>CL-USER&gt; (disassemble (lambda (x y)
+                        (declare (type (unsigned-byte 32) x y))
+                        (popcnt:popcnt (+ x y))))
+; disassembly for (LAMBDA (X Y))
+; Size: 55 bytes
+; 0752BD59:       4801FA           ADD RDX, RDI               ; no-arg-parsing entry point
+;       5C:       48D1FA           SAR RDX, 1
+;       5F:       F3480FB8D2       POPCNT RDX,RDX
+;       64:       48D1E2           SHL RDX, 1
+;       67:       488BE5           MOV RSP, RBP
+;       6A:       F8               CLC
+;       6B:       5D               POP RBP
+;       6C:       C3               RET
+</code></pre>
 
-<p>The patch has code to mark objects as live (pinned) and to overwrite
-objects once they have been copied.  Basically, it is half of a
-mark-and-sweep garbage collector.  The main difference is that the set
-of pinned objects doesn’t grow (being pinned isn’t a contagious
-property), so we don’t need a worklist for pinned objects.  However, I
-already noted that I’m not convinced the worklist hack in GENGC is a
-good idea.</p>
+<p>After adding two fixnums, an automatic coercion unboxes the resulting
+fixnum into a machine integer which is then passed to <code>popcnt</code>
+(note the lack of dependency-breaking <code>xor</code> now that the source and
+destination are the same register).</p>
 
-<h1 id="a-hybrid-collector">A hybrid collector!</h1>
+<p>That’s pretty good code, but we can do better: fixnums are tagged with
+0, so we can simply pass fixnums to <code>popcnt</code> without untagging.</p>
 
-<p>Instead of marking pages as containing pinned objects, I feel it may
-be simpler to collect some pages by copying, and others by marking.
-Any pinned page would have the “mark” GC policy, while pages that
-likely contain few live objects (e.g., the nursery and pages with a
-lot of unused memory) would be collected by copying.  This too would
-avoid the issue with considering whole <em>pages</em> as live when pinned,
-and I think that having the choice of copying or marking at a page
-granularity will be simpler than toggling at the level of individual
-object.</p>
+<p>This is where the cost parameter to <code>:generator</code> comes in: we can
+define another VOP for <code>popcnt</code> of fixnums and bias the compiler to
+prefer the fixnum VOP.</p>
 
-<p>Each “mark” page now has two (bit)sets, one for live objects and
-another for live objects that have already been scanned.  We can
-maintain a worklist at the page granularity with an embedded linked
-list: whenever a “mark” page gains a new live object and it’s not
-already in the worklist, that page is enqueued for scanning.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "SB-VM")
+</span><span class="line">
+</span><span class="line">(define-vop (popcnt/fx)
+</span><span class="line">  (:policy :fast-safe)
+</span><span class="line">  (:translate popcnt:popcnt)
+</span><span class="line">  (:args (x :scs (any-reg) :target r))
+</span><span class="line">  (:arg-types positive-fixnum)
+</span><span class="line">  (:results (r :scs (unsigned-reg)))
+</span><span class="line">  (:result-types unsigned-num)
+</span><span class="line">  (:generator 2 ; 2 is lower than 3, so popcnt/fx is preferable to popcnt
+</span><span class="line">    (unless (location= r x)
+</span><span class="line">      (inst xor r r))
+</span><span class="line">    (inst popcnt r x)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Instead of emulating Cheney’s trick by looking for newly allocated
-pages in our page table, we can add pages in new space to the worklist
-whenever they become full.</p>
+<pre><code>CL-USER&gt; (disassemble (lambda (x y)
+                        (declare (type (unsigned-byte 32) x y))
+                        (popcnt:popcnt (+ x y))))
+; disassembly for (LAMBDA (X Y))
+; Size: 47 bytes
+; 07BEABE9:       4801FA           ADD RDX, RDI               ; no-arg-parsing entry point
+;      BEC:       F3480FB8D2       POPCNT RDX,RDX
+;      BF1:       48D1E2           SHL RDX, 1
+;      BF4:       488BE5           MOV RSP, RBP
+;      BF7:       F8               CLC
+;      BF8:       5D               POP RBP
+;      BF9:       C3               RET
+</code></pre>
 
-<p>Finally, at the end of the pass, we traverse all “mark” pages and
-clear dead objects.</p>
+<p>Unlike many low-level languages, CL includes a standard function for
+population count, <code>logcount</code>.  SBCL includes a VOP for <code>logcount</code>
+(with a cost of 14), which we can supersede with our own <code>popcnt</code>-based
+VOPs: we only have to replace <code>(:translate popcnt:popcnt)</code> with 
+<code>(:translate logcount)</code>.  That’s an easy improvement but isn’t in trunk
+because <code>popcnt</code> is a recent x86 extension.</p>
 
-<p>That’s pretty simple (arguably simpler than the current
-implementation!), and shouldn’t involve too many changes to the rest
-of the code.  Mostly, I’d have to adapt the weak pointer machinery to
-stop assuming that it can use forwarding pointers to determine when
-objects have been marked as live.</p>
-
-<p>However, we might lose the ability to run medium GCs, to collect more
-than the nursery but less than the whole heap.  If we only want to GC
-the nursery, the mprotect write barrier gives us all the information
-we need to find references from the rest of the heap to the nursery.
-If we wish to collect the whole heap, we only have to consider stacks
-and some statically allocated space as roots.</p>
-
-<p>For medium GCs, e.g., collect only generations 1-4 out of 7, GENGC
-exploits the way that garbage collection (almost) always copies to
-easily track pages with pointers to younger generations.  It’s coarse,
-but usually acceptable thanks to the copying.  I don’t know that it
-would work as well if the default is to only copy the nursery.
-Moreover, if we have a hybrid GC, it probably makes sense to focus
-copying on pages that are mostly empty, regardless of their age.  If
-we do want medium GCs, we might have to track, for each page, the set
-of pages that point there.  This set can include false positives, so
-it’s probably easiest to clear it before major GCs, and otherwise only
-add to that set (removing pages that were emptied by a GC pass sounds
-reasonable).  I also expect that some pages will have many refererrers;
-I’m thinking we might use a distinguished value to mean “referred by
-every pages” and not consider them for medium GC.</p>
-
-<h1 id="whats-next">What’s next</h1>
-
-<p>Martin’s patch clearly addresses an important weakness in SBCL’s
-garbage collector.  If I can’t make good progress on the hybrid GC
-soon, I’ll make sure the patch is cleaned up for master, hopefully by
-Thanksgiving.</p>
+<p>Adding VOPs for (ad-hoc) polymorphic or otherwise generic functions
+can be surprising: a VOP will only be considered if the arguments <em>and
+the return values</em> are known to have CL types that are compatible with
+the VOP’s representation specification.  For <code>popcnt</code>, we guarantee
+that the return value is a positive integer between 0 and 64; for
+<code>cl:logcount</code>, the <code>defknown</code> guarantees that the return value is a
+positive fixnum.  In both cases, the return values can always be
+represented as an unsigned machine integer, so our new VOPs will
+always match if the argument fits in positive fixnums or unsigned
+machine integers (and will have priority over the generic x86-64 VOP
+because their cost is lower).  More complex cases depend on
+<code>derive-type</code> optimizers, but that’s rarely necessary when defining
+instrinsics for low-level code.</p>
 </div>
   
   
