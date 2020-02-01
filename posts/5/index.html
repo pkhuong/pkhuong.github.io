@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2019/02/25/the-unscalable-thread-pool/">The unscalable, deadlock-prone, thread pool</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/">A couple of (probabilistic) worst-case bounds for Robin Hood linear probing</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Feb
+Sept
   
-25th, 
+29th, 
 2019
 
 
 
 
         
-         | <a href="/Blog/2019/02/25/the-unscalable-thread-pool/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2019/02/25/the-unscalable-thread-pool/"
+         | <a href="/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/"
 	      >Comments</a>
         
         
@@ -116,276 +116,304 @@ Feb
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><small>Epistemic Status: I’ve seen thread pools fail this way multiple
-times, am confident the pool-per-state approach is an improvement, and
-have confirmed with others they’ve also successfully used it in anger.
-While I’ve thought about this issue several times over ~4 years and
-pool-per-state seems like a good fix, I’m not convinced it’s
-undominated and hope to hear about better approaches.</small></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>I like to think of Robin Hood hash tables with linear probing as
+arrays sorted on uniformly distributed keys, with gaps.  That makes it
+clearer that we can use these tables to implement algorithms based on
+merging sorted streams in bulk, as well as ones that rely on fast
+point lookups.  A key question with randomised data structures is how
+badly we can expect them to perform.</p>
 
-<p>Thread pools tend to only offer a sparse interface: 
-<a href="https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.Executor.submit">pass a closure or a function and its arguments to the pool</a>,
-<a href="https://github.com/silentbicycle/loom/blob/master/loom.h#L46">and that function</a>
-<a href="https://github.com/lmj/lparallel/blob/9c11f40018155a472c540b63684049acc9b36e15/src/kernel/core.lisp#L374">will be called, eventually</a>.<sup id="fnref:convenience"><a href="#fn:convenience" class="footnote">1</a></sup>  Functions can do 
-anything, so this interface should offer all the expressive power one
-could need. Experience tells me otherwise.</p>
+<h2 id="a-bound-on-the-length-of-contiguous-runs-of-entries">A bound on the length of contiguous runs of entries</h2>
 
-<p>The standard pool interface is so impoverished that it is nearly
-impossible to use correctly in complex programs, and leads us down
-design dead-ends. I would actually argue it’s better to work with raw
-threads than to even have <del>generic</del> amorphous thread pools: the former force us
-to stop and think about resource requirements (and lets the OS’s real
-scheduler help us along), instead of making us pretend we only care
-about CPU usage. I claim thread pools aren’t scalable because, with
-the exception of CPU time, they actively hinder the development of
-programs that achieve high resource utilisation.</p>
+<p>There’s a lot of work on the <em>expected</em> time complexity of operations
+on linear probing Robin Hood hash tables.  <a href="https://dblp.uni-trier.de/pers/hd/v/Viola:Alfredo">Alfredo Viola</a>,
+along with a
+<a href="http://algo.inria.fr/flajolet/Publications/FlPoVi98.pdf">few collaborators</a>,
+has <a href="https://cs.uwaterloo.ca/research/tr/1995/50/CS95-50.pdf">long</a>
+been exploring the <a href="http://www2.math.uu.se/~svante/papers/sj297-aofa.pdf">distribution of displacements</a> (i.e., search times)
+for random elements.  The <a href="https://www3.cs.stonybrook.edu/~bender/newpub/BenderHu07-TODS.pdf">packed memory array</a> angle has also been around
+for <a href="https://www.cs.cmu.edu/~jcreed/p251-willard.pdf">a while</a>.<sup id="fnref:waterloo"><a href="#fn:waterloo" class="footnote">1</a></sup></p>
 
-<p>This post comes in two parts. First, the story of a simple program
-that’s parallelised with a thread pool, then hits a wall as a wider set
-of resources becomes scarce. Second, a solution I like for that kind of
-program: an explicit state machine, where each state gets a dedicated
-queue that is aware of the state’s resource requirements.</p>
+<p>I’m a bit wary of the “random element” aspect of the linear probing
+bounds: while I’m comfortable with an expectation over the hash
+function (i.e., over the uniformly distributed hash values), a program
+could repeatedly ask for the same key, and consistently experience
+worse-than-expected performance.  I’m more interested in bounding the
+worst-case displacement (the distance between the ideal location for
+an element, and where it is actually located) across all values in a
+randomly generated<sup id="fnref:memory-less"><a href="#fn:memory-less" class="footnote">2</a></sup> Robin Hood table, with high enough
+probability.  That probability doesn’t have to be extremely high:
+\(p = 0.9\) or even \(p = 0.5\) is good enough, as long as we can
+either rehash with an independent hash function, or the probability of
+failure drops exponentially enough as the displacement leeway grows.</p>
 
-<h2 id="stages-of-parallelisation">Stages of parallelisation</h2>
+<p>The people who study hashing with buckets, or hashing as load
+balancing, seem more interested in these probable worst-case bounds:
+as soon as one bucket overflows, it’s game over for that hash table!
+In that context, we wish to determine how much headroom we must
+reserve in each bucket, on top of the expected occupancy, in order to
+make sure failures are rare enough.  That’s a <a href="https://en.wikipedia.org/wiki/Balls_into_bins_problem">balls into bins problem</a>, where
+the \(m\) balls are entries in the hash table, and the \(n\) bins
+its hash buckets.</p>
 
-<p>We start with a simple program that processes independent work units,
-a serial loop that pulls in work (e.g., files in a directory), or wait
-for requests on a socket, one work unit at a time.</p>
+<p><a href="http://www.dblab.ntua.gr/~gtsat/collection/scheduling/Balls%20into%20Bins%20A%20Simple%20and%20Tight%20Anal.pdf">Raab and Steger’s Simple and Tight Analysis</a>
+of the “balls into bins” problem shows that the case where the average occupancy grows
+with \((\log m)\sp{k}\) and \(k &gt; 1\) has potential, when it comes
+to worst-case bounds that shrink quickly enough: we only need headroom
+that grows with \(\sqrt{\log\sp{k+1} m} = \log\sp{(k+1)/2} m\), 
+slightly more than the square root of the average occupancy.</p>
 
-<p>At some point, there’s enough work to think about parallelisation, and
-we choose threads.<sup id="fnref:processes"><a href="#fn:processes" class="footnote">2</a></sup> To keep things simple, we simply spawn
-a thread per work unit. Load increases further, and we observe that
-we spend more time switching between threads or contending on shared
-data than doing actual work. We could use a semaphore to limit the
-number of work units we process concurrently, but we might as well
-just push work units to a thread pool and recycle threads instead of
-wasting resources on a thread-per-request model.  We can even start
-thinking about queueing disciplines, admission control, backpressure,
-etc.  Experienced developers will often jump directly to this stage
-after the serial loop.</p>
+<p>The only issue is that the balls-into-bins analysis is asymptotic,
+and, more importantly, doesn’t apply at all to linear probing!</p>
 
-<p>The 80s saw a lot of research on generalising this “flat” parallelism
-model to nested parallelism, where work units can spawn additional
-requests and wait for the results (e.g., to recursively explore
-sub-branches of a search tree).  Nested parallelism seems like a good
-fit for contemporary network services: we often respond to a request
-by sending simpler requests downstream, before merging and munging the
-responses and sending the result back to the original requestor. That
-may be why futures and promises are so popular these days.</p>
+<p>One could propose a form of packed memory array, where the sorted set
+is subdivided in chunks such that the expected load per chunk is in
+\(\Theta(\log\sp{k} m)\), and the size of each chunk
+multiplicatively larger (more than \(\log\sp{(k+1)/2}m\))…</p>
 
-<p>I believe that, for most programs, the futures model is an excellent
-answer to the wrong question. The moment we perform I/O (be it
-network, disk, or even with hardware accelerators) in order to
-generate a result, running at scale will have to mean controlling
-more resources than just CPU, and both the futures and the generic
-thread pool models fall short.</p>
+<p>Can we instead derive similar bounds with regular linear probing?  It
+turns out that Raab and Steger’s bounds are indeed simple: they
+find the probability of overflow for one bucket, and derive a
+<a href="https://en.wikipedia.org/wiki/Boole%27s_inequality">union bound</a> for the probability of overflow for any bucket by
+multiplying the single-bucket failure probability by the number of
+buckets.  Moreover, the single-bucket case itself is a <a href="https://en.wikipedia.org/wiki/Binomial_distribution">Binomial</a> confidence interval.</p>
 
-<p>The issue is that futures only work well when a waiter can help along
-the value it needs, with task stealing, while thread pools implement a
-trivial scheduler (dedicate a thread to a function until that function
-returns) that must be oblivious to resource requirements, since it
-handles opaque functions.</p>
+<p>We can use the same approach for linear probing; I don’t expect a tight
+result, but it might be useful.</p>
 
-<p>Once we have futures that might be blocked on I/O, we can’t
-guarantee a waiter will achieve anything by lending CPU time to its
-children.  We could help sibling tasks, but that way stack overflows
-lie.</p>
+<p>Let’s say we want to determine how unlikely it is to observe a clump
+of \(\log\sp{k}n\) entries, where \(n\) is the capacity of the hash
+table.  We can bound the probability of observing such a clump
+starting at index 0 in the backing array, and multiply by the size of
+the array for our union bound (the clump could start anywhere in the array).</p>
 
-<p>The deficiency of flat generic thread pools is more subtle. Obviously, one
-doesn’t want to take a tight thread pool, with one thread per core,
-and waste it on synchronous I/O. We’ll simply kick off I/O
-asynchronously, and re-enqueue the continuation on the pool upon
-completion!</p>
+<p>Given density \(d = m / n\), where \(m\) is the number of
+entries and \(n\) is the size of the array that backs the hash
+table, the probability that any given element falls in a range of size
+\(\log\sp{k}n\) is \(p = d/n \log\sp{k}n\).  The number of entries
+in such a range follows a Binomial distribution \(B(dn, p)\), with
+expected value \(d \log\sp{k}n\).  We want to determine the maximum
+density \(d\) such that 
+\(\mathrm{Pr}[B(dn, p) &gt; \log\sp{k}n] &lt; \frac{\alpha}{dn}\), where
+\(\alpha\) is our overall failure rate. If rehashing is acceptable,
+we can let \(\alpha = 0.5\), and expect to find a
+suitably uniform hash function after half a rehash on average.</p>
 
-<p>Instead of doing</p>
+<p>We know we want \(k &gt; 1\) for the tail to shrink rapidly enough as
+\(n\) grows, but even \(\log\sp{2}n\) doesn’t shrink very rapidly.
+After some trial and error, I settled on a chunk size
+\(s(n) = 5 \log\sb{2}\sp{3/2} n\).  That’s not great for small or medium sized
+tables (e.g., \(s(1024) = 158.1\)), but grows slowly, and reflects
+extreme worst cases; in practice, we can expect the worst case for
+any table to be more reasonable.</p>
 
-<pre><code>A, I/O, B
+<p>Assuming we have a quantile function for the Binomial distribution, we
+can find the occupancy of our chunk, at \(q = 1 - \frac{\alpha}{n}\). 
+The occupancy is a monotonic function of the density, so we can use,
+e.g., bisection search to find the maximum density such that the
+probability that we saturate our chunk is \(\frac{\alpha}{n}\),
+and thus the probability that any continuous run of entries has size
+at least \(s(n) =  5 \log\sb{2}\sp{3/2} n\) is less than \(\alpha\).</p>
+
+<p>For \(\alpha = 0.5\), the plot of densities looks like the following.</p>
+
+<p><img class="center" src="/images/2019-09-29-a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/alpha-half.png" /></p>
+
+<!-- sizer <- function(x) { 5 * (log(x, 2)^1.5) };
+     max_overflow <- function(sizer, density, n, p) { n <- ceiling(n); run <- floor(sizer(n)); num_starts = max(1, 1 + n - run); qbinom(1 - (p / num_starts), n, density * run / n) / run }
+     density <- sapply(n, function (n) uniroot(function (density) max_overflow(sizer, density, n, 0.5) - 1, c(0, 1))$root)
+     ggplot(data=data.frame(n, density), aes(x = n, y = density)) + geom_line()
+     -->
+
+<p>This curve roughly matches the shape of some
+<a href="https://www.pvk.ca/Blog/more_numerical_experiments_in_hashing.html">my older purely numerical experiments with Robin Hood hashing</a>.
+When the table is small (less than \(\approx 1000\)), \(\log n\) is
+a large fraction of \(n\), so the probability of finding a run of
+size \(s(n) = 5 \log\sb{2}\sp{3/2} n\) is low.  When the table is
+much larger, the asymptotic result kicks in, and the probabiliy slowly
+shrinks.  However, even around the worst case \(n \approx 4500\),
+we can exceed \(77\%\) density and only observe a run of length
+\(s(n)\) half the time.</p>
+
+<p>If we really don’t want to rehash, we can let \(\alpha = 10\sp{-10}\),
+which compresses the curve and shifts it down: the minimum value is
+now slightly above \(50\%\) density, and we can clearly see the
+growth in permissible density as the size of the table grows.</p>
+
+<!-- density <- sapply(n, function (n) uniroot(function (density) max_overflow(sizer, density, n, 1e-10) - 1, c(0, 1))$root)
+     ggplot(data=data.frame(n, density), aes(x = n, y = density)) + geom_line()
+     -->
+
+<p><img class="center" src="/images/2019-09-29-a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/alpha-marginal.png" /></p>
+
+<p>In practice, we can dynamically compute the worst-case displacement,
+which is always less than the longest run (i.e., less than \(s(n) = 5
+\log\sb{2}\sp{3/2} n\)).  However, having non-asymptotic bounds lets
+us write size-specialised code and know that its assumptions are
+likely to be satisfied in real life.</p>
+
+<h2 id="bounding-buffer-sizes-for-operations-on-sorted-hashed-streams">Bounding buffer sizes for operations on sorted hashed streams</h2>
+
+<p>I mentioned at the beginning of this post that we can also manipulate
+Robin Hood hash tables as sorted sets, where the sort keys are
+uniformly distributed hash values.</p>
+
+<p>Let’s say we wished to merge the immutable source table <code>S</code> into the
+larger destination table <code>D</code> in-place, without copying all of <code>D</code>.
+For example, from</p>
+
+<pre><code>S = [2, 3, 4]
+D = [1, 6, 7, 9, 10];
 </code></pre>
 
-<p>in one function, we’ll split the work in two functions and a callback</p>
+<p>we want the merged result</p>
 
-<pre><code>A, initiate asynchronous I/O
-On I/O completion: enqueue B in thread pool
-B
+<pre><code>D' = [1, 2, 3, 4, 6, 7, 9, 10].
 </code></pre>
 
-<p>The problem here is that it’s easy to create too many asynchronous
-requests, and run out of memory, DOS the target, or delay the rest of
-the computation for too long.  As soon as the I/O requests has been
-initiated in <code>A</code>, the function returns to the thread pool, which will
-just execute more instances of <code>A</code> and initiate even more I/O.</p>
+<p>The issue here is that, even with gaps, we might have to overwrite
+elements of <code>D</code>, and buffer them in some scratch space until we get to
+their final position.  In this case, all three elements of <code>S</code> must be
+inserted between the first and second elements of <code>D</code>, so we could
+need to buffer <code>D[1:4]</code>.</p>
 
-<p>At first, when the program doesn’t heavily utilise any resource in
-particular, there’s an easy solution: limit the total number of
-in-flight work units with a semaphore. Note that I wrote work unit,
-not function calls. We want to track logical requests that we started
-processing, but for which there is still work to do (e.g., the
-response hasn’t been sent back yet).</p>
+<p>How large of a merge buffer should we reasonably plan for?</p>
 
-<p>I’ve seen two ways to cap in-flight work units. One’s buggy, the other
-doesn’t generalise.</p>
+<p>In general, we might have to buffer as many elements as there are in
+the smaller table of <code>S</code> and <code>D</code>.  However, we’re working with hash
+values, so we can expect them to be distributed uniformly.  That
+should give us some grip on the problem.</p>
 
-<p>The buggy implementation acquires a semaphore in the first stage of
-request handling (<code>A</code>) and releases it in the last stage (<code>B</code>). The
-bug is that, by the time we’re executing <code>A</code>, we’re already using up a
-slot in the thread pool, so we might be preventing <code>B</code>s from
-executing.  We have a lock ordering problem: <code>A</code> acquires a thread
-pool slot before acquiring the in-flight semaphore, but <code>B</code> needs to
-acquire a slot before releasing the same semaphore. If you’ve seen
-code that deadlocks when the thread pool is too small, this was
-probably part of the problem.</p>
+<p>We can do even better and only assume that both sorted sets were
+sampled from the same underlying distribution.  The key idea
+is that the rank of an element in <code>S</code> is equal to the
+value of <code>S</code>’s
+<a href="https://en.wikipedia.org/wiki/Empirical_distribution_function">empirical distribution function</a>
+for that element, multiplied by the size of <code>S</code> (similarly for
+<code>D</code>).</p>
 
-<p>The correct implementation acquires the semaphore before enqueueing a
-new work unit, before shipping a call to <code>A</code> to the thread pool (and
-releases it at the end of processing, in <code>B</code>). This only works because
-we can assume that the first thing <code>A</code> does is to acquire the
-semaphore. As our code becomes more efficient, we’ll want to more
-finely track the utilisation of multiple resources, and
-pre-acquisition won’t suffice. For example, we might want to limit
-network requests going to individual hosts, independently from disk
-reads or writes, or from database transactions.</p>
+<p>The amount of buffering we might need is simply a measure of the
+worst-case difference between the two empirical DFs: the more <code>S</code> get
+ahead of <code>D</code>, the more we need to buffer values of <code>D</code> before
+overwriting them (if we’re very unlucky, we might need a buffer the
+same size as <code>S</code>).  That’s the
+two-sample <a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test#Kolmogorov%E2%80%93Smirnov_statistic">Kolmogorov-Smirnov statistic</a>, and we have 
+<a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test#Two-sample_Kolmogorov%E2%80%93Smirnov_test">simple bounds for that distance</a>.</p>
 
-<h2 id="resource-aware-thread-pools">Resource-aware thread pools</h2>
+<p>With probability \(1 - \alpha\), we’ll consume from <code>S</code> and <code>D</code>
+at the same rate \(\pm \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}}\).
+We can let \(\alpha = 10\sp{-10}\) and pre-allocate a buffer of size</p>
 
-<p>The core issue with thread pools is that the only thing they can do is
-run opaque functions in a dedicated thread, so the only way to reserve
-resources is to already be running in a dedicated thread. However, the
-one resource that every function needs is a thread on which to run, thus
-any correct lock order must acquire the thread last.</p>
+<table>
+  <tbody>
+    <tr>
+      <td>\[</td>
+      <td>S</td>
+      <td>\sqrt{-\frac{(</td>
+      <td>S</td>
+      <td>+</td>
+      <td>D</td>
+      <td>) \ln \alpha}{2</td>
+      <td>S</td>
+      <td> </td>
+      <td>D</td>
+      <td>}} &lt; \sqrt{\frac{23.03</td>
+      <td>S</td>
+      <td>(</td>
+      <td>S</td>
+      <td>+</td>
+      <td>D</td>
+      <td>)}{2</td>
+      <td>D</td>
+      <td>}}.\]</td>
+    </tr>
+  </tbody>
+</table>
 
-<p>We care about reserving resources because, as our code becomes more
-efficient and scales up, it will start saturating resources that used
-to be virtually infinite.  Unfortunately, classical thread pools can
-only control CPU usage, and actively hinder correct resource
-throttling.  If we can’t guarantee we won’t overwhelm the supply of a
-given resource (e.g., read IOPS), we must accept wasteful
-overprovisioning.</p>
+<p>In the worst case, \(|S| = |D|\), and we can preallocate a buffer of
+size \(\sqrt{23.03 |D|} &lt; 4.8 \sqrt{|D|}\) and only need to grow
+the buffer every ten billion (\(\alpha\sp{-1}\)) merge.</p>
 
-<p>Once the problem has been identified, the solution becomes obvious:
-make sure the work we push to thread pools describes the resources
-to acquire before running the code in a dedicated thread.</p>
+<p>The same bound applies in a stream processing setting; I assume this
+is closer to what <a href="https://twitter.com/frankmcsherry">Frank</a> had in
+mind when he brought up this question.</p>
 
-<p>My favourite approach assigns one global thread pool (queue) to each
-function or processing step. The arguments to the functions will
-change, but the code is always the same, so the resource requirements
-are also well understood. This does mean that we incur complexity to
-decide how many threads or cores each pool is allowed to use. However,
-I find that the resulting programs are better understandable at a high
-level: it’s much easier to write code that traverses and describes the
-work waiting at different stages when each stage has a dedicated
-thread pool queue.  They’re also easier to model as queueing systems,
-which helps answer “what if?” questions without actually implementing
-the hypothesis.</p>
+<p>Let’s assume a “push” dataflow model, where we still work on sorted
+sets of uniformly distributed hash values (and the data tuples
+associated with them), but now in streams that generate values every
+tick.  The buffer size problem now sounds as follows.  We wish to
+implement a sorted merge operator for two input streams that generate
+one value every tick, and we can’t tell our sources to cease producing
+values; how much buffer space might we need in order to merge them
+correctly?</p>
 
-<p>In increasing order of annoyingness, I’d divide resources to acquire in
-four classes.</p>
+<p>Again, we can go back to the Kolmogorov-Smirnov statistic.  In this
+case however, we could buffer each stream independently, so we’re
+looking for critical values for the one-sided one-sample
+Kolmogorov-Smirnov test (how much one stream might get ahead of the
+hypothetical exactly uniform stream).  We have recent (<a href="https://projecteuclid.org/euclid.aop/1176990746">1990</a>)
+<a href="https://en.wikipedia.org/wiki/Dvoretzky%E2%80%93Kiefer%E2%80%93Wolfowitz_inequality">simple and tight bounds</a>
+for this case as well.</p>
 
-<ol>
-  <li>Resources that may be seamlessly<sup id="fnref:thrashing"><a href="#fn:thrashing" class="footnote">3</a></sup> shared or timesliced, like CPU.</li>
-  <li>Resources that are acquired for the duration of a single function
-call or processing step, like DB connections.</li>
-  <li>Resources that are acquired in one function call, then released in
-another thread pool invocation, like DB transactions, or asynchronous
-I/O semaphores.</li>
-  <li>Resources that may only be released after temporarily using more of
-it, or by cancelling work: memory.</li>
-</ol>
+<p>The critical values for the one-sided case are stronger than the
+two-sided two-sample critical values we used earlier: given an
+overflow probability of \(1 - \alpha\), we need to buffer at most
+\(\sqrt{-\frac{n \ln \alpha}{2}},\) elements.  For 
+\(\alpha = 10\sp{-20}\) that’s less than \(4.8 \sqrt{n}\).<sup id="fnref:three-centuries"><a href="#fn:three-centuries" class="footnote">3</a></sup>
+This square root scaling is pretty good news in practice: shrinking
+\(n\) to \(\sqrt{n}\) tends to correspond to going down a rung or two in
+the storage hierarchy.  For example, \(10\sp{15}\) elements is
+clearly in the range of distributed storage; however, such a humongous
+stream calls for a buffer of fewer than \(1.5 \cdot 10\sp{8}\)
+elements, which, at a couple gigabytes, should fit in RAM on one large
+machine.  Similarly, \(10\sp{10}\) elements might fill the RAM on
+one machine, but the corresponding buffer of less than half a
+million elements could fit in L3 cache, while one million elements
+could fill the L3, and 4800 elements fit in L1 or L2.</p>
 
-<p>We don’t really have to think about the first class of resources, at
-least when it comes to correctness. However, repeatedly running the
-same code on a given core tends to improve performance, compared to
-running all sorts of code on all cores.</p>
+<p>What I find neat about this (probabilistic) bound on the buffer size
+is its independence from the size of the other inputs to the merge
+operator.  We can have a shared \(\Theta(\sqrt{n})\)-size buffer in
+front of each stream, and do all our operations without worrying about
+getting stuck (unless we’re extremely unlucky, in which case we can
+grow the buffer a bit and resume or restart the computation).</p>
 
-<p>The second class of resources may be acquired once our code is running
-in a thread pool, so one could pretend it doesn’t exist. However, it
-is more efficient to batch acquisition, and execute a bunch of calls
-that all need a given resource (e.g., a DB connection from a
-connection pool) before releasing it, instead of repetitively
-acquiring and releasing the same resource in back-to-back function
-calls, or blocking multiple workers on the same
-bottleneck.<sup id="fnref:SEDA"><a href="#fn:SEDA" class="footnote">4</a></sup> More importantly, the property of always being
-acquired and released in the same function invocation, is a global
-one: as soon as even one piece of code acquires a given resource and
-releases in another thread pool call (e.g., acquires a DB connection,
-initiates an asynchronous network call, writes the result of the call
-to the DB, and releases the connection), we must always treat that
-resource as being in the third, more annoying, class.  Having explicit
-stages with fixed resource requirements helps us confirm resources
-are classified correctly.</p>
+<p>Probably of more theoretical interest is the fact that these bounds do
+not assume a uniform distribution, only that all the input streams are
+identically and independently sampled from the same underlying
+distribution. That’s the beauty of working in terms of the (inverse)
+distribution functions.</p>
 
-<p>The third class of resources <em>must</em> be acquired in a way that
-preserves forward progress in the rest of the system. In particular,
-we must never have all workers waiting for resources of this third
-class. In most cases, it suffices to make sure there at least as many
-workers as there are queues or stages, and to only let each stage run
-the initial resource acquisition code in one worker at a time.
-However, it can pay off to be smart when different queued items
-require different resources, instead of always trying to satisfy
-resource requirements in FIFO order.</p>
+<h2 id="i-dont-think-theres-anything-deeper">I don’t think there’s anything deeper</h2>
 
-<p>The fourth class of resources is essentially heap memory. Memory is
-special because the only way to release it is often to complete the
-computation. However, moving the computation forward will use even
-more heap. In general, my only solution is to impose a hard cap on the
-total number of in-flight work units, and to make sure it’s easy to
-tweak that limit at runtime, in disaster scenarios.  If we still run
-close to the memory capacity with that limit, the code can either
-crash (and perhaps restart with a lower in-flight cap), or try to
-cancel work that’s already in progress. Neither option is very
-appealing.</p>
+<p>That’s it. Two cute tricks that use well-understood statistical
+distributions in hashed data structure and algorithm design.  I doubt
+there’s anything to generalise from either bounding approach.</p>
 
-<p>There are some easier cases. For example, I find that temporary bumps
-in heap usage can be caused by parsing large responses from
-idempotent (<code>GET</code>) requests.  It would be nice if networking subsystems
-tracked memory usage to dynamically throttle requests, or
-even cancel and retry idempotent ones.</p>
-
-<p>Once we’ve done the work of explicitly writing out the processing
-steps in our program as well as their individual resource
-requirements, it makes sense to let that topology drive the structure
-of the code.</p>
-
-<p>Over time, we’ll gain more confidence in that topology and bake it in
-our program to improve performance.  For example, rather than limiting
-the number of in-flight requests with a semaphore, we can have a
-fixed-size allocation pool of request objects.  We can also
-selectively use bounded ring buffers once we know we wish to impose a
-limit on queue size.  Similarly, when a sequence (or subgraph) of
-processing steps is fully synchronous or retires in order, we can
-control both the queue size and the number of in-flight work units
-with a <a href="https://lmax-exchange.github.io/disruptor/">disruptor</a>, which
-should also improve locality and throughput under load.  These
-transformations are easy to apply once we know what the movement of
-data and resource looks like.  However, they also ossify the structure
-of the program, so I only think about such improvements if they
-provide a system property I know I need (e.g., a limit on the number
-of in-flight requests), or once the code is functional and we have
-load-testing data.</p>
-
-<p>Complex programs are often best understood as state machines. These
-state machines can be implicit, or explicit. I prefer the latter.  I
-claim that it’s also preferable to have one thread pool<sup id="fnref:queue"><a href="#fn:queue" class="footnote">5</a></sup> per
-explicit state than to dump all sorts of state transition logic
-in a shared pool.  If writing functions that process flat tables is
-data-oriented programming, I suppose I’m arguing for data-oriented
-state machines.</p>
-
+<p>However, I definitely believe they’re useful in practice. I like knowing
+that I can expect the maximum displacement for a table of \(n\)
+elements with Robin Hood linear probing to be less than \(5
+\log\sb{2}^{3/2} n\), because that lets me select an appropriate
+option for each table, as a function of that table’s maximum
+displacement, while knowing the range of displacements I might have to
+handle.  Having a strong bound on how much I might have to buffer for
+stream join operators feels even more useful: I can pre-allocate a
+single buffer per stream and not think about efficiently growing the
+buffer, or signaling that a consumer is falling behind.  The
+probability that I’ll need a larger buffer is so low that I just need
+to handle it, however inefficiently.  In a replicated system, where
+each node picks an independent hash function, I would even consider
+crashing when the buffer is too small!</p>
 <div class="footnotes">
   <ol>
-    <li id="fn:convenience">
-      <p>Convenience wrappers, like parallel map, or “run after this time,” still rely on the flexibility of opaque functions. <a href="#fnref:convenience" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:waterloo">
+      <p>I swear the Waterloo theme isn’t some <a href="https://en.wikipedia.org/wiki/Canadian_content">CanCon</a> thing. <a href="#fnref:waterloo" class="reversefootnote">&#8617;</a></p>
     </li>
-    <li id="fn:processes">
-      <p>Maybe we decided to use threads because there’s a lot of shared, read-mostly, data on the heap. It doesn’t really matter, process pools have similar problems. <a href="#fnref:processes" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:memory-less">
+      <p>With consistent tie-breaking, the layout of entries in a Robin hood hash table is a function of the set of entries, independently of the sequence of add and remove operations. <a href="#fnref:memory-less" class="reversefootnote">&#8617;</a></p>
     </li>
-    <li id="fn:thrashing">
-      <p>Up to a point, of course. No model is perfect, etc. etc. <a href="#fnref:thrashing" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:SEDA">
-      <p>Explicit resource requirements combined with one queue per stage lets us steal ideas from <a href="https://en.wikipedia.org/wiki/Staged_event-driven_architecture">SEDA</a>. <a href="#fnref:SEDA" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:queue">
-      <p>One thread pool per state in the sense that no state can fully starve out another of CPU time. The concrete implementation may definitely let a shared set of workers pull from all the queues. <a href="#fnref:queue" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:three-centuries">
+      <p>Assuming we consume ten streams per nanosecond, we expect to experience underbuffering once every 316 years. <a href="#fnref:three-centuries" class="reversefootnote">&#8617;</a></p>
     </li>
   </ol>
 </div>

@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/">Doodle: hybridising SBCL's GENCGC with mark and sweep</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2015/01/13/lock-free-mutual-exclusion/">Lock-free sequence locks</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Sept
+Jan
   
 13th, 
-2014
+2015
 
 
 
 
         
-         | <a href="/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/"
+         | <a href="/Blog/2015/01/13/lock-free-mutual-exclusion/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2015/01/13/lock-free-mutual-exclusion/"
 	      >Comments</a>
         
         
@@ -116,201 +116,686 @@ Sept
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><em>Meta-note: this is more of a journal entry than the usual post
-here.  I’ll experiment with the format and see if I like publishing
-such literal and figurative doodles.</em></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>Specialised locking schemes and lock-free data structures are a big
+part of my work these days.  I think the main reason the situation is
+tenable is that, very early on, smart people decided to focus on an
+SPMC architecture: single writer (producer), multiple readers
+(consumers).</p>
 
-<p>Garbage collection is in the air.  My friend
-<a href="http://pointersgonewild.wordpress.com/2014/09/09/ds-garbage-collector-problem/">Maxime</a>
-is having issues with D’s garbage collector, and Martin Cracauer has a
-large patch to improve SBCL’s handling of conservative references.  I
-started reviewing that patch today, and, after some discussion with
-Alastair Bridgewater, I feel like adding a mark-and-sweep component to
-SBCL’s GC might be easier than what the patch does, while achieving
-its goal of reducing the impact of conservative references.  That lead
-to the whiteboarding episode below and a plan to replace the garbage
-collecting half of SBCL’s generational GC.  But first, a summary of
-the current implementation.</p>
+<p>As programmers, we have a tendency to try and maximise generality: if
+we can support multiple writers, why would one bother with measly SPMC
+systems?  The thing is SPMC is harder than SPSC, and MPMC is
+even more complex.  Usually, more concurrency means programs are harder to
+get right, harder to scale and harder to maintain.  Worse: it also
+makes it more difficult to provide theoretical progress guarantees.</p>
 
-<p><img src="/images/2014-09-13-doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/gc_notes.png" /></p>
+<p>Apart from architecting around simple cases, there’s a few ways to
+deal with this reality.  We can define new, weaker, classes of program,
+like obstruction-freedom: a system is obstruction-free when one thread
+is guaranteed to make progress if <em>every other thread is suspended</em>.  We
+can also <a href="http://www.cosy.sbg.ac.at/research/tr/2010-07_Kirsch_Payer_Roeck.pdf">weaken the guarantees of our data structure</a>.  For example,
+rather than exposing a single FIFO, we could distribute load and
+contention across multiple queues; we lose strict FIFO order, but we
+also eliminate a system bottleneck.  Another option is to try and
+identify how real computers are more powerful than our abstract
+models: some argue that, <a href="http://arxiv.org/abs/1311.3200">realistically, many lock-free schemes are wait-free</a>, and others <a href="http://www.cs.technion.ac.il/~mad/publications/asplos2014-ffwsq.pdf">exploit the fact that x86-TSO machines have finite store buffers</a>.</p>
 
-<h1 id="the-present-and-how-we-got-here">The present, and how we got here</h1>
+<p>Last week, I got lost doodling with x86-specific cross-modifying code,
+but still stumbled on a cute example of a simple lock-free protocol:
+lock-free sequence locks.  This sounds like an oxymoron, but I promise
+it makes sense.</p>
 
-<p>CMUCL started out with a Cheney-style two-space collector.  Two-space
-collectors free up space for more allocations by copying objects that
-might still be useful (that are reachable from “roots,” e.g.,
-variables on the stack) from the old space to the new space.  Cheney’s
-algorithm elegantly simplifies this task by storing bookkeeping
-information in the data itself.  When we copy an object to the new
-space (because it is reachable), we want to make sure that all other
-references to that object are also replaced with references to the
-copy.  Cheney’s solution to that desideratum is obvious: overwrite the
-old object with a broken heart (forwarding pointer), a marker that</p>
+<h1 id="lock-free-sequence-locks">Lock-free sequence locks</h1>
 
-<ol>
-  <li>the object has already been copied to the new space;</li>
-  <li>the copy lives at address <code>x</code>.</li>
-</ol>
+<p>It helps to define the terms
+better. <a href="http://en.wikipedia.org/wiki/Non-blocking_algorithm#Lock-freedom">Lock-freedom</a>
+means that the overall system will always make progress, even if some
+(but not all) threads are suspended.
+<a href="http://en.wikipedia.org/wiki/Seqlock">Classical sequence</a> locks are
+an optimistic form of write-biased reader/writer locks: concurrent
+writes are forbidden (e.g., with a spinlock), read transactions abort
+whenever they observe that writes are in progress, and a generation
+counter avoids
+<a href="http://en.wikipedia.org/wiki/ABA_problem">ABA problems</a> (when a read
+transaction would observe that no write is in progress before and after a
+quick write).</p>
 
-<p>This adds a constraint that heap-allocated objects can never be
-smaller than a broken heart, but they’re usually one or two words (two
-in SBCL’s case) so the constraint is rarely binding.</p>
+<p>In
+<a href="http://www.cs.rochester.edu/u/scott/papers/2010_EuroPar_TML.pdf">Transactional Mutex Locks (PDF)</a>,
+sequence locks proved to have enviable performance on small systems and
+scaled decently well for read-heavy workloads.  They even allowed lazy
+upgrades from reader to writer by atomically checking that the
+generation has the expected value when acquiring the sequence lock for
+writes.  However, we lose nearly all progress guarantees: one
+suspended writer can freeze the whole system.</p>
 
-<p>When the garbage collector traverses the roots (the stack, for
-example) and finds a pointer, the code only has to dereference that
-pointer to determine if the objects it points to has been moved.  If
-so, the GC replaces the root pointer with a pointer to the copy in the
-new space.  Otherwise, the GC copies the object to the new space,
-repoints to that copy, and overwrites the old object with a broken heart.</p>
+<p>The central trick of lock-freedom is cooperation: it doesn’t matter if
+a thread is suspended in the middle of a critical section, as long as
+any other thread that would block can instead complete the work that
+remains.  In general, this is pretty hard, but we can come up with
+restricted use cases that are idempotent.  For lock-free sequence
+locks, the critical section is a precomputed set of writes: a series
+of assignments that must appear to execute atomically.  It’s fine if
+writes happen multiple times, as long as they stop before we move on
+to another set of writes.</p>
 
-<p>We also need to traverse objects recursively: when we find that an
-object is live and copy it to the new space, we must also make sure
-that anything that objects points to is also preserved, and that any
-pointer in that object is updated with pointers to copies in the new
-space.</p>
+<p>There’s a primitive based on compare-and-swap that can easily achieve
+such conditional writes: restricted double compare and single swap
+(RDCSS, introduced in
+<a href="http://www.cl.cam.ac.uk/research/srg/netos/papers/2002-casn.pdf">A Practical Multi-Word Compare-and-Swap (PDF)</a>).
+RDCSS atomically checks if both a control word (e.g., a generation
+counter) and a data word (a mutable cell) have the expected values and,
+if so, writes a new value in the data word.  The pseudocode for
+regular writes looks like</p>
 
-<p>That’s a graph traversal, and the obvious implementation
-maintains a workset of objects to visit which, in the worst case,
-could include all the objects in old space.  The good news is we don’t have
-to worry about objects re-entering that workset: we always
-overwrite objects (in old space) with a broken heart when we visit
-them for the first time.</p>
+<pre><code>if (CAS(self.data, self.old, self) == fail) {
+    return fail;
+}
+   
+if (*self.control != self.expected) {
+    CAS(self.data, self, self.old);
+    return fail;
+}
 
-<p>Cheney proposed a clever trick to implement this workset.  Whenever an
-object enters the workset, it has just been copied to the new space;
-as long as we allocate in the new space by incrementing an allocation
-pointer, the new space itself can serve as the workset!  In addition
-to the allocation pointer, we now need a “to-scan” pointer.  Any
-object in the new space that’s below the to-scan pointer has already
-been scanned for pointers and fixed to point in the new space; any object
-between the to-scan pointer and the allocation pointer must be scanned
-for pointers to the old space.  We pop an element from the workset by
-looking at the next object (in terms of address) after the to-scan
-pointer and incrementing that pointer by the object’s size.  When the
-to-scan and the allocation pointers meet, the workset is empty
-and GC terminates.</p>
+CAS(self.data, self, self.new);
+return success;
+</code></pre>
 
-<p>Some SBCL platforms still use this two-space collector, but it doesn’t
-scale very well to large heaps (throughput is usually fine, but we
-waste a lot of space and GC pauses can be long).  The generational
-conservative garbage collector (GENCGC, GENGC on
-precise/non-conservative platforms) is a hack on top of that Cheney GC.</p>
+<p>The trick is that, if the first CAS succeeds, we always know how to
+undo it (<code>data</code>’s old value must be <code>self.old</code>), and that
+information is stored in <code>self</code> so any thread that observes the first
+CAS has enough information to complete or rollback the RDCSS.  The
+only annoying part is that we need a two-phase commit: reserve <code>data</code>,
+confirm that <code>control</code> is as <code>expected</code>, and only then write to <code>data</code>.</p>
 
-<p>The GC is “generational” because most passes only collect garbage from
-a small fraction of the heap, and “conservative” because we have to
-deal with values that may or may not be pointers (e.g., we don’t always
-know if the value in a register is a Lisp reference or just a machine
-integer) by considering some objects as live (not up for collection)
-while pinning them at their current address.</p>
+<p>For the cost of two compare-and-swap per write – plus one to acquire the
+sequence lock – writers don’t lock out other writers (writers help
+each other make progress instead).  Threads (especially readers) can
+still suffer from starvation, but at least the set of writes can be
+published ahead of time, so readers can even lookup in that set rather
+than waiting for/helping writes to complete.  The generation counter
+remains a bottleneck, but, as long as writes are short and happen
+rarely, that seems like an acceptable trade to avoid the 3n CAS in
+multi-word compare and swap.</p>
 
-<p>The runtime uses mprotect to record writes to the heap, except for the
-nursery (newly allocated objects) where we expect most writes to land.
-The heap is partitioned in pages, and the first write to a page after
-a GC triggers a protection fault; the signal handler marks that page
-as mutated and changes the protection to allow writes.</p>
+<h1 id="real-code">Real code</h1>
 
-<p>When a GC is triggered, we usually want to collect only the nursery,
-i.e., only objects that were allocated after the previous GC pass.
-GEN(C)GC adapts Cheney to this use case by building the set of all
-pages that might have been mutated to point somewhere in the nursery
-(thanks to the mprotect write barrier) and scanning them for roots,
-like the stack in Cheney GC.  The default GENGC configuration has 7
-generations and we extend this scheme by flagging pages with pointers
-to younger generations (newer objects), without noting what these
-generations might be.</p>
+<p>Here’s what the scheme looks like in SBCL.</p>
 
-<p>Pinned objects are also handled by abusing the root set: pages that
-contain at least one pinned object don’t undergo garbage collection
-and are directly scanned for pointers, like the stack in Cheney GC.</p>
+<p>First, a mutable box because we don’t have raw pointers (I could also
+have tried to revive my sb-locative hack) in CL.</p>
 
-<p>Instead of having two heaps, an old space and a new space, we now have
-a lot of pages, and each page belongs to a generation.  When we want
-to collect a given generation, pages in that generation form the old
-space, and pages allocated during GC the new space.  This means that
-we lose the simplicity of Cheney’s new-space-is-the-workset trick: the
-new space isn’t contiguous, so a single to-scan pointer doesn’t cut it
-anymore!  GENGC works around that by scanning the page table, but it’s
-not pretty and I really don’t know if Cheney is a good fit anymore.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defstruct (box
+</span><span class="line">            (:constructor make-box (%value)))
+</span><span class="line">  %value)</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<h1 id="martin-cracauers-patch">Martin Cracauer’s patch</h1>
+<p>Next, the type for write records: we have the the value for the next
+generation (once the write is complete) and a hash table of box to
+pairs of old and new values.  There’s a key difference with the way
+RDCSS is used to implement multiple compare and swap: we don’t check
+for mismatches in the old value and simply assume that it is correct.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defstruct (record
+</span><span class="line">             (:constructor %make-record (generation ops)))
+</span><span class="line">  (generation (error "Missing arg") :type fixnum :read-only t)
+</span><span class="line">  ;; map of box -&gt; (cons old new).  I use a hash table for
+</span><span class="line">  ;; convenience but I doubt it's the right choice.
+</span><span class="line">  (ops (error "Missing arg") :type hash-table :read-only t))
+</span><span class="line">(declaim (freeze-type record))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>GENCGC’s approach to pinned objects is stupid.  If a page has no
-reference except for one conservative pointer, the whole page is
-considered live and scanned for references.</p>
+<p>The central bottleneck is the sequence lock, which each (read)
+transaction must snapshot before attempting to read consistent
+values.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(declaim (type (or (and unsigned-byte fixnum) record) **current-record**))
+</span><span class="line">(defglobal **current-record** 0)
+</span><span class="line">
+</span><span class="line">(defvar *initial-record*)
+</span><span class="line">
+</span><span class="line">(defun snapshot-generation ()
+</span><span class="line">  (let ((initial *initial-record*))
+</span><span class="line">    (if (record-p initial)
+</span><span class="line">        (record-generation initial)
+</span><span class="line">        initial)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Martin’s solution is to allocate additional temporary metadata only
-for pinned pages and track the pinned status of individual objects.
-When the GC encounters a pointer to a page with pinned objects, it
-checks if it’s a pointer to a pinned object.  If so, the pointee is
-left in place.  Otherwise, it’s copied normally.</p>
+<p>The generation associated with a snapshot is the snapshot if it is a
+positive fixnum, otherwise it is the write record’s generation.</p>
 
-<p>The patch has code to mark objects as live (pinned) and to overwrite
-objects once they have been copied.  Basically, it is half of a
-mark-and-sweep garbage collector.  The main difference is that the set
-of pinned objects doesn’t grow (being pinned isn’t a contagious
-property), so we don’t need a worklist for pinned objects.  However, I
-already noted that I’m not convinced the worklist hack in GENGC is a
-good idea.</p>
+<p>Before using any read, we make sure that the generation counter hasn’t
+changed.</p>
 
-<h1 id="a-hybrid-collector">A hybrid collector!</h1>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun check ()
+</span><span class="line">  #-(or x86 x86-64) (sb-thread:barrier (:read)) ; x86 don't reorder reads
+</span><span class="line">  (let ((initial *initial-record*)
+</span><span class="line">        (current **current-record**))
+</span><span class="line">    (unless (or (eql initial current)
+</span><span class="line">                (and (record-p initial)
+</span><span class="line">                     (eql (record-generation initial) current)))
+</span><span class="line">      (throw 'fail t))))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Instead of marking pages as containing pinned objects, I feel it may
-be simpler to collect some pages by copying, and others by marking.
-Any pinned page would have the “mark” GC policy, while pages that
-likely contain few live objects (e.g., the nursery and pages with a
-lot of unused memory) would be collected by copying.  This too would
-avoid the issue with considering whole <em>pages</em> as live when pinned,
-and I think that having the choice of copying or marking at a page
-granularity will be simpler than toggling at the level of individual
-object.</p>
+<p>I see two ways to deal with starting a read transaction while a write
+is in progress: we can help the write complete, or we can overlay the
+write on top of the current heap in software.  I chose the latter:
+reads can already be started by writers.  If a write is in progress
+when we start a transaction, we stash the write set in <code>*current-map*</code>
+and lookup there first:</p>
 
-<p>Each “mark” page now has two (bit)sets, one for live objects and
-another for live objects that have already been scanned.  We can
-maintain a worklist at the page granularity with an embedded linked
-list: whenever a “mark” page gains a new live object and it’s not
-already in the worklist, that page is enqueued for scanning.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defvar *current-map* nil)
+</span><span class="line">
+</span><span class="line">(defun box-value (box)
+</span><span class="line">  (prog1 (let* ((map *current-map*)
+</span><span class="line">                (value (if map
+</span><span class="line">                           (cdr (gethash box map (box-%value box)))
+</span><span class="line">                           (box-%value box))))
+</span><span class="line">           (if (record-p value)
+</span><span class="line">               ;; if we observe a record, either a new write is in
+</span><span class="line">               ;; progress and (check) is about to fail, or this is
+</span><span class="line">               ;; for an old (already completed) write that succeeded
+</span><span class="line">               ;; partially by accident.  In the second case, we want
+</span><span class="line">               ;; the *old* value.
+</span><span class="line">               (car (gethash box (record-ops value)))
+</span><span class="line">               value))
+</span><span class="line">    (check)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Instead of emulating Cheney’s trick by looking for newly allocated
-pages in our page table, we can add pages in new space to the worklist
-whenever they become full.</p>
+<p>We’re now ready to start read transactions.  We take a snapshot of the
+generation counter, update <code>*current-map*</code>, and try to execute a
+function that uses <code>box-value</code>.  Again, we don’t need a read-read
+barrier on x86oids (nor on SPARC, but SBCL doesn’t have threads on
+that platform).</p>
 
-<p>Finally, at the end of the pass, we traverse all “mark” pages and
-clear dead objects.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun call-with-transaction (function &amp;rest arguments)
+</span><span class="line">  (catch 'fail
+</span><span class="line">    (let* ((*initial-record* **current-record**)
+</span><span class="line">           (*current-map* (and (record-p *initial-record*)
+</span><span class="line">                               (record-ops *initial-record*))))
+</span><span class="line">      #-(or x86 x86-64) (sb-thread:barrier (:read))
+</span><span class="line">      (return-from call-with-transaction
+</span><span class="line">        (values (apply function arguments) t))))
+</span><span class="line">  (values nil nil))
+</span><span class="line">
+</span><span class="line">(defmacro with-transaction ((&amp;rest bindings) &amp;body body)
+</span><span class="line">  `(call-with-transaction (lambda ,(mapcar #'first bindings)
+</span><span class="line">                            ,@body)
+</span><span class="line">                          ,@(mapcar #'second bindings)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>That’s pretty simple (arguably simpler than the current
-implementation!), and shouldn’t involve too many changes to the rest
-of the code.  Mostly, I’d have to adapt the weak pointer machinery to
-stop assuming that it can use forwarding pointers to determine when
-objects have been marked as live.</p>
+<p>The next function is the keystone: helping a write record go through
+exactly once.</p>
 
-<p>However, we might lose the ability to run medium GCs, to collect more
-than the nursery but less than the whole heap.  If we only want to GC
-the nursery, the mprotect write barrier gives us all the information
-we need to find references from the rest of the heap to the nursery.
-If we wish to collect the whole heap, we only have to consider stacks
-and some statically allocated space as roots.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun help (record)
+</span><span class="line">  (flet ((write-one (box old new)
+</span><span class="line">           ;; if record isn't the current generation anymore,
+</span><span class="line">           ;; it has already been completed
+</span><span class="line">           (unless (eq **current-record** record)
+</span><span class="line">               (return-from help nil))
+</span><span class="line">             (let ((actual (sb-ext:cas (box-%value box) old record)))
+</span><span class="line">               (when (eql actual new) ;; already done? next!
+</span><span class="line">                 (return-from write-one))
+</span><span class="line">               
+</span><span class="line">               ;; definite failure -&gt; no write went though; leave.
+</span><span class="line">               (unless (or (eql actual old)
+</span><span class="line">                           (eql actual record))
+</span><span class="line">                 (return-from help nil))
+</span><span class="line">
+</span><span class="line">               ;; check for activity before the final write
+</span><span class="line">               (unless (eq **current-record** record)
+</span><span class="line">                 (sb-ext:cas (box-%value box) record old)
+</span><span class="line">                 (return-from help nil))
+</span><span class="line">
+</span><span class="line">               ;; Really perform write (this can only fail if
+</span><span class="line">               ;; another thread already succeeded).
+</span><span class="line">               (sb-ext:cas (box-%value box) record new))))
+</span><span class="line">    (maphash (lambda (box op)
+</span><span class="line">               (write-one box (car op) (cdr op)))
+</span><span class="line">             (record-ops record)))
+</span><span class="line">  ;; Success! move the generation counter forward.
+</span><span class="line">  (eql record (sb-ext:cas (symbol-value '**current-record**)
+</span><span class="line">                          record
+</span><span class="line">                          (record-generation record))))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>For medium GCs, e.g., collect only generations 1-4 out of 7, GENGC
-exploits the way that garbage collection (almost) always copies to
-easily track pages with pointers to younger generations.  It’s coarse,
-but usually acceptable thanks to the copying.  I don’t know that it
-would work as well if the default is to only copy the nursery.
-Moreover, if we have a hybrid GC, it probably makes sense to focus
-copying on pages that are mostly empty, regardless of their age.  If
-we do want medium GCs, we might have to track, for each page, the set
-of pages that point there.  This set can include false positives, so
-it’s probably easiest to clear it before major GCs, and otherwise only
-add to that set (removing pages that were emptied by a GC pass sounds
-reasonable).  I also expect that some pages will have many refererrers;
-I’m thinking we might use a distinguished value to mean “referred by
-every pages” and not consider them for medium GC.</p>
+<p>Now we can commit with a small wrapper around <code>help</code>. Transactional
+mutex lock has the idea of transaction that are directly created as
+write transactions.  We assume that we always know how to undo writes,
+so transactions can only be upgraded from reader to writer.
+Committing a write will thus check that the generation counter is
+still consistent with the (read) transaction before publishing the new
+write set and helping it forward.</p>
 
-<h1 id="whats-next">What’s next</h1>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun commit (record)
+</span><span class="line">  (check-type record record)
+</span><span class="line">  (let ((initial
+</span><span class="line">          (loop
+</span><span class="line">           (let ((value **current-record**))
+</span><span class="line">             (check)
+</span><span class="line">             (if (record-p value)
+</span><span class="line">                 (help value)
+</span><span class="line">                 (return value))))))
+</span><span class="line">    (unless (and (eql (sb-ext:cas (symbol-value '**current-record**)
+</span><span class="line">                                  initial record)
+</span><span class="line">                      initial)
+</span><span class="line">                 (help record))
+</span><span class="line">      (throw 'fail t))
+</span><span class="line">    t))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Martin’s patch clearly addresses an important weakness in SBCL’s
-garbage collector.  If I can’t make good progress on the hybrid GC
-soon, I’ll make sure the patch is cleaned up for master, hopefully by
-Thanksgiving.</p>
+<p>And now some syntactic sugar to schedule writes</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defvar *write-record*)
+</span><span class="line">
+</span><span class="line">(defun call-with-write-record (function)
+</span><span class="line">  (let ((*write-record* (%make-record (mod (1+ (snapshot-generation))
+</span><span class="line">                                           (1+ most-positive-fixnum))
+</span><span class="line">                                      (make-hash-table))))
+</span><span class="line">    (multiple-value-prog1 (funcall function)
+</span><span class="line">      (commit *write-record*))))
+</span><span class="line">
+</span><span class="line">(defun (setf box-value) (value box)
+</span><span class="line">  (setf (gethash box (record-ops *write-record*))
+</span><span class="line">        (cons (box-value box) value))
+</span><span class="line">  value)
+</span><span class="line">
+</span><span class="line">(defmacro with-write (() &amp;body body)
+</span><span class="line">  `(call-with-write-record (lambda ()
+</span><span class="line">                             ,@body)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>That’s enough for a smoke test on my dual core laptop.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defvar *a* (make-box 0))
+</span><span class="line">(defvar *b* (make-box 0))
+</span><span class="line">(defvar *semaphore* (sb-thread:make-semaphore))
+</span><span class="line">
+</span><span class="line">(defun test-reads (n)
+</span><span class="line">  (let ((a *a*)
+</span><span class="line">        (b *b*))
+</span><span class="line">    (sb-thread:wait-on-semaphore *semaphore*)
+</span><span class="line">    (loop repeat n
+</span><span class="line">          count (with-transaction ()
+</span><span class="line">                  (assert (eql (box-value a) (box-value b)))
+</span><span class="line">                  t))))
+</span><span class="line">
+</span><span class="line">(defun test-writes (n)
+</span><span class="line">  (let ((a *a*)
+</span><span class="line">        (b *b*))
+</span><span class="line">    (sb-thread:wait-on-semaphore *semaphore*)
+</span><span class="line">    (loop repeat n
+</span><span class="line">          count (with-transaction ()
+</span><span class="line">                  (with-write ()
+</span><span class="line">                    (incf (box-value a))
+</span><span class="line">                    (incf (box-value b)))
+</span><span class="line">                  t))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The function <code>test-reads</code> counts the number of successful read
+transactions and checks that <code>(box-value a)</code> and <code>(box-value b)</code> are
+always equal. That consistency is preserved by <code>test-writes</code>, which
+counts the number of times it succeeds in incrementing both
+<code>(box-value a)</code> and <code>(box-value b)</code>.</p>
+
+<p>The baseline case should probably be serial execution, while the ideal
+case for transactional mutex lock is when there is at most one
+writer.  Hopefully, lock-free sequence locks also does well when there
+are multiple writers.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun test-serial (n)
+</span><span class="line">  (setf *a* (make-box 0)
+</span><span class="line">        *b* (make-box 0)
+</span><span class="line">        *semaphore* (sb-thread:make-semaphore :count 4))
+</span><span class="line">  (list (test-reads (* 10 n))
+</span><span class="line">        (test-reads (* 10 n))
+</span><span class="line">        (test-writes n)
+</span><span class="line">        (test-writes n)))
+</span><span class="line">
+</span><span class="line">(defun test-single-writer (n)
+</span><span class="line">  (setf *a* (make-box 0)
+</span><span class="line">        *b* (make-box 0)
+</span><span class="line">        *semaphore* (sb-thread:make-semaphore))
+</span><span class="line">  (let ((threads
+</span><span class="line">          (list (sb-thread:make-thread #'test-reads :arguments (* 10 n))
+</span><span class="line">                (sb-thread:make-thread #'test-reads :arguments (* 10 n))
+</span><span class="line">                (sb-thread:make-thread #'test-writes
+</span><span class="line">                                       :arguments (ceiling (* 1.45 n))))))
+</span><span class="line">    (sb-thread:signal-semaphore *semaphore* 3)
+</span><span class="line">    (mapcar (lambda (x)
+</span><span class="line">              (ignore-errors (sb-thread:join-thread x)))
+</span><span class="line">            threads)))
+</span><span class="line">
+</span><span class="line">(defun test-multiple-writers (n)
+</span><span class="line">  (setf *a* (make-box 0)
+</span><span class="line">        *b* (make-box 0)
+</span><span class="line">        *semaphore* (sb-thread:make-semaphore))
+</span><span class="line">  (let ((threads
+</span><span class="line">          (list (sb-thread:make-thread #'test-reads :arguments (* 10 n))
+</span><span class="line">                (sb-thread:make-thread #'test-reads :arguments (* 10 n))
+</span><span class="line">                (sb-thread:make-thread #'test-writes :arguments n)
+</span><span class="line">                (sb-thread:make-thread #'test-writes :arguments n))))
+</span><span class="line">    (sb-thread:signal-semaphore *semaphore* 4)
+</span><span class="line">    (mapcar (lambda (x)
+</span><span class="line">              (ignore-errors (sb-thread:join-thread x)))
+</span><span class="line">            threads)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h1 id="lets-try-this">Let’s try this!</h1>
+
+<p>First, the serial case. As expected, all the transactions succeed, in
+6.929 seconds total (6.628 without GC time).  With one writer and two
+readers, all the writes succeed (as expected), and 98.5% of reads do as
+well; all that in 4.186 non-GC seconds, a 65% speed up.  Finally, with
+two writers and two readers, 76% of writes and 98.5% of reads complete in
+4.481 non-GC seconds.  That 7% slowdown compared to the single-writer
+case is pretty good: my laptop only has two cores, so I would expect
+more aborts on reads and a lot more contention with, e.g., a spinlock.</p>
+
+<pre><code>CL-USER&gt; (gc :full t) (time (test-serial 1000000))
+Evaluation took:
+  6.929 seconds of real time
+  6.944531 seconds of total run time (6.750770 user, 0.193761 system)
+  [ Run times consist of 0.301 seconds GC time, and 6.644 seconds non-GC time. ]
+  100.23% CPU
+  11,063,956,432 processor cycles
+  3,104,014,784 bytes consed
+  
+(10000000 10000000 1000000 1000000)
+CL-USER&gt; (gc :full t) (time (test-single-writer 1000000))
+Evaluation took:
+  4.429 seconds of real time
+  6.465016 seconds of total run time (5.873936 user, 0.591080 system)
+  [ Run times consist of 0.243 seconds GC time, and 6.223 seconds non-GC time. ]
+  145.97% CPU
+  6,938,703,856 processor cycles
+  2,426,404,384 bytes consed
+  
+(9863611 9867095 1450000)
+CL-USER&gt; (gc :full t) (time (test-multiple-writers 1000000))
+Evaluation took:
+  4.782 seconds of real time
+  8.573603 seconds of total run time (7.644405 user, 0.929198 system)
+  [ Run times consist of 0.301 seconds GC time, and 8.273 seconds non-GC time. ]
+  179.30% CPU
+  7,349,757,592 processor cycles
+  3,094,950,400 bytes consed
+  
+(9850173 9853102 737722 730614)
+</code></pre>
+
+<p>How does a straight mutex do with four threads?</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun test-mutex (n)
+</span><span class="line">  (let ((mutex (sb-thread:make-mutex))
+</span><span class="line">        (semaphore (sb-thread:make-semaphore))
+</span><span class="line">        (a 0)
+</span><span class="line">        (b 0))
+</span><span class="line">    (flet ((reader (n)
+</span><span class="line">             (sb-thread:wait-on-semaphore semaphore)
+</span><span class="line">             (loop repeat n do
+</span><span class="line">               (sb-thread:with-mutex (mutex)
+</span><span class="line">                 (assert (eql a b)))))
+</span><span class="line">           (writer (n)
+</span><span class="line">             (sb-thread:wait-on-semaphore semaphore)
+</span><span class="line">             (loop repeat n do
+</span><span class="line">               (sb-thread:with-mutex (mutex)
+</span><span class="line">                 (incf a)
+</span><span class="line">                 (incf b)))))
+</span><span class="line">      (let ((threads
+</span><span class="line">              (list (sb-thread:make-thread #'reader
+</span><span class="line">                                           :arguments (* 10 n))
+</span><span class="line">                    (sb-thread:make-thread #'reader
+</span><span class="line">                                           :arguments (* 10 n))
+</span><span class="line">                    (sb-thread:make-thread #'writer
+</span><span class="line">                                           :arguments (ceiling (* .75 n)))
+</span><span class="line">                    (sb-thread:make-thread #'writer
+</span><span class="line">                                           :arguments (ceiling (* .75 n))))))
+</span><span class="line">        (sb-thread:signal-semaphore semaphore 4)
+</span><span class="line">        (mapc #'sb-thread:join-thread threads)))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<pre><code>CL-USER&gt; (gc :full t) (time (test-mutex 1000000))
+Evaluation took:
+  5.814 seconds of real time
+  11.226734 seconds of total run time (11.169670 user, 0.057064 system)
+  193.10% CPU
+  9,248,370,000 processor cycles
+  1,216 bytes consed
+  
+(#&lt;SB-THREAD:THREAD FINISHED values: NIL {1003A6E1F3}&gt;
+ #&lt;SB-THREAD:THREAD FINISHED values: NIL {1003A6E383}&gt;
+ #&lt;SB-THREAD:THREAD FINISHED values: NIL {1003A6E513}&gt;
+ #&lt;SB-THREAD:THREAD FINISHED values: NIL {1003A6E6A3}&gt;)
+</code></pre>
+
+<p>There’s almost no allocation (there’s no write record), but the lack
+of read parallelism makes locks about 20% slower than the lock-free
+sequence lock.  A reader-writer lock would probably close that gap.
+The difference is that the lock-free sequence lock has stronger
+guarantees in the worst case: no unlucky preemption (or crash, with
+shared memory IPC) can cause the whole system to stutter or even halt.</p>
+
+<p>The results above correspond to my general experience.  Lock-free
+algorithms aren’t always (or even regularly) more efficient than well
+thought out locking schemes; however, they are more robust and easier
+to reason about.  When throughput is more than adequate, it makes
+sense to eliminate locks, not to improve the best or even the average
+case, but rather to eliminate a class of worst cases – including
+deadlocks.</p>
+
+<p>P.S., here’s a sketch of the horrible cross-modifying code hack.  It
+turns out that the instruction cache is fully coherent on (post-586)
+x86oids; the prefetch queue will even reset itself based on the linear
+(virtual) address of writes.  With a single atomic byte write, we can
+turn a <code>xchg (%rax), %rcx</code> into <code>xchg (%rbx), %rcx</code>, where <code>%rbx</code>
+points to a location that’s safe to mutate arbitrarily.  That’s an
+atomic store predicated on the value of a control word elsewhere
+(hidden in the instruction stream itself, in this case).  We can then
+dedicate one sequence of machine to each transaction and reuse them
+via some
+<a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">Safe Memory Reclamation mechanism (PDF)</a>.</p>
+
+<p>There’s one issue: even without preemption (if a writer is pre-empted,
+it should see the modified instruction upon rescheduling), stores
+can take pretty long to execute: in the worst case, the CPU has to
+translate to a physical address and wait for the bus lock.  I’m pretty
+sure there’s a bound on how long a <code>xchg m, r64</code> can take, but I
+couldn’t find any documentation on hard figure.  If we knew that <code>xchg
+m, r64</code> never lasts more than, e.g., 10k cycles, a program could wait
+that many cycles before enqueueing a new write.  That wait is bounded
+and, as long as writes are disabled very rarely, should improve
+the worst-case behaviour without affecting the average throughput.</p>
 </div>
   
   

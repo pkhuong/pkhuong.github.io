@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/03/23/what-i-look-for-in-gsoc-proposals/">What I look for in GSoC proposals</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/04/13/number-systems-for-implicit-data-structures/">Number systems for implicit data structures</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Mar
+April
   
-23rd, 
+13th, 
 2014
 
 
 
 
         
-         | <a href="/Blog/2014/03/23/what-i-look-for-in-gsoc-proposals/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/03/23/what-i-look-for-in-gsoc-proposals/"
+         | <a href="/Blog/2014/04/13/number-systems-for-implicit-data-structures/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/04/13/number-systems-for-implicit-data-structures/"
 	      >Comments</a>
         
         
@@ -116,193 +116,253 @@ Mar
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>EDIT: Added a link to a <a href="/images/2014-03-23-what-i-look-for-in-gsoc-proposals/regalloc-abarch.pdf">solid proposal from last year (PDF)</a>.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><a href="http://en.wikipedia.org/wiki/Implicit_data_structure">Implicit data structures</a>
+are data structures with negligible space overhead compared to storing
+the data in a flat array: auxiliary information is mostly represented
+by permuting the elements cleverly.  For example, a sorted vector
+combined with binary search is an implicit in-order representation of
+a binary search tree.  I believe the seminal implicit data structure is
+the binary heap of Williams and Floyd, usually presented in the
+context of <a href="http://xlinux.nist.gov/dads/HTML/heapSort.html">heapsort</a>.</p>
 
-<p>It’s already
-<a href="https://www.google-melange.com/gsoc/homepage/google/gsoc2014">Google Summer of Code</a>
-season; like spring, it’s slightly earlier this year.  For multiple
-reasons – including the accelerated schedule and my transition to
-having a Real Job – I did not manage to guide any of the students who
-sent in applications.  After an initial ranking, we’re left with a
-fair number of decent proposals for a Summer of
-<a href="http://sbcl.org/">SBCL</a>.  They’re of comparable quality, and all
-leave me a bit uneasy.  In this post, I’ll try to explain what I look
-for in GSoC proposals… or, really, in action plans in general.</p>
+<p>I find most developers are vastly more comfortable dealing with
+pointer-based data structures than with implicit ones.  I blame our
+courses, which focus on the former and completely fail to show us how
+to reason about the latter.  For example, the typical presentation of
+the binary heap introduces an indexing scheme to map from parent to
+children – the children of <code>heap[i]</code> are <code>heap[2 * i]</code> and
+<code>heap[2 * i + 1]</code>, with one-based indices – that is hard to
+generalise to ternary or k-ary heaps (Knuth’s presentation, with
+parents at \(\lfloor i/2 \rfloor\), is no better).  The reason it’s
+so hard to generalise is that the indexing scheme hides a simple
+bijection between paths in k-way trees and natural numbers.</p>
 
-<p>I care about the quality of GSoC plans for two reasons.  First,
-because it reassures me that the applicant understands the
-difficulties they’ll have to overcome to complete their project.
-Second, because, like TDD, a good plan makes it easier to feel when
-we’re making concrete progress.  To me, these two factors are
-necessary conditions for a good success rate.</p>
+<p>I find it <a href="https://www.youtube.com/watch?v=Jne9t8sHpUc">ironic</a> that I
+first encountered the idea of describing data structures or
+algorithms in terms of number systems, through
+<a href="http://okasaki.blogspot.com/2008/02/ten-years-of-purely-functional-data.html">Okasaki</a>’s
+and <a href="http://www.cs.ox.ac.uk/ralf.hinze/publications/#R5">Hinze</a>’s
+<a href="http://www.cs.nott.ac.uk/~gmh/bctcs-slides/hinze.pdf">work</a> on purely
+functional data structures: that vantage point seems perfectly suited to
+the archetypal mutable data structure, the array!  I’ll show how
+number systems help us understand implicit data structures with two
+examples: a simple indexing scheme for k-ary heaps and compositions of
+specially structured permutations to implement in-place bit-reversal
+and (some) matrix transpositions.</p>
 
-<p>We’ll probably allow additional time to update the proposals we have
-already received, so hopefully this post can be immediately useful.  I
-have a single vote, and other mentors no doubt have different
-criteria.  I only hope that this post can give ideas to applicants
-looking to review their proposal.</p>
+<h1 id="simple-k-ary-max-heaps">Simple k-ary max heaps</h1>
 
-<h1 id="why-software-development-cant-be-planned">Why? Software development can’t be planned!</h1>
+<p><a href="http://mitpress.mit.edu/books/introduction-algorithms">The</a>
+<a href="http://www.amazon.com/Data-Structures-Algorithms-Alfred-Aho/dp/0201000237">classical</a>
+<a href="http://www.amazon.com/Fundamentals-Algorithmics-Gilles-Brassard/dp/0133350681">way</a>
+to present implicit binary heaps is to work with one-based array
+indices and to root an implicit binary tree at <code>heap[1]</code>.  For any
+node <code>heap[i]</code>, the children live at <code>heap[2 * i]</code> and
+<code>heap[2 * i + 1]</code>.  My issue with this presentation is that it’s
+unclear how to extend the scheme to ternary or k-ary trees: if the
+children of <code>heap[1]</code> are <code>heap[3 * 1 ... 3 * 1 + 2]</code>, i.e.,
+<code>heap[3, 4, 5]</code>,
+what do we do with <code>heap[2]</code>?  We end up with <code>k - 1</code> parallel k-ary
+trees stashed in the same array.  <a href="http://www.amazon.com/Art-Computer-Programming-Volume-Searching/dp/0201896850">Knuth</a>’s choice of mapping children
+to parents with a floored integer division suffers the same fate.</p>
 
-<p>This is a common objection to any form of planning for software
-projects.  I don’t understand where it comes from.</p>
+<p>One-based arrays hides the beauty of the binary indexing scheme.  With
+zero-based arrays, the children of <code>heap[i]</code> are <code>heap[2 * i + 1]</code> and
+<code>heap[2 * i + 2]</code>.  This is clearly isomorphic to the one-based scheme
+for binary heaps.  The difference is that the extension to k-way
+trees is obvious: the children of <code>heap[i]</code> are <code>heap[k * i + 1 ... k * i + k]</code>.</p>
 
-<p>Software development should be <em>easier</em> to plan than most endeavours:
-we have to deal with relatively few people, and, when we do, it’s
-rarely in an adversarial setting… and I’m willing to bet most of us
-can better forecast the behaviour of programs than that of people.
-There’s currently an electoral campaign in Québec, and I’m certain
-that, before the date was even announced, every single party had a
-precise plan for each day, at the riding, regional, and provincial
-levels.  Politicians can do it; why can’t software developers?</p>
+<p>A couple examples like the one below fail to show any problem.
+However, even a large number of tests is no proof.  Thinking in terms
+of number systems leads to a nice demonstration that the scheme
+creates a bijection between infinite k-ary trees and the naturals.</p>
 
-<p>Of course, there will be constant adjustments to the initial plan.
-The reason I think it’s important to spend time and thought on that
-plan isn’t to stick to it, but primarily because it forces us to
-systematically consider all sorts of potential issues, challenges,
-failure modes, etc.  This exercise becomes useful when problems crop
-up: rather than making decisions in the heat of the moment, we can
-rely on our past (well rested and composed) self’s research, notes, and
-ideas.</p>
+<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/5ary.png" /></p>
 
-<p>I also find plans tend to become much more handwavy as we get farther
-in the future.  That’s a normal tendency.  I think we’re usually
-pretty good at short-term planning; most people can cook a meal
-without sitting down to figure out how they’ll cause awesome chemical
-reactions to occur without burning their house down.  It’s a different
-matter when it comes to month-long camping trips or feeding a thousand
-people.</p>
+<p>There is a unique finite path from the root to any vertex in an
+infinite k-ary tree.  This path can be described as a finite sequence
+\((c\sb{1}, c\sb{2}, \ldots, c\sb{n})\) of integers between 1 and k
+(inclusively).  If \(c\sb{1} = 1\), we first went down the first
+child of the root node; if \(c\sb{1} = 2\), we instead went down the
+second child; etc.  If \(c\sb{2} = 3\), we then went down the third
+child, and so on.  We can recursively encode such finite paths as
+naturals (in pidgin ML):</p>
 
-<p>The difference is one of scale, and it’s exactly when we’re out of our
-comfort zone that mindful planning becomes useful.  I expect an action
-plan to be as thorough in its last week as in its first.  Most of it
-will be fiction, but, as I wrote above, the thinking involved in
-writing that fiction is what I’m after.</p>
+<pre><code>path_to_nat [] = 0
+path_to_nat [c : cs] = k * path_to_nat cs + c
+</code></pre>
 
-<h1 id="the-overall-structure-im-used-to">The overall structure I’m used to</h1>
+<p>Clearly, this is an injection from finite paths in k-ary trees to the
+naturals.  There’s only a tiny difference with the normal positional
+encoding of naturals in base <code>k</code>: there is no 0, and digits instead
+include <code>k</code>.  This prevents us from padding a path with zeros, which
+would map multiple paths to the same natural.</p>
 
-<p>There are tons of ways to describe a plan.  I like this one, but the
-main thing is what I have in mind when I read each section.  For
-instance, <a href="/images/2014-03-23-what-i-look-for-in-gsoc-proposals/regalloc-abarch.pdf">last year’s proposal for register allocation via graph colouring (PDF)</a> had:</p>
+<p>We only have to show that <code>path_to_nat</code> is a bijection between finite
+paths and naturals.  I’ll do that by constructing an inverse that is
+total on the naturals.</p>
+
+<pre><code>nat_to_path 0 = []
+nat_to_path n = let c = pop n
+                in c : nat_to_path (n - c) / k
+</code></pre>
+
+<p>where <code>pop</code> is a version of the <code>mod k</code> that returns <code>k</code> instead of 0:</p>
+
+<pre><code>pop n = let c = n `mod` k
+        in 
+         if (c != 0)
+          then c
+          else k
+</code></pre>
+
+<p>The base case is <code>nat_to_path 0 = []</code>.</p>
+
+<p>In the induction step, we can assume that <code>path_to_nat cs = n</code> and
+that <code>nat_to_path n = cs</code>.  We only have to show that, for any
+\(1 \leq c \leq k\), <code>nat_to_path path_to_nat c:cs = c:cs</code>.  Let 
+<code>n' = path_to_nat c:cs = k * n + c</code>.</p>
+
+<p>\[n\sp{\prime} = kn + c \equiv c\quad \mod k,\]
+so <code>pop n'</code> will correctly return <code>c</code> (and <code>k</code> rather than 0).  It’s
+then a tiny bit of algebra to show that <code>(n' - c) / k = n</code>, and we
+fall back to the induction hypothesis.</p>
+
+<p>This scheme is so simple that I wound up coding a version of
+<code>heapsort(3)</code> that lets callers choose the heap’s arity at runtime.
+Higher arity heaps perform more comparisons but fewer swaps than
+binary heaps; the tradeoff is profitable when sorting large items.
+It seems to me that, for decades, we’ve been presenting implicit heaps
+and heapsort in a way that marginally simplifies the binary case at
+the expense of obscuring the elegant general case.</p>
+
+<h1 id="array-permutations-as-algebra-on-positional-number-systems">Array permutations as algebra on positional number systems</h1>
+
+<p>Bit reversing an array of length \(2\sp{l}\) sends the element <code>x[i]</code> to
+<code>x[j]</code>, where the binary representation of <code>i</code> (including padding up
+to <code>l</code> bits) is the reverse of <code>j</code>.  For example, in an array of
+length 16, <code>3 = 0011</code> becomes <code>1100 = 12</code>.</p>
+
+<p>Reversing a fixed-width integer’s binary representation is its
+self-inverse, so bit reversing an array is a sequence of swaps.  This
+means that the permutation can be performed in-place, as a series of
+independent swaps.  Bit reversal used to be slow on cached machines:
+contiguous elements (with indices that only vary in their low order
+bits) swap with far-off elements (indices that only vary in their high
+order bits).  Worse, the stride between the latter elements is a large
+power of two, which causes all sorts of aliasing issues.  Workarounds
+(see
+<a href="http://home.eng.iastate.edu/~zzhang/publications/tr99-sc-bitrev.pdf">Zhang 99 (PDF)</a>)
+mostly end up implementing a software cache with explicit buffers.
+Nowadays, even L1 caches have such a high associativity that aliasing
+is a much less important issue.</p>
+
+<p><a href="https://github.com/pkhuong/Napa-FFT3">Napa-FFT3</a> implements bit
+reversals by calling a few specialised functions that only swap the
+lower and higher bits; the main routine iterates over an array of
+precomputed middle bit reversals (similar to
+<a href="http://www.idi.ntnu.no/~elster/pubs/">various publications of Elster’s</a>,
+but recursing on the middle bits first).  In this implementation, the
+number of L1 cache misses incurred by bit reversing an array is only
+slightly greater than the compulsory misses.  Bit reversal isn’t free,
+but it’s also not clear that autosorting FFTs are quicker than
+out-of-order FFTs followed by a bit reversal pass.</p>
+
+<p>Bit reversal is the only array permutation I’ve seen described in
+terms of its effect on indices.  I think it’s a fruitful avenue for
+other in-place permutations.</p>
+
+<p>For example, the viewpoint makes it clear how to transpose a matrix of
+dimensions \(2\sp{m} \times 2\sp{n}\) with a sequence of in-place
+bit reversals (each \(i\sb{k}\) and \(j\sb{l}\) is a bit in the
+index’s binary representation).</p>
+
+<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/bit-reverse-transpose.jpg" /></p>
+
+<p>For a row-major layout, the sketch above corresponds to:</p>
 
 <ol>
-  <li>the project’s aim, with a description of the high level goal (better
-register allocation) and of mechanisms to implement (new allocation
-heuristic, live range splitting and coalescing, etc.);</li>
-  <li>a plan section, describing each proposed step (find examples of bad
-allocation, write a new simple allocator, write a visualisation tool,
-…) in details;</li>
-  <li>a schedule at a 2-week granularity, with references to the detailed
-descriptions and deliverables for each step;</li>
-  <li>a list of risks and challenges in the project;</li>
-  <li>a short cv;</li>
-  <li>why the student felt motivated and suitable for the project.</li>
+  <li>bit reverse each row of length \(2\sp{n}\) in place;</li>
+  <li>bit reverse the whole vector of length \(2\sp{m + n}\) in place;</li>
+  <li>bit reverse each new row of length \(2\sp{m}\) in place.</li>
 </ol>
 
-<p>It’s a different structure than what I suggest below, but both mostly
-present the same information.  My wish is to feel confident that the
-student has done the work to have that information.</p>
+<p>Bit reversal, like all other permutations, is a reversible linear
+operation. We can thus change the order of operation if we want to.
+For example, it’s not necessarily preferable to bit-reverse contiguous
+rows first.  We could also flip the high-order bits of the indices:
+rather than swapping scalars, we would swap rows.  Separately bit
+reversing contiguous rows works best when each row fits in cache.  Bit
+reversing columns instead amortises the bad access pattern inherent to
+bit reversal by spending more time on each swap: swapping rows is
+slower than swapping scalars, but also very efficients with regards to
+(streaming!) I/O.</p>
 
-<p>First, a description of the goal.  SBCL offers
-<a href="http://www.sbcl.org/gsoc2014/ideas/">prefab proposals</a>, and it’s
-tempting to just copy-paste.  However, I feel much more confident in
-the intrinsic motivation of a student who’s made the project their
-own.  Many of our suggestions are skeletons for projects; it should be
-easy to come up with ways to extend and better specify them according
-to the student’s interests.  Others are already fleshed out; those
-are a bit harder, but even small variations on the initial theme
-are encouraging.  In all cases, if I don’t feel like the student owns
-the project, I probably won’t rank the proposal highly, and certainly
-won’t be inclined to mentor them.  The problem statement is a simple
-way to demonstrate one’s understanding of – and interest for – the
-project.</p>
+<p>This is interesting because in-place transposition of rectangular
+matrices is hard, and transposition is already a bad fit for caches.
+Transposing matrices with a sequence of bit reversals might just be
+practical.  In fact, that’s what I intend to do in Napa-FFT3 for
+multi-dimensional DFTs: we can fuse all but the middle whole-vector
+bit reversal with mixed-radix FFTs (and the latter might similarly
+benefit from operating on [sub-]rows rather than scalars).</p>
 
-<p>Second, a review of the current environment.  What currently exists,
-in SBCL or elsewhere? Can we exploit interesting research or code?
-Has there been previous efforts, and how/why did they not pan out?
-Perhaps there’s a relevant post-mortem from a similar project that
-will help understand the problem domain.  What potential difficulties
-do we know of?  What don’t we know (known unknowns)?  How bad do we
-estimate unknown unknowns to be, and why?  What persons or resources
-could be helpful?  To a certain extent, this is simply demonstrating
-that one’s done their due diligence.  However, it also tells other
-people (e.g., potential mentors) how they can best work with the
-applicant.  This section should be a good resource to re-read when bad
-things happen.</p>
+<p>One obvious question now appears: can we generalise the trick to
+general dimensions?  It’s pretty clear that we can do it for any other
+base \(b\) and matrices of dimension \(b\sp{m} \times b\sp{n}\)
+(it’s interesting how highly composite numbers dimensions are easy to
+transpose, and, IIRC, so are coprime ones).  What if there’s no such
+factorisation?  The best I can do is “more or less.”</p>
 
-<p>Third, the suggested course of action at a high level.  Not only what
-would happen in a perfect execution, but, ideally, ways to address (ahead
-of time or when/if they occur) some of the difficulties and unknowns
-listed in the previous section.</p>
+<p>For arbitrary matrix dimensions \(m \times n\), I think it’s best to
+decompose indices in a mixed radix (but still positional) number
+system.  For example, a \(63 \times 21\) matrix might have indices in
+radix \(3,7\ |\ 3,7,3\).  Given this number system, matrix
+transposition is</p>
 
-<p>Fourth, success indicators, a translation of the initial goal
-description into a few checkboxes.  Ideally, the criteria are
-falsifiable… much like an experiment, with the null hypothesis being
-project failure.  I find that checking even a few of these boxes gives
-me a good sense of closure on a project.</p>
+<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/concrete-mixed-radix.jpg" /></p>
 
-<p>Finally the calendar, to show how one might execute the third section
-and satisfy the success indicators in the fourth section.  The first
-few weeks are usually easy to envision, but proposals tend to become
-fuzzier with time.  I’m more confident in proposals that only use one
-or two -week periods, with <em>actions</em> and a few testable for each
-period.  Shorter periods make fuzziness more obvious, but, more
-importantly, they combine with the milestones to let us tell that
-we’re (or aren’t) getting traction.</p>
+<p>It’s a small generalisation to let the radices be \(a,b\ |\ a,b,a\),
+for a matrix of dimension \(ab \times a\sp{2}b\).  We can then
+perform most of a matrix transposition by swapping positions of
+identical weight: first a full mixed-radix digit reversal (the weights
+are palindromic), followed by another mixed-radix reversal on the
+first three positions.</p>
 
-<p>In the unfortunate case that we’re somehow not making the expected
-progress, frequent milestones means we can tell more quickly that
-something is off.  We only have to make up for a one week setback
-rather than for a month, i.e., one quarter of the GSoC program.  The
-odds of outright project failure are lower, and we don’t risk feeling
-(as) down for wasting a month of work.</p>
+<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/general-mixed-radix.jpg" /></p>
 
-<p>One thing that I find particularly scary in project calendars are
-“Magic Happens” steps.  This seems more common with longer planning
-periods.  Many proposals are quite detailed with respect to
-preliminary work and research, and to final integration and
-documentation.  The issue is that most of the work is stashed in a 3-5
-week interval during which the actual project becomes completed.  It’s
-not clear what the student will do to get there (or even who will do
-the work ;).  Planning each week individually makes such steps
-obvious.</p>
+<p>This leaves the last chunk \(b\sb{2},a\sb{3}\), which should instead
+be \(a\sb{3},b\sb{2}\).  That’s another rectangular matrix tranpose,
+but smaller than the original one.  It might be practical to execute
+that last step with a straightforward out-of-place transpose: a
+smaller transpose needs less scratch space and may fit in cache.  We
+can also apply the same trick as for bit reversals and apply the
+transpose before everything else, by permuting rows rather than
+scalars.  The simplest way to do that is to transpose a matrix of
+pointers before replicating the permutation on the actual data
+(glibc’s mergesort references Knuth vol. 3, exercise
+5.2-10).</p>
 
-<p>I know that it’s hard to determine how we’ll achieve a goal when
-we’ve never done something similar before.  But we can pretend.  I
-want to feel that an applicant has a clear idea how to execute the
-task they propose, if only in an artificial perfect world.  Otherwise,
-why should I believe they can do so in reality?</p>
+<p>Finally, this also works for \(a\sp{2}b \times ab\): matrix
+transposition is its own inverse, so we only have execute the inverse
+of each step, in reverse order.</p>
 
-<h1 id="planning-is-fiction">Planning is fiction</h1>
+<p>Definitely mixed results, but at least we have some intuition on why
+general rectangular transpositions are hard to perform in place:
+they’re hard to express as sequences of swaps.</p>
 
-<p>That’s it. I’m told that writers should show rather than tell.  I feel
-the same about plans.  I like to be shown how goals could be achieved
-in ideal and less-than-ideal worlds rather than told when steps will
-be completed.  I think the most important point is that I don’t
-appreciate detailed plans because we should (or can) stick to them.
-Rather, I believe that the exercise of coming up with such a plan is
-an efficient way to ensure we can fruitfully respond to what’ll
-actually happen when we execute it.</p>
+<h1 id="next-c-code-and-cycle-counts">Next: C code and cycle counts!</h1>
 
-<p>The regalloc proposal was one of the longest ones last year, but I
-felt confident that the student had a good idea of what challenges
-made the task non-trivial.  In the end, we followed only a small part
-of the plan: it’s hard to come up with a suite of bad regalloc
-examples, visualisation turned out not to scale to real code, and
-there was too little time to work on live range splitting.  However,
-every time there was a change, Alexandra had no problem determining
-how to adjust the schedule and figuring out the next step.  On my end,
-I could easily follow the modified schedule and see that we were
-making progress.</p>
+<p>This post is the more theoretical prologue to
+<a href="/Blog/2014/04/13/k-ary-heapsort/">a low-level look</a>
+at <code>qsort(3)</code>: I really wanted to make sure the nice implicit tree
+layout in the first section had the space it deserves.</p>
 
-<p>This planning exercise is not easy, and it’s certainly not quick.
-(FWIW, I find it useful to get someone else, even without relevant
-experience, to look at the plan and ask questions.)  Action plans have
-helped me countless times: when I needed to react to problems; when I
-felt like I was running in circles but could tell <em>for sure</em> that I
-was making progress; when a project forcibly came to an end but I
-still had a sense of closure… Hopefully, they can do the same for SBCL
-GSoC students.</p>
+<p>I tried to make in-order implicit trees fit in this number system
+approach. I can’t see how.  The problem is that in-order trees
+associate ranges (rather than indices) with nodes; for example, at
+what depth is index 1000? It depends on the size of the search
+tree. It might be the root (in a tree of 2000 vertices) or a leaf (in
+a tree of 1001 vertices).</p>
 </div>
   
   

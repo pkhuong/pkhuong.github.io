@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2017/09/24/rendezvous-hashing-my-baseline-consistent-distribution-method/">Rendezvous hashing: my baseline "consistent" distribution method</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2018/06/24/an-old-conjecture-on-stream-transducers/">An old conjecture on stream transducers</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Sept
+June
   
 24th, 
-2017
+2018
 
 
 
 
         
-         | <a href="/Blog/2017/09/24/rendezvous-hashing-my-baseline-consistent-distribution-method/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2017/09/24/rendezvous-hashing-my-baseline-consistent-distribution-method/"
+         | <a href="/Blog/2018/06/24/an-old-conjecture-on-stream-transducers/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2018/06/24/an-old-conjecture-on-stream-transducers/"
 	      >Comments</a>
         
         
@@ -116,204 +116,61 @@ Sept
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><small><em>2017-10-15: Tweaked the hash merge function to actually deliver the claims (one-universality isn’t enough).</em></small></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>I’ve been thinking about stream processing again, and came back to 
+<a href="https://www.pvk.ca/Blog/Lisp/Pipes/introducing_pipes.html">an old pick-two-of-three conjecture</a>
+of mine: for stream processing without dynamic allocation, “arbitrary
+outputs per input, multiple consumers, multiple producers: choose
+two.”</p>
 
-<p>Whenever I mention a data or work distribution problem where I
-ideally want everything related to a given key to hit the same
-machine, everyone jumps to <a href="http://courses.cse.tamu.edu/caverlee/csce438/readings/consistent-hashing.pdf">consistent hashing</a>.  I don’t know how this technique achieved the mindshare it has,
-although I suspect <a href="http://www.read.seas.harvard.edu/~kohler/class/cs239-w08/decandia07dynamo.pdf">Amazon’s 2007 Dynamo DB paper</a>
-is to blame (by introducing the problem to many of us, and mentioning
-exactly one decentralised solution)… or maybe some Google interview
-prep package.</p>
+<p>The question is interesting because stream processing
+in constant space is a subset of <a href="https://complexityzoo.uwaterloo.ca/Complexity_Zoo:L">L</a>
+(or <a href="https://en.wikipedia.org/wiki/FL_(complexity)">FL</a>, and thus
+probably not P-complete, let alone Turing complete. Having easily characterisable
+subsets of stream processing that can be implemented in constant
+space would be a boon for the usability of stream DSLs.</p>
 
-<p><small>Karger et al’s paper doesn’t help, since they introduce the
-generic concept of a consistent hash function and call their
-specific solution… “consistent hashing.”  I’m not sure where I first
-encountered rendezvous hashing, but I vaguely remember a technical
-report by Karger,  so it’s probably not some MIT vs UMich thing.</small></p>
+<p>I think I find this academic trope as suspicious as 
+<a href="https://twitter.com/DRMacIver">@DRMavIver</a> 
+does, so I have mixed feelings about the fact that this one still
+feels true seven years later.</p>
 
-<p>Regardless of the reason for consistent hashing’s popularity, I feel
-the go-to technique should instead be <a href="http://www.eecs.umich.edu/techreports/cse/96/CSE-TR-316-96.pdf">rendezvous hashing</a>.  Its basic
-form is simple enough to remember without really trying (one of those <a href="https://www.pvk.ca/Blog/2015/04/26/pointer-less-scapegoat-trees/">desert island</a>
-algorithms), it is more memory efficient than consistent hashing in
-practice, and its downside–a simple implementation assigns a location
-in time linear in the number of hosts–is not a problem for small
-deployments, or even medium (a couple racks) scale ones if you
-actually think about failure domains.</p>
+<blockquote class="tw-center-align twitter-tweet" data-lang="en"><p lang="en" dir="ltr">Is it just me or do impossibility theorems which claim &quot;these three obviously desirable properties cannot simultaneously be satisfied&quot; always include at least one obviously undesirable or at least suspicious property?</p>&mdash; David R. MacIver (@DRMacIver) <a href="https://twitter.com/DRMacIver/status/1008977092028059648?ref_src=twsrc%5Etfw">June 19, 2018</a></blockquote>
+<script async="" src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
 
-<p><small>Side question: why did rendez-vous have to lose its hyphen to cross the Channel?</small></p>
+<p>The main reason I believe in this conjecture is the following
+example, <code>F(S(X), X)</code>, where <code>S</code> is the function that takes a stream
+and ouputs every other value. Or, more formally, \(F\sb{i} = f(X\sb{2i}, X\sb{i})\).</p>
 
-<p>Basic rendezvous hashing takes a distribution key (e.g., a filename),
-and a set of destinations (e.g., hostnames).  It then uses a hash function
-to pseudorandomly map each <code>(distribution_key, destination)</code> pair to a
-value in <code>[0, 1)</code> or <code>[0, 2^64 - 1)</code>, and picks the destination that
-gives the minimal hash value.  If it needs <code>k</code> destinations for
-redundancy, it can pick the destinations that yield the least <code>k</code> hash
-values.  If there are ties (unlikely with a good hash function), it
-breaks them arbitrarily but consistently, e.g., by imposing a total
-order on hostnames.</p>
+<p><img class="center" src="/images/2018-06-24-an-old-conjecture-on-stream-transducers/network.png" /></p>
 
-<p>A Python implementation could look like the following.</p>
+<p>Let’s say <code>X</code> is some stream of values that can’t be easily
+re-computed (e.g., each output value is the result of a slow
+computation). How do we then compute <code>F(S(X), X)</code> without either
+recomputing the stream <code>X</code>, or buffering an unbounded amount of past
+values from that stream? I don’t see a way to do so, not just in any
+stream processing DSL (domain specific language), but also in any
+general purpose language.</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>basic rendezvous hashing </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="n">Destination</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s">&#39;Destination&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s">&#39;host&#39;</span><span class="p">,</span> <span class="s">&#39;hash&#39;</span><span class="p">])</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">merge_hashes</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
-</span><span class="line">    <span class="sd">&quot;&quot;&quot;murmurhash3 mix.  Alternatively, ((x | 1) * (y | 1)) % 2**64 should</span>
-</span><span class="line"><span class="sd">    be fine.</span>
-</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="n">x</span> <span class="o">^</span> <span class="n">y</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">^=</span> <span class="n">acc</span> <span class="o">&gt;&gt;</span> <span class="mi">33</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="p">(</span><span class="n">acc</span> <span class="o">*</span> <span class="mh">0xff51afd7ed558ccd</span><span class="p">)</span> <span class="o">%</span> <span class="mi">2</span><span class="o">**</span><span class="mi">64</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">^=</span> <span class="n">acc</span> <span class="o">&gt;&gt;</span> <span class="mi">33</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="p">(</span><span class="n">acc</span> <span class="o">*</span> <span class="mh">0xc4ceb9fe1a85ec53</span><span class="p">)</span> <span class="o">%</span> <span class="mi">2</span><span class="o">**</span><span class="mi">64</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">^=</span> <span class="n">acc</span> <span class="o">&gt;&gt;</span> <span class="mi">33</span>
-</span><span class="line">    <span class="k">return</span> <span class="n">acc</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">pick_destinations</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">destinations</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
-</span><span class="line">    <span class="n">key_hash</span> <span class="o">=</span> <span class="n">hash_key</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>  <span class="c"># hash the key once, instead of hash(key + host)</span>
-</span><span class="line">    <span class="n">annotated</span> <span class="o">=</span> <span class="p">[(</span><span class="n">merge_hashes</span><span class="p">(</span><span class="n">key_hash</span><span class="p">,</span> <span class="n">dest</span><span class="o">.</span><span class="n">hash</span><span class="p">),</span> <span class="n">dest</span><span class="o">.</span><span class="n">host</span><span class="p">)</span>
-</span><span class="line">                 <span class="k">for</span> <span class="n">dest</span> <span class="ow">in</span> <span class="n">destinations</span><span class="p">]</span>
-</span><span class="line">    <span class="n">ordered</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">annotated</span><span class="p">)</span>  <span class="c"># lexicographic sort on merged hash, host.</span>
-</span><span class="line">    <span class="k">return</span> <span class="p">[</span><span class="n">host</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">ordered</span><span class="p">[:</span><span class="n">k</span><span class="p">]]</span>  <span class="c"># grab host from the first k</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>For me, the essence of the problem is that the two inputs to <code>F</code> are
+out of sync with respect to the same source of values, <code>X</code>: one
+consumes two values of <code>X</code> per invocation of <code>F</code>, and the other only
+one. This issue could also occur if we forced stream transducers
+(processing nodes) to output a fixed number of value at each
+invocation: let <code>S</code> repeat each value of <code>X</code> twice,
+i.e., interleave <code>X</code> with <code>X</code> (\(F\sb{i} = f(X\sb{\lfloor i / 2\rfloor}, X\sb{i})\)).</p>
 
-<p>We only need to store the list of destinations, and we can convince
-ourselves that data distribution is pretty good (close to uniform) and
-that small changes in the set of destinations only affects a small
-fraction of keys (those going to destinations added/removed), either
-with pen and paper or with a few simulations.  That compares
-positively with consistent hashing, where a practical implementation
-has to create a lot (sometimes hundreds) of pseudo-nodes for each real
-destination in order to mitigate clumping in the hash ring.</p>
+<p>Forcing each invocation of a transducer to always produce exactly one
+value is one way to rule out this class of stream processing network.
+Two other common options are to forbid either forks (everything is
+single-use or subtrees copied and recomputed for each reuse) or
+joins (only single-input stream processing nodes).</p>
 
-<p>The downside is that we must iterate over all the nodes, while
-consistent hashing is easily \(\mathcal{O}(\log n)\) time, or even
-\(\mathcal{O}(\log \log n)\), with respect to the number of (pseudo-)nodes.
-However, that’s only a problem if you have a lot of nodes, and
-rendezvous hashing, unlike consistent hashing, does not inflate the
-number of nodes.</p>
-
-<p>Another thing I like about rendezvous hashing is that it naturally
-handles weights.  With consistent hashing, if I want a node to receive
-ten times as much load as another, I create ten times more
-pseudo-nodes.  As the greatest common divisor of weights
-shrinks, the number of pseudo-node per node grows, which makes
-distribution a bit slower, and, more importantly, increases memory
-usage (linear in the number of pseudo-nodes).  Worse, if you hit the
-<a href="https://en.wikipedia.org/wiki/Fundamental_theorem_of_arithmetic">fundamental theorem of arithmetic</a>
-(as a coworker once snarked out in a commit message), you may have
-to rescale <em>everything</em>, potentially causing massive data movement.</p>
-
-<p>Rendezvous hashing generates pseudorandom scores by hashing, and ranks
-them to find the right node(s).  Intuitively, we want to use weights
-so that the distribution of pseudorandom scores generated for a node A
-with twice the weight as another node B has the same shape as that of
-node B, but is linearly stretched so that the average hash value for A is
-twice that for B.  We also want the distribution to cover <code>[0, infty)</code>, 
-otherwise a proportion of hashes will always go to the heavier node,
-regardless of what the lighter node hashes to, and that seems wrong.</p>
-
-<p>The <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.414.9353&amp;rep=rep1&amp;type=pdf">trick</a>,
-as explained by <a href="http://www.snia.org/sites/default/files/SDC15_presentations/dist_sys/Jason_Resch_New_Consistent_Hashings_Rev.pdf">Jason Resch</a>
-at Cleversafe, is to map our hashes from uniform in <code>[0, 1)</code> to
-<code>[0, infty)</code> not as an exponential, but with <code>-weight / log(h)</code>.  If you
-simulate just using an exponential, you can quickly observe that it
-doesn’t reweigh things correctly: while the mean is correctly scaled,
-the mass of the probability density function isn’t shifted quite right.
-Resch’s proof of correctness for this tweaked exponential fits on a
-<a href="https://twitter.com/pkhuong/status/799759031896309760">single page</a>.</p>
-
-<p>The Python code becomes something like:</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>weighted rendezvous hashing </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="n">Destination</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s">&#39;Destination&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s">&#39;host&#39;</span><span class="p">,</span> <span class="s">&#39;hash&#39;</span><span class="p">,</span> <span class="s">&#39;weight&#39;</span><span class="p">])</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">score</span><span class="p">(</span><span class="n">hash_value</span><span class="p">,</span> <span class="n">weight</span><span class="p">):</span>
-</span><span class="line">    <span class="k">return</span> <span class="o">-</span><span class="n">weight</span> <span class="o">/</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">hash_value</span> <span class="o">/</span> <span class="n">HASH_MAX</span><span class="p">)</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">pick_destinations</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">destinations</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
-</span><span class="line">    <span class="n">key_hash</span> <span class="o">=</span> <span class="n">hash_key</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
-</span><span class="line">    <span class="n">annotated</span> <span class="o">=</span> <span class="p">[(</span><span class="n">score</span><span class="p">(</span><span class="n">merge_hashes</span><span class="p">(</span><span class="n">key_hash</span><span class="p">,</span> <span class="n">dest</span><span class="o">.</span><span class="n">hash</span><span class="p">),</span> <span class="n">dest</span><span class="o">.</span><span class="n">weight</span><span class="p">),</span> <span class="n">dest</span><span class="o">.</span><span class="n">host</span><span class="p">)</span>
-</span><span class="line">                 <span class="k">for</span> <span class="n">dest</span> <span class="ow">in</span> <span class="n">destinations</span><span class="p">]</span>
-</span><span class="line">    <span class="n">ordered</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">annotated</span><span class="p">)</span>
-</span><span class="line">    <span class="k">return</span> <span class="p">[</span><span class="n">host</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">ordered</span><span class="p">[:</span><span class="n">k</span><span class="p">]]</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>There are obvious micro-optimisations here (for example, computing
-the inverse of the score lets us precompute the reciprocal of each
-destination’s weight), but that’s all details.  The salient part to me
-is that space and time are still linear in the number of nodes,
-regardless of the weights; consistent hashing instead needs space
-pseudolinear(!) in the weights, and is thus a bit slower than its
-\(\mathcal{O}(\log n)\) runtime would have us believe.</p>
-
-<p>The linear-time computation for weighted rendezvous hashing is also
-CPU friendly.  The memory accesses are all linear and easily
-prefetchable (load all metadata from an array of nodes), and the
-computational kernel is standard vectorisable floating point
-arithmetic.</p>
-
-<p>In practice, I’m also not sure I ever really want to distribute
-between hundreds of machines: what kind of failure/resource allocation
-domain encompasses that many equivalent nodes?  For example, when
-distributing data, I would likely want a hierarchical
-consistent distribution scheme, like <a href="https://www.crss.ucsc.edu/media/papers/weil-sc06.pdf">Ceph’s CRUSH</a>:
-something that first assigns data to sections of a datacenter, then to
-racks, and only then to individual machines.  I should never blindly
-distribute data across hundreds of machines; I need to distribute
-between a handful of sections of the network, then one of a dozen
-racks, and finally to one of twenty machines.  The difference between
-linear and logarithmic time at each level of this “failure trie” is
-marginal and is easily compensated by a bit of programming.</p>
-
-<p>The simplicity of basic rendezvous hashing, combined with its minimal
-space usage and the existence of a weighted extension, makes me
-believe it’s a better initial/default implementation of consistent
-hash functions than consistent hashing.  Moreover, consistent
-hashing’s main advantage, sublinear-time distribution, isn’t
-necessarily compelling when you think about the whole datacenter (or
-even many datacenters) as a resilient system of failure-prone domains.
-Maybe rendezvous hashing deserves a rebranding campaign (:</p>
+<p>I don’t think this turtle-and-hare desynchronisation problem is a
+weakness in stream DSLs, I only see a reasonable task that can’t be
+performed in constant space.  Given the existence of such tasks, I’d
+like to see stream processing DSLs be explicit about the tradeoffs
+they make to balance performance <em>guarantees</em>, expressiveness, and
+usability, especially when it comes to the performance model.</p>
 </div>
   
   

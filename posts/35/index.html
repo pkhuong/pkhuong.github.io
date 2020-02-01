@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2013/06/23/bitsets-match-regular-expressions/">Bitsets match regular expressions, compactly</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2013/11/22/the-weaknesses-of-sbcls-type-propagation/">The weaknesses of SBCL's type propagation</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-June
+Nov
   
-23rd, 
+22nd, 
 2013
 
 
 
 
         
-         | <a href="/Blog/2013/06/23/bitsets-match-regular-expressions/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2013/06/23/bitsets-match-regular-expressions/"
+         | <a href="/Blog/2013/11/22/the-weaknesses-of-sbcls-type-propagation/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2013/11/22/the-weaknesses-of-sbcls-type-propagation/"
 	      >Comments</a>
         
         
@@ -116,370 +116,272 @@ June
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>This post describes how graph and automata theory can help compile a
-regular expression like “ab(cd|e)*fg” into the following
-asymptotically (linear-time) and practically (around 8
-cycles/character on my E5-4617) efficient machine code.  The technique
-is easily amenable to SSE or AVX-level vectorisation, and doesn’t rely
-on complicated bit slicing tricks nor on scanning multiple streams in
-parallel.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><em>I’ll be defending on Friday, December 13th; that will likely
+mark the end of my copious free time. I hope to write a couple more
+braindumps on SBCLy topics in the near future, before I forget
+everything.</em></p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>matcher inner loop </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">;     8F70: L1:   4839D9           CMP RCX, RBX  ; look for end of string
-</span><span class="line">;     8F73:       7D6C             JNL L5
-</span><span class="line">;     8F75:       488BC1           MOV RAX, RCX
-</span><span class="line">;     8F78:       48D1F8           SAR RAX, 1
-</span><span class="line">;     8F7B:       410FB6440001     MOVZX EAX, BYTE PTR [R8+RAX+1] ; read character
-</span><span class="line">;     8F81:       48D1E2           SHL RDX, 1
-</span><span class="line">;     8F84:       488B35F5FEFFFF   MOV RSI, [RIP-267]         ; #(0 0 0 0
-</span><span class="line">                                                              ;   ...)
-</span><span class="line">;     8F8B:       0FB6440601       MOVZX EAX, BYTE PTR [RSI+RAX+1] ; load mask from LUT
-</span><span class="line">;     8F90:       48D1E0           SHL RAX, 1    ; only data-dependent part of
-</span><span class="line">;     8F93:       4821C2           AND RDX, RAX  ;  transition
-</span><span class="line">;     8F96:       F6C258           TEST DL, 88   ; if any of states 2,3,5 are active
-</span><span class="line">;     8F99:       BE00000000       MOV ESI, 0    ;  [fixnums are tagged with a low 0 bit]
-</span><span class="line">;     8F9E:       41BB58000000     MOV R11D, 88  ; all of them are
-</span><span class="line">;     8FA4:       490F45F3         CMOVNE RSI, R11
-</span><span class="line">;     8FA8:       4809F2           OR RDX, RSI   ; now active
-</span><span class="line">;     8FAB:       4885D2           TEST RDX, RDX ; if no state is active
-</span><span class="line">;     8FAE:       751C             JNE L3
-</span><span class="line">;     8FB0:       488BD1           MOV RDX, RCX  ; return... :'( 
-</span><span class="line">;     8FB3:       BF17001020       MOV EDI, 537919511 ; we're working on
-</span><span class="line">;     8FB8: L2:   488D5D10         LEA RBX, [RBP+16]  ; moving such code block
-</span><span class="line">;     8FBC:       B904000000       MOV ECX, 4         ; out of inner loops.
-</span><span class="line">;     8FC1:       BE17001020       MOV ESI, 537919511
-</span><span class="line">;     8FC6:       F9               STC
-</span><span class="line">;     8FC7:       488BE5           MOV RSP, RBP
-</span><span class="line">;     8FCA:       5D               POP RBP
-</span><span class="line">;     8FCB:       C3               RET
-</span><span class="line">;     8FCC: L3:   4883C102         ADD RCX, 2
-</span><span class="line">;     8FD0: L4:   480FBAE208       BT RDX, 8     ; if we're not at the accept state
-</span><span class="line">;     8FD5:       7399             JNB L1        ; loop back</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>SBCL is known for its flow-sensitive type propagation pass… or,
+rather, for its effects. That is probably why it can be so shocking
+when SBCL fails to infer obvious invariants. I feel like I can now
+describe the root causes of these surprising weaknesses and propose a
+series of fixes. Coding that up would likely take months, but the
+result should be more precise type propagation with improved
+asymptotic efficiency, and even a tunable knob between precision and
+compile times.</p>
 
-<h2 id="bitap-algorithms">Bitap algorithms</h2>
+<p>The compiler in SBCL, Python, doesn’t work on an IR in SSA form, nor
+does it convert internally to CPS à la Rabbit/Orbit. However, a clever
+– I don’t recall seeing it described anywhere else – design decision
+achieves similar effects. Operations receive their arguments as linear
+vars (LVARs) and write their results to an LVAR. Each LVAR has exactly
+one destination (one reader node), and, on any execution path, can only be
+used (written to) by one node. LVARs may nevertheless have multiple
+uses: these correspond to the value of conditionals and of conditional
+non-local exits. Assignment and access to lexical variables are
+represented as SET and REF nodes that receive and produce values
+through LVARs. This means that nearly everything can work in terms of
+LVARs when manipulating code and reasoning about dataflow. The
+conversion of read-once lexical variables to LVARs further simplifies
+a lot of mostly functional code.</p>
 
-<p>The
-<a href="http://en.wikipedia.org/wiki/Bitap_algorithm">canonical bitap algorithm</a>
-matches literal strings, e.g. “abad”.  Like other bitap algorithms, it
-exploits the fact that, given a bitset representation of states, it’s
-easy to implement transfer functions of the form “if state \( i \) was
-previously active and we just consumed character \( c \), state \(
-i+1 \) is now active”.  It suffices to shift the bitset
-representation of the set of active states by 1, and to mask out
-transitions that are forbidden by the character that was just
-consumed.</p>
+<p>Python takes this split to the extreme: only the constraint (type)
+propagation pass really handles full-blown lexical
+variables. Everything else depends on the flow-sensitive type
+information summarised in CFG nodes and joined in LVARs. Want to check
+whether a given argument is always positive? Simply test for subtyping
+on the LVAR’s derived type to implicitly leverage flow-sensitive type
+information. Want to insert some computation (e.g. a type assertion or
+an explicit modulo for overflowing arithmetic) between a value and its
+destination? Insert a new node in the CFG and substitute around
+nothing but opaque LVARs.  These operations are so natural in Python
+that I only recently realised the design decision that makes them so
+easy.</p>
 
-<p>For example, when matching the literal string “abad”, a state is
-associated with each position in the pattern.  0 is the initial state,
-1 is the state when we’ve matched the first ‘a’, 2 after we’ve also
-matched ‘b’, 3 after the second ‘a’, and 4 after ‘d’, the final
-character, has been matched.  Transposing this information gives us
-the information we really need: ‘a’ allows a transition from 0 to 1
-and from 2 to 3, ‘b’ a transition from 1 to 2, and ‘d’ from 3 to 4.</p>
+<p>However, I believe that Python went too far in relegating lexical
+variables to only the constraint pass. That pass <em>only</em> handles
+lexical variables (LAMBDA-VARs) and flow-sensitive information about
+them, and only propagates three kinds of constraints (derived
+information):</p>
 
-<p>A trivial state machine is probably clearer.</p>
+<ol>
+  <li>lexical variable V is (is not) of type T at this program point
+(because of a type test or assertion);</li>
+  <li>lexical variable V is (is not) &lt; or &gt; than a value of type T at
+this program point (because of a comparison);</li>
+  <li>lexical variable V is (is not) EQL to an LVAR, to another lexical
+variable U, or to a constant at this program point (because of an
+assignment/reference to a variable or a comparison).</li>
+</ol>
 
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/abad.png" /></p>
+<p>The importance of EQL constraints is subtle. These constraints
+represent the way that, e.g., information about a lexical variable is
+also true of the result of a lookup for that variable’s value (and
+vice versa), even if that information is learned after the variable is
+accessed. Similarly, when two lexical variables are EQL, information
+about one is true of the other. Finally, equality with a constant is
+always useful for constant propagation.</p>
 
-<p>The initial state is in grey, the accept state is a double circle, and
-transitions are labelled with the character they accept.</p>
+<p>All three constraint types are centered on lexical variables. The
+reason is that no flow-sensitive information needs to be computed for
+LVARs: they are only used once. For example, if a type test is
+performed on an LVAR, that is the LVAR’s only appearance and there is
+no information to propagate… unless that information is also true
+of some lexical variable.</p>
 
-<p>Finding the substring “abad” in a long string thus reduces to a bunch
-of bitwise operations.  At each step, we OR bit 0 in the set of
-states: we’re always looking for the beginning of a new match.  Then,
-we consume a character.  If it’s ‘a’, the mask is 0b01010; if it’s
-‘b’, mask is 0b00100; if it’s ‘d’, mask is 0b10000; otherwise, its
-mask is 0.  Then, we shift the set of state left by 1 bit, and AND
-with mask.  The effect is that bit 1 is set iff mask has bit 1 set
-(and that only happens if the character is ‘a’), and bit 0 was
-previously set (… which is always the case), bit 2 is set iff mask has
-bit 2 set (i.e. we consumed a ‘b’) and bit 1 was previously set, etc.</p>
+<p>There’s some more clever engineering and the analysis is simplified by
+disregarding variables that may be assigned from closures, but that’s
+the gist of it. A vanilla dataflow analysis worklist loop propagates
+information around, and constraints sets for each basic block shrink
+until the least (in terms of types, greatest when measuring
+information) fixed point is reached.</p>
 
-<p>We declare victory whenever state 4 is reached, after a simple bit
-test.</p>
+<p>The first weakness is caused by the aforementioned cleverness:
+knowledge about the state of the world as each basic block is entered
+and exited is represented with sets of constraints (bitsets indexed
+with consecutive indices assigned to constraints on demand). In the
+interest of speed, join and meet are implemented as (bit-)set
+union/intersection. The problem with this approach is that it
+completely discards information about a lexical variable when it is
+not identically present in both sets. For example, when one
+predecessor says that V is a positive integer and another that V is an
+integer, their successor discards all information about the type of V.</p>
 
-<p>It’s pretty clear that this idea can be extended to wildcards or even
-character classes: multiple characters can have the same bit set to 1
-in their mask.  Large alphabets are also straightforward to handle:
-the mapping from character to mask can be any associative dictionary,
-e.g. a perfect hash table (wildcards and inverted character classes
-then work by modifying the default mask value).  This works not only
-with strings, but with any sequence of objects, as long as we can
-easily map objects to attributes, and attributes to masks.  Some
-thinking shows it’s even possible to handle the repetition operator
-“+”: it’s simply a conditional transition from state \( i \) to
-state \( i \).</p>
+<p>In practice, this is a lesser problem than it first appears to be:
+LVARs merge information about their multiple uses (writes) without any
+loss. The kind of code that suffers is code that does things like:
+    (lambda (x)
+      (ecase x
+        (1 …)
+        (2 …))
+      [work on X, knowing that it is either 1 or 2]) 
+The two branches of the ecase that eventually continue execution
+respectively derive that X is EQL to 1 and to 2. However, their shared
+successor combines that information by forgetting about both equalities
+rather than weakening/downgrading the two constraints into “X is of
+type (INTEGER 1 2).”</p>
 
-<p>What I find amazing is that the technique extends naturally to
-arbitrary regular expressions (or nondeterministic finite automata).</p>
+<p>Another interesting case is
+    (lambda (x)
+      (let ((y nil)) ; IF expression translated to an effectful IR
+        (if x
+            (setf y 1)
+            (setf y 2))
+        y)) 
+for which Python derives that the result is either 1, 2, or NIL (the
+union of all the values ever assigned to Y). The equivalent code
+<code>(lambda (x) (if x 1 2))</code> compiles everything to LVARs and the result is
+known to be either 1 or 2 even before constraint propagation.</p>
 
-<h2 id="shift-and-mask-for-regular-expressions">Shift and mask for regular expressions</h2>
+<p>This can be addressed with a redundant representation that adds, to
+each constraint set, a dictionary from lexical variables to the
+(downgradable) information known about them: their types and the types
+they’re known to be &lt; or &gt; than. When intersecting constraint sets,
+these dictionaries make it easy to weaken information and insert the
+corresponding constraints.</p>
 
-<p>Simulating an NFA by advancing a set of states in lockstep is an old
-technique.  Russ Cox has written a
-<a href="http://swtch.com/~rsc/regexp/">nice review of classic techniques to parse or recognize regular languages</a>.
-The NFA simulation was first described by
-<a href="http://www.fing.edu.uy/inco/cursos/intropln/material/p419-thompson.pdf">Thomson in 1977</a>,
-but it’s regularly being rediscovered as taking the Brzozowski
-derivative of regular expressions ;)</p>
+<p>The second weakness is deeply embedded in the structure of the
+compiler: the constraint propagation pass only pushes around
+pre-computed flow-insensitive information. That information is valid
+because the flow-insensitive pass (that computes things like the type
+of the values produced by each CFG node) works from an older (over)
+approximation of the flow-sensitive information. Once a fixed point is
+reached in the constraint propagation pass, the flow-insensitive pass
+is re-executed and information refined. In the end, there is a
+back-and-forth between the simple flow-sensitive constraint
+propagation pass and the flow-insensitive “optimization” pass that
+leverages a huge knowledge base about Common Lisp operators and
+functions.</p>
 
-<p><a href="http://neil.fraser.name/software/diff_match_patch/bitap.ps">Fast Text Searching With Errors</a>
-by Sun Wu and Udi Manber is a treasure trove of clever ideas to
-compile pattern matching, a symbolic task, into simple bitwise
-operations.  For regular expressions, the key insight is that the set
-of states can be represented with a bitset such that the transition
-table for the NFA’s states can be factored into a simple data-dependent
-part followed by \( \epsilon \)-transitions that are the same,
-regardless of the character consumed.  Even better: the NFA’s state
-can be numbered so that each character transition is from state \( i
-\) to \( i+1 \), and such a numbering falls naturally from the
-obvious way to translate regular expression ASTs into NFAs.</p>
+<p>That exchange of information not only takes many (hefty) iterations to
+converge, but is also lossy: the constraint propagation pass is
+flow-sensitive, but manipulates types based on an earlier pass or on
+type declarations. In effect, constraint propagation computes the
+least fixed point of a function that is defined by an earlier coarse
+upper approximation… a process that ends up preserving a lot of the
+initial weakness. This strange choice presents an interesting
+characteristic: every iteration the outer communication loop between
+flow -sensitive and -insensitive analysis produces valid (but overly
+conservative) information. So convergence is slow, but at least
+intermediate results can guide rewrites safely.</p>
 
-<p>For the initial example “ab(cd|e)*fg”, the AST looks like a node to
-match ‘a’, succeeded by a node to match ‘b’, then a repetition node
-into either “cd”, “e” or \( \epsilon \), and the repetition node is
-succeeded by “fg” (and, finally, accept).  Again, a drawing is much
-clearer!</p>
+<p>The obvious fix is to derive node types within the constraint
+propagation pass, even as the final result of the flow-sensitive pass
+is approximated from below. For example, upon assignment to a lexical
+variable, the current pass adds a new constraint: the type of that
+variable is that of the LVAR for the assignment’s value, and the
+LVAR’s type is computed based on the information from the previous
+constraint propagation pass. Instead, it should be based on the
+current (overly agressive) flow-sensitive information. That would
+eventually converge to a smaller fixed point. This alternative design
+would also obviate the need for a questionable hack that improves
+precision for some lucky iteration variables.</p>
 
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/naive-regexp.png" /></p>
+<p>A weaker form of this change would be to use preliminary (perhaps
+overly aggressive) information only to tentatively detect impossible
+conditional branches. This would enable Python to derive that the
+return value of
+    (lambda ()
+      (loop with x = 0
+            while (foo)
+            do (case x
+                 (1 (setf x 2))
+                 (2 (setf x 1)))
+            finally (return x)))
+is always 0 (and never 1 or 2), or that the expression <code>(if (eql x y) (eql x y) t)</code> is always true.</p>
 
-<p>Circles correspond to character-matching states, the square to a
-repetition node, the diamond to a choice node, and the pointy boxes to
-dummy states.  The final accept state is, again, a double circle.
-\( \epsilon \)-transitions are marked in blue, and regular
-transitions are labelled with the character they consume.</p>
+<p>With suitable handling of calls to local functions, useful types might
+even be derived for recursive functions. The current type propagation
+pass derives insanely stupid types for recursive functions and for
+assignment to variables in loops (unless the iteration variable hack
+suffices). For example
+    (lambda ()
+      (labels ((foo (x)
+                 (if (bar)
+                     (foo (1+ x))
+                     x)))
+        (foo 42))) 
+is derived to return an arbitrary NUMBER. Instead, the return type of
+local functions can be initialised to the empty type (in which case
+propagation must be stopped for the caller block) and extended as
+argument types grow and as recursion triggers more propagation.</p>
 
-<p>The nodes are numbered according to a straight depth-first ordering in
-which children are traversed before the successor.  As promised,
-character transitions are all from \( i \) to \( i+1 \), e.g. 0 to
-1, 1 to 2, 6 to 7, … This is a simple consequence of the fact that
-character-matching nodes have no children and a single successor.</p>
+<p>The problem is that this more precise flow-sensitive pass loses the
+finite chain condition: there is no guarantee that the least fixed
+point will always be reached in finite time. The current constraint
+propagation pass operates on a finite lattice: only variables and
+types that exist in the input IR1 graph can appear in constraints, so
+the fixpointed function is defined over the powerset of this finite
+set of constraints for each basic block. In contrast, the full CL type
+universe is most definitely not finite (type tests aren’t even
+decidable in general).</p>
 
-<p>This numbering is criminally wasteful.  States 3, 6 and 10 serves no
-purpose, except forwarding \( \epsilon \) transitions to other
-states.  The size of the state machine matters because bitwise
-operations become less efficient when values larger than a machine
-word must be manipulated.  Using fewer states means that larger
-regular expressions will be executed more quickly.</p>
+<p>There is a simple solution to this problem: before extending the
+constraint universe, widen types to satisfy the finite chain
+condition, i.e., make sure that types eventually stop growing. For
+example, when taking a non-trivial union or intersection of types, the
+result could be quantised to a coarse set of types (singleton types,
+named class types, a few key numeric ranges, etc.). Appropriate
+widening can also accelerate finite but slow convergence; the
+resulting fixed point isn’t guaranteed to be minimal, but is always
+valid. In fact, widening is likely to be necessary for the first
+improvement (with redundant dictionaries) as well.</p>
 
-<p>Eliminating them and sliding the numbers back yields the something
-equivalent to the more reasonable 11-state machine shown in Wu and
-Manber (Figure 3 on page 10).  Simply not assigning numbers to states
-that don’t match characters and don’t follow character states suffices
-to obtain such decent numberings.</p>
+<p>Another issue in the constraint propagation pass is an instance of the
+phase ordering problem. Some source-to-source transforms help type
+propagation (e.g., turning complicated functions into simpler ones for
+which type propagation is feasible), and others hinder it (e.g.,
+converting integer division by a constant to multiply and shift or
+MAPCAR to an inline loop). Worse, there’s a dependency cycle as
+transforms rely on type propagation to determine whether they are
+applicable. There’s been some academic work that exposes multiple
+equivalent code sequences to analyses, and it seems possible to do
+something similar in Python as well: source-to-source transforms
+generate functions, so we’d “only” have to analyse the function
+without splicing it in. However, that’s likely to be impractically slow
+(even termination is non-obvious)… perhaps it will be doable for
+select transforms that expand into pure expressions.</p>
 
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/ok-regexp.png" /></p>
+<p>The only suggestion to accelerate constraint propagation so far is to
+widen types, and that mostly compensates for slowdowns (or infinite
+convergence) introduced by other changes. There’s a classic trick that
+ought to accelerate even the current pass: guide the order in which
+basic blocks are analysed by partitioning them in strongly connected
+components. Python exploits a simple ordering technique, a depth-first
+ordering that minimises backward edges in reducible control-flow
+graphs. Basic blocks could instead be partitioned into strongly
+connected components: contracting each strongly connected component
+into a single vertex leaves a directed acyclic graph. It then suffices
+to fixpoint on each strong component and traverse the condensed DAG so
+that each component is only visited after all its predecessors. Python
+already computes loop nests, so that’s an easy change; it’s likely
+even better to look at nested loops and recursively order analysis
+within each component. A few other passes perform some form of
+dataflow analysis and would benefit from that improved ordering…
+perhaps compile times can be really improved (Amdahl says that’s
+unlikely until splicing in source-to-source transformations is a lot
+quicker).</p>
 
-<p>Some more thinking shows we can do better, and shave three more states.
-State 2 could directly match against character ‘e’, instead of only
-forwarding into state 3; what is currently state 4 could match against
-character ‘c’, instead of only forwarding into state 8, then 2 and
-then 5 (which itself matches against ‘c’); and similarly for state 7
-into state 8.  The result wastes not a single state: each state is
-used to match against a character, except for the accept state.
-Interestingly, the \( \epsilon \) transitions are also more regular:
-they form a complete graph between states 2, 3 and 5.</p>
+<p>Recap :</p>
 
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/compressed-regexp.png" /></p>
+<ol>
+  <li>Add a dictionary for TYPEP and &lt;/&gt; constraints on LAMBDA-VARs in
+consets; use it to merge and weaken information in consets.</li>
+  <li>Derive flow-insensitive types within the flow-sensitive pass, for
+quicker final convergence to a tighter solution.</li>
+  <li>Simplify conditional branches with flow-sensitive information,
+even when that information is still optimistic.</li>
+  <li>Widen types for quicker/finite convergence.</li>
+  <li>See what source-to-source transformations are applicable with the
+current information, and use that to derive stronger types.</li>
+  <li>Analyse basic blocks based on loop nests: fixpoint a loop nest
+before visiting its successors, and wait until all predecessors
+have reached a fixed point before analysing a loop’s blocks.</li>
+</ol>
 
-<p>It’s possible to use fewer states than the naïve translation, and it’s
-useful to do so.  How can a program find compact numberings?</p>
-
-<h2 id="compact-bitap-automata">Compact bitap automata</h2>
-
-<p>The natural impulse for functional programmers (particularly
-functional compiler writers ;) is probably to start matching patterns
-to iteratively reduce the graph.  If they’ve had bad experience with
-slow fixpoint computations, there might also be some attempts at
-recognising patterns before even emitting them.</p>
-
-<p>This certainly describes my first couple stabs; they were either
-mediocre or wrong (sometimes both), and certainly not easy to reason
-about.  It took me a while to heed age-old advice about crossing the
-street and compacting state machines.</p>
-
-<p><a href="http://www.brighton-hove.gov.uk/content/parking-and-travel/travel-transport-and-road-safety/child-pedestrian-training"><img class="center" src="http://www.brighton-hove.gov.uk/sites/brighton-hove.gov.uk/files/roadsafetymeerkatposter.jpg" /></a></p>
-
-<p>Really, what we’re trying to do when compacting the state machine is
-to determine equivalence classes of states: sets of states that can be
-tracked as an atomic unit.  With rewrite rules, we start by assuming
-that all the states are distinct, and gradually merge them.  In other
-words, we’re computing a fixed point starting from the initial
-hypothesis that nothing is equivalent.</p>
-
-<p>Problem is,
-<a href="/Blog/2012/02/19/fixed-points-and-strike-mandates/">we should be doing the opposite</a>!
-If we assume that all the states can be tracked as a single unit, and
-break equivalence classes up in as we’re proven wrong, we’ll get
-maximal equivalence classes (and thus as few classes as possible).</p>
-
-<p>To achieve this, I start with the naïvely numbered state machine.
-I’ll refer to the start state and character states as “interesting
-sources”, and to the accept state and character states as “interesting
-destinations”.  Ideally, we’d be able to eliminate everything but
-interesting destinations: the start state can be preprocessed away by
-instead working with all the interesting destinations transitively
-reachable from the start state via \( \epsilon \) transitions
-(including itself if applicable).</p>
-
-<p>The idea is that two states are equivalent iff they are always active
-after the same set of interesting sources.  For example, after the
-start state 0, only state 1 is active (assuming that the character
-matches).  After state 1, however, all of 2, 3, 4, 6, 7, 10 and 11 are
-active.  We have the same set after states 4 and 8.  Finally, only one
-state is alive after each of 11 and 12.</p>
-
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/naive-regexp.png" /></p>
-
-<p>Intersecting the equivalence relations thus defined give a few trivial
-equivalence classes (0, 1, 5, 8, 9, 12, 13), and one huge equivalence
-class comprised of {2,3,4,6,7,10,11} made of all the states that are
-active exactly after 1, 5 and 9.  For simplicity’s sake, I’ll refer to
-that equivalence class as K.  After contraction, we find this smaller
-state graph.</p>
-
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon-regexp.png" /></p>
-
-<p>We can renumber this reasonably to obey the restriction on character
-edges: K is split into three nodes (one for each outgoing
-character-consuming edge) numbered 2, 4 and 7.</p>
-
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon2-regexp.png" /></p>
-
-<p>We could do even better if 5 and 9 (3 and 6 above) in the earlier
-contracted graph were also in equivalence class K: they only exist to
-forward back into K!  I suggest to achieve that with a simple
-post-processing pass.</p>
-
-<p>Equivalence classes are found by find determining after which
-interesting node each state is live.  States that are live after
-exactly the same sets of interesting nodes define an equivalence
-class.  I’ll denote this map from state to transitive interesting
-predecessors \( pred(state) \).</p>
-
-<p>We can coarsen the relationship a bit, to obtain \(
-pred\sp{\prime}(state) \).  For interesting destinations, \(
-pred\sp{\prime} = pred \).  For other nodes,
-\(pred\sp{\prime}(state) = \cap\sb{s\in reachable(state)}pred(s)\), where
-\(reachable(state)\) is the set of interesting destinations reachable via
-\( \epsilon \) transitions from \(state\).  This widening makes
-sense because \(state\) isn’t interesting (we never want to know
-whether it is active, only whether its reachable set is), so it
-doesn’t matter if \(state\) is active when it shouldn’t, as long as
-its destinations would all be active anyway.</p>
-
-<p>This is how we get the final set of equivalence classes.</p>
-
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon3-regexp.png" /></p>
-
-<p>We’re left with a directed multigraph, and we’d like to label nodes
-such that each outgoing edge goes from its own label \( i \) to \(
-i+1 \).  We wish to do so while using the fewest number of labels.
-I’m pretty sure we can reduce something NP-Hard like the minimum path
-cover problem to this problem, but we can still attempt a simple
-heuristic.</p>
-
-<p>If there were an Eulerian directed path in the multigraph, that path
-would give a minimal set of labels: simply label the origin of each
-arc with its rank in the path.  An easy way to generate an Eulerian
-circuit, if there is one, is to simply keep following any unvisited
-outgoing arc.  If we’re stuck in a dead end, restart from any vertex
-that has been visited and still has unvisited outgoing arcs.</p>
-
-<p>There’s a fair amount of underspecification there.  Whenever many
-equivalence classes could be chosen, I choose the one that corresponds
-to the lexicographically minimal (sorted) set of regexp states (with
-respect to their depth-first numbering).  This has the effect of
-mostly following the depth-first traversal, which isn’t <em>that</em> bad.
-There’s also no guarantee that there exists an Eulerian path.  If
-we’re completely stuck, I start another Eulerian path, again starting
-from the lexicographically minimal equivalence class with an unvisited
-outgoing edge.</p>
-
-<p>Finally, once the equivalence states are labelled, both character and
-\( \epsilon \) transitions are re-expressed in terms of these
-labels.  The result is a nice 8-state machine.</p>
-
-<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/compressed-regexp.png" /></p>
-
-<h2 id="but-thats-just-theory">But that’s just theory</h2>
-
-<p>This only covers the abstract stuff. There’s a
-<a href="https://github.com/pkhuong/bitap-regexp">CL code dump</a> on github.
-You’re probably looking for <code>compile-regexp3.lisp</code> and
-<code>scalar-bitap.lisp</code>; the rest are failed experiments.</p>
-
-<p>Once a small labeling is found, generating a matcher is really
-straightforward.  The data-dependent masks are just a dictionary
-lookup (probably in a vector or in a perfect hash table), a shift and
-a mask.</p>
-
-<p>Traditionally, epsilon transitions have been implemented with a few
-table lookups.  For example, the input state can be cut up in bytes;
-each byte maps to a word in a different lookup table, and all the
-bytes are ORed together.  The tables can be pretty huge (<code>n-states/8</code>
-lookup tables of 256 state values each), and the process can be slow
-for large states (bitsets).  This makes it even more important to
-reduce the size of the state machine.</p>
-
-<p>When runtime compilation is easy, it seems to make sense to instead
-generate a small number of test and conditional moves… even more so if
-SIMD is used to handle larger state sets.  A couple branch-free
-instructions to avoid some uncorrelated accesses to LUTs looks like a
-reasonable tradeoff, and, if SIMD is involved, the lookups would
-probably cause some slow cross-pipeline ping-ponging.</p>
-
-<p>There’s another interesting low-level trick.  It’s possible to handle
-large state sets without multi-word shifts: simply insert padding
-states (linked via \( \epsilon \) transitions) to avoid character
-transitions that straddle word boundaries.</p>
-
-<p>There’s a lot more depth to this bitap for regexp matching thing.  For
-example, bitap regular expressions can be adapted to fuzzy matchings
-(up to a maximum edit distance), by counting the edit distance in
-unary and working with one bitset for each edit distance value.  More
-important in practice, the approach described so far only handles
-recognising a regular language; parsing into capture groups and
-selecting the correct match is a complex issue about which <a href="http://swtch.com/~rsc/regexp/">Russ Cox has a lot to say</a>.</p>
-
-<p>What I find interesting is that running the NFA backward from accept
-states gives us a forward oracle: we can then tell whether a certain
-state at a given location in the string will eventually reach an
-accept state.  Guiding an otherwise deterministic parsing process with
-such a regular language oracle clearly suffices to implement capture
-groups (all non-deterministic choices become deterministic), but it
-also looks like it would be possible to parse useful non-regular
-languages without backtracking or overly onerous memoisation.</p>
+<p>In terms of implementation difficulty, these changes probably go
+1-6-3-4-2-5.  This also happens to be the order in which I’d try to
+implement them.</p>
 </div>
   
   

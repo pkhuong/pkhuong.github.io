@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/04/13/number-systems-for-implicit-data-structures/">Number systems for implicit data structures</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/05/11/integer-division-step-0-no-remainder/">Integer division, step 0: no remainder</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-April
+May
   
-13th, 
+11th, 
 2014
 
 
 
 
         
-         | <a href="/Blog/2014/04/13/number-systems-for-implicit-data-structures/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/04/13/number-systems-for-implicit-data-structures/"
+         | <a href="/Blog/2014/05/11/integer-division-step-0-no-remainder/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/05/11/integer-division-step-0-no-remainder/"
 	      >Comments</a>
         
         
@@ -116,253 +116,256 @@ April
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><a href="http://en.wikipedia.org/wiki/Implicit_data_structure">Implicit data structures</a>
-are data structures with negligible space overhead compared to storing
-the data in a flat array: auxiliary information is mostly represented
-by permuting the elements cleverly.  For example, a sorted vector
-combined with binary search is an implicit in-order representation of
-a binary search tree.  I believe the seminal implicit data structure is
-the binary heap of Williams and Floyd, usually presented in the
-context of <a href="http://xlinux.nist.gov/dads/HTML/heapSort.html">heapsort</a>.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>Exciting times in SBCL-land!  Not only will Google Summer of Code
+support two students to work on SBCL (one will improve our support for
+correct Unicode manipulation, and the other our strength reduction for
+integer division), but we also sprouted a
+<a href="http://sourceforge.net/p/sbcl/sbcl/ci/b793e2b291ee55ec43399d0367f59d6a56b27433/tree/NEWS?diff=2971347c95b8910019f43a0ba6de7b2e36997c85">new Linux/ARM port</a>!
+As
+<a href="http://christophe.rhodes.io/notes/blog/posts/2014/just_like_old_times/">Christophe</a>
+points out, this a nice coincidence: (most?) ARM chips lack hardware
+integer division units.  I find the integer division project even more
+interesting because I believe we can cover all three standard division
+operators (floor, truncate, and ceiling) with an unified code
+generator.</p>
 
-<p>I find most developers are vastly more comfortable dealing with
-pointer-based data structures than with implicit ones.  I blame our
-courses, which focus on the former and completely fail to show us how
-to reason about the latter.  For example, the typical presentation of
-the binary heap introduces an indexing scheme to map from parent to
-children – the children of <code>heap[i]</code> are <code>heap[2 * i]</code> and
-<code>heap[2 * i + 1]</code>, with one-based indices – that is hard to
-generalise to ternary or k-ary heaps (Knuth’s presentation, with
-parents at \(\lfloor i/2 \rfloor\), is no better).  The reason it’s
-so hard to generalise is that the indexing scheme hides a simple
-bijection between paths in k-way trees and natural numbers.</p>
+<p>I first looked into integer division by constants four years ago, and
+I was immediately struck by the ad hoc treatment of the
+transformation: I have yet to find a paper that summarises and relates
+algorithms that are currently in use.  Worse, the pseudocode tends to
+assume fixed-width integer, which drowns the interesting logic in
+bignum-management noise.  Back when I had free time, I uploaded
+<a href="http://discontinuity.info/~pkhuong/fast-truncate-4.pdf">an early draft</a>
+of what may become a more enlightening introduction to the topic.  My
+goal was to unite all the simplification algorithms I’d seen and
+to generalise them to SBCL’s needs: our optimisers benefit from
+precise integer range derivation, and codegen ought to deal with
+tagged fixnums.  The draft should take shape as the GSoC
+project progresses.</p>
 
-<p>I find it <a href="https://www.youtube.com/watch?v=Jne9t8sHpUc">ironic</a> that I
-first encountered the idea of describing data structures or
-algorithms in terms of number systems, through
-<a href="http://okasaki.blogspot.com/2008/02/ten-years-of-purely-functional-data.html">Okasaki</a>’s
-and <a href="http://www.cs.ox.ac.uk/ralf.hinze/publications/#R5">Hinze</a>’s
-<a href="http://www.cs.nott.ac.uk/~gmh/bctcs-slides/hinze.pdf">work</a> on purely
-functional data structures: that vantage point seems perfectly suited to
-the archetypal mutable data structure, the array!  I’ll show how
-number systems help us understand implicit data structures with two
-examples: a simple indexing scheme for k-ary heaps and compositions of
-specially structured permutations to implement in-place bit-reversal
-and (some) matrix transpositions.</p>
+<p>There is one widespread – but very specialised – integer division
+algorithm that does not fit in the draft: multiplication by modular
+inverses.  I’m guessing it’s common because it’s the first thing that
+comes to mind when we say division-by-multiplication.  The
+transformation is also so specialised that I find it’s usually
+mentioned in contexts where it wouldn’t work.  Still, it’s a nice
+application of algebra and the coefficients are simple enough to
+generate at runtime (even in C or assembly language), so here goes.</p>
 
-<h1 id="simple-k-ary-max-heaps">Simple k-ary max heaps</h1>
+<h1 id="multiplicative-inverses-for-integer-division">Multiplicative inverses for integer division</h1>
 
-<p><a href="http://mitpress.mit.edu/books/introduction-algorithms">The</a>
-<a href="http://www.amazon.com/Data-Structures-Algorithms-Alfred-Aho/dp/0201000237">classical</a>
-<a href="http://www.amazon.com/Fundamentals-Algorithmics-Gilles-Brassard/dp/0133350681">way</a>
-to present implicit binary heaps is to work with one-based array
-indices and to root an implicit binary tree at <code>heap[1]</code>.  For any
-node <code>heap[i]</code>, the children live at <code>heap[2 * i]</code> and
-<code>heap[2 * i + 1]</code>.  My issue with this presentation is that it’s
-unclear how to extend the scheme to ternary or k-ary trees: if the
-children of <code>heap[1]</code> are <code>heap[3 * 1 ... 3 * 1 + 2]</code>, i.e.,
-<code>heap[3, 4, 5]</code>,
-what do we do with <code>heap[2]</code>?  We end up with <code>k - 1</code> parallel k-ary
-trees stashed in the same array.  <a href="http://www.amazon.com/Art-Computer-Programming-Volume-Searching/dp/0201896850">Knuth</a>’s choice of mapping children
-to parents with a floored integer division suffers the same fate.</p>
+<p>Let \(a\) and \(m\) be naturals.  The multiplicative inverse of
+\(a\) modulo \(m\) is a natural \(b\) such that 
+\(a \times b \equiv 1 \mod m\).  Machine arithmetic is naturally modular 
+(e.g., mod \(m = 2\sp{32}\)).  This seems perfect!</p>
 
-<p>One-based arrays hides the beauty of the binary indexing scheme.  With
-zero-based arrays, the children of <code>heap[i]</code> are <code>heap[2 * i + 1]</code> and
-<code>heap[2 * i + 2]</code>.  This is clearly isomorphic to the one-based scheme
-for binary heaps.  The difference is that the extension to k-way
-trees is obvious: the children of <code>heap[i]</code> are <code>heap[k * i + 1 ... k * i + k]</code>.</p>
-
-<p>A couple examples like the one below fail to show any problem.
-However, even a large number of tests is no proof.  Thinking in terms
-of number systems leads to a nice demonstration that the scheme
-creates a bijection between infinite k-ary trees and the naturals.</p>
-
-<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/5ary.png" /></p>
-
-<p>There is a unique finite path from the root to any vertex in an
-infinite k-ary tree.  This path can be described as a finite sequence
-\((c\sb{1}, c\sb{2}, \ldots, c\sb{n})\) of integers between 1 and k
-(inclusively).  If \(c\sb{1} = 1\), we first went down the first
-child of the root node; if \(c\sb{1} = 2\), we instead went down the
-second child; etc.  If \(c\sb{2} = 3\), we then went down the third
-child, and so on.  We can recursively encode such finite paths as
-naturals (in pidgin ML):</p>
-
-<pre><code>path_to_nat [] = 0
-path_to_nat [c : cs] = k * path_to_nat cs + c
-</code></pre>
-
-<p>Clearly, this is an injection from finite paths in k-ary trees to the
-naturals.  There’s only a tiny difference with the normal positional
-encoding of naturals in base <code>k</code>: there is no 0, and digits instead
-include <code>k</code>.  This prevents us from padding a path with zeros, which
-would map multiple paths to the same natural.</p>
-
-<p>We only have to show that <code>path_to_nat</code> is a bijection between finite
-paths and naturals.  I’ll do that by constructing an inverse that is
-total on the naturals.</p>
-
-<pre><code>nat_to_path 0 = []
-nat_to_path n = let c = pop n
-                in c : nat_to_path (n - c) / k
-</code></pre>
-
-<p>where <code>pop</code> is a version of the <code>mod k</code> that returns <code>k</code> instead of 0:</p>
-
-<pre><code>pop n = let c = n `mod` k
-        in 
-         if (c != 0)
-          then c
-          else k
-</code></pre>
-
-<p>The base case is <code>nat_to_path 0 = []</code>.</p>
-
-<p>In the induction step, we can assume that <code>path_to_nat cs = n</code> and
-that <code>nat_to_path n = cs</code>.  We only have to show that, for any
-\(1 \leq c \leq k\), <code>nat_to_path path_to_nat c:cs = c:cs</code>.  Let 
-<code>n' = path_to_nat c:cs = k * n + c</code>.</p>
-
-<p>\[n\sp{\prime} = kn + c \equiv c\quad \mod k,\]
-so <code>pop n'</code> will correctly return <code>c</code> (and <code>k</code> rather than 0).  It’s
-then a tiny bit of algebra to show that <code>(n' - c) / k = n</code>, and we
-fall back to the induction hypothesis.</p>
-
-<p>This scheme is so simple that I wound up coding a version of
-<code>heapsort(3)</code> that lets callers choose the heap’s arity at runtime.
-Higher arity heaps perform more comparisons but fewer swaps than
-binary heaps; the tradeoff is profitable when sorting large items.
-It seems to me that, for decades, we’ve been presenting implicit heaps
-and heapsort in a way that marginally simplifies the binary case at
-the expense of obscuring the elegant general case.</p>
-
-<h1 id="array-permutations-as-algebra-on-positional-number-systems">Array permutations as algebra on positional number systems</h1>
-
-<p>Bit reversing an array of length \(2\sp{l}\) sends the element <code>x[i]</code> to
-<code>x[j]</code>, where the binary representation of <code>i</code> (including padding up
-to <code>l</code> bits) is the reverse of <code>j</code>.  For example, in an array of
-length 16, <code>3 = 0011</code> becomes <code>1100 = 12</code>.</p>
-
-<p>Reversing a fixed-width integer’s binary representation is its
-self-inverse, so bit reversing an array is a sequence of swaps.  This
-means that the permutation can be performed in-place, as a series of
-independent swaps.  Bit reversal used to be slow on cached machines:
-contiguous elements (with indices that only vary in their low order
-bits) swap with far-off elements (indices that only vary in their high
-order bits).  Worse, the stride between the latter elements is a large
-power of two, which causes all sorts of aliasing issues.  Workarounds
-(see
-<a href="http://home.eng.iastate.edu/~zzhang/publications/tr99-sc-bitrev.pdf">Zhang 99 (PDF)</a>)
-mostly end up implementing a software cache with explicit buffers.
-Nowadays, even L1 caches have such a high associativity that aliasing
-is a much less important issue.</p>
-
-<p><a href="https://github.com/pkhuong/Napa-FFT3">Napa-FFT3</a> implements bit
-reversals by calling a few specialised functions that only swap the
-lower and higher bits; the main routine iterates over an array of
-precomputed middle bit reversals (similar to
-<a href="http://www.idi.ntnu.no/~elster/pubs/">various publications of Elster’s</a>,
-but recursing on the middle bits first).  In this implementation, the
-number of L1 cache misses incurred by bit reversing an array is only
-slightly greater than the compulsory misses.  Bit reversal isn’t free,
-but it’s also not clear that autosorting FFTs are quicker than
-out-of-order FFTs followed by a bit reversal pass.</p>
-
-<p>Bit reversal is the only array permutation I’ve seen described in
-terms of its effect on indices.  I think it’s a fruitful avenue for
-other in-place permutations.</p>
-
-<p>For example, the viewpoint makes it clear how to transpose a matrix of
-dimensions \(2\sp{m} \times 2\sp{n}\) with a sequence of in-place
-bit reversals (each \(i\sb{k}\) and \(j\sb{l}\) is a bit in the
-index’s binary representation).</p>
-
-<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/bit-reverse-transpose.jpg" /></p>
-
-<p>For a row-major layout, the sketch above corresponds to:</p>
+<p>There are a couple issues here:</p>
 
 <ol>
-  <li>bit reverse each row of length \(2\sp{n}\) in place;</li>
-  <li>bit reverse the whole vector of length \(2\sp{m + n}\) in place;</li>
-  <li>bit reverse each new row of length \(2\sp{m}\) in place.</li>
+  <li>we have to find the modular inverse;</li>
+  <li>the modular inverse only exists if \(\mathop{gcd}(a, m) = 1\);</li>
+  <li>multiplicative inversion and integer division only coincide when
+the remainder is zero.</li>
 </ol>
 
-<p>Bit reversal, like all other permutations, is a reversible linear
-operation. We can thus change the order of operation if we want to.
-For example, it’s not necessarily preferable to bit-reverse contiguous
-rows first.  We could also flip the high-order bits of the indices:
-rather than swapping scalars, we would swap rows.  Separately bit
-reversing contiguous rows works best when each row fits in cache.  Bit
-reversing columns instead amortises the bad access pattern inherent to
-bit reversal by spending more time on each swap: swapping rows is
-slower than swapping scalars, but also very efficients with regards to
-(streaming!) I/O.</p>
+<p>For a concrete example of the third issue, consider
+\(11\), the multiplicative inverse of \(3 \mod 16\): \(3\times 11
+= 33 \equiv 1 \mod 16\) and \(6 \times 11 = 66 \equiv 2 \mod 16\).
+However, \(4 \times 11 = 44 \equiv 12 \mod 16\), and \(12\) is
+nowhere close to \(4 \div 3\).</p>
 
-<p>This is interesting because in-place transposition of rectangular
-matrices is hard, and transposition is already a bad fit for caches.
-Transposing matrices with a sequence of bit reversals might just be
-practical.  In fact, that’s what I intend to do in Napa-FFT3 for
-multi-dimensional DFTs: we can fuse all but the middle whole-vector
-bit reversal with mixed-radix FFTs (and the latter might similarly
-benefit from operating on [sub-]rows rather than scalars).</p>
+<p>This post addresses the first two points.  There is no workaround
+for the last one.</p>
 
-<p>One obvious question now appears: can we generalise the trick to
-general dimensions?  It’s pretty clear that we can do it for any other
-base \(b\) and matrices of dimension \(b\sp{m} \times b\sp{n}\)
-(it’s interesting how highly composite numbers dimensions are easy to
-transpose, and, IIRC, so are coprime ones).  What if there’s no such
-factorisation?  The best I can do is “more or less.”</p>
+<p>We can generate a modular inverse with the
+<a href="http://en.wikipedia.org/wiki/Extended_Euclidean_algorithm">extended Euclidean algorithm</a>.
+Wikipedia shows the iterative version, which I can never remember, so I’ll
+instead construct the simple recursive one.</p>
 
-<p>For arbitrary matrix dimensions \(m \times n\), I think it’s best to
-decompose indices in a mixed radix (but still positional) number
-system.  For example, a \(63 \times 21\) matrix might have indices in
-radix \(3,7\ |\ 3,7,3\).  Given this number system, matrix
-transposition is</p>
+<p>We already assume that
+\[\mathop{gcd}(a, b) = 1 \]
+and we wish to find \(x, y\) such that
+\[ax + by = 1.\]
+<a href="http://en.wikipedia.org/wiki/B%C3%A9zout%27s_identity">Bézout’s identity</a>
+guarantees that such coefficients exist.</p>
 
-<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/concrete-mixed-radix.jpg" /></p>
+<p>Things are simpler if we assume that \(a &lt; b\) (they can only be
+equal if \(a = b = 1\), and that case is both annoying and
+uninteresting).</p>
 
-<p>It’s a small generalisation to let the radices be \(a,b\ |\ a,b,a\),
-for a matrix of dimension \(ab \times a\sp{2}b\).  We can then
-perform most of a matrix transposition by swapping positions of
-identical weight: first a full mixed-radix digit reversal (the weights
-are palindromic), followed by another mixed-radix reversal on the
-first three positions.</p>
+<p>If \(a = 1\), \(a + b0 = 1\).</p>
 
-<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/general-mixed-radix.jpg" /></p>
+<p>Otherwise, let \(q = \lfloor b/a\rfloor\) and \(r = b - qa\).
+\[\mathop{gcd}(a, r) = \mathop{gcd}(a, b) = 1,\]
+and, given
+\[ax’ + ry’ = 1,\]
+we can revert our change to find
+\[ax’ + (b - qa)y’ = a(x’ - qy’) + by’ = 1.\]</p>
 
-<p>This leaves the last chunk \(b\sb{2},a\sb{3}\), which should instead
-be \(a\sb{3},b\sb{2}\).  That’s another rectangular matrix tranpose,
-but smaller than the original one.  It might be practical to execute
-that last step with a straightforward out-of-place transpose: a
-smaller transpose needs less scratch space and may fit in cache.  We
-can also apply the same trick as for bit reversals and apply the
-transpose before everything else, by permuting rows rather than
-scalars.  The simplest way to do that is to transpose a matrix of
-pointers before replicating the permutation on the actual data
-(glibc’s mergesort references Knuth vol. 3, exercise
-5.2-10).</p>
+<p>We’re working in modular arithmetic, so we can sprinkle <code>mod m</code>
+without changing the result.  In C, this will naturally happen for
+unsigned integers, via overflows.  In CL, we can still force modular
+reduction, just to convince ourselves that we don’t need bignums.</p>
 
-<p>Finally, this also works for \(a\sp{2}b \times ab\): matrix
-transposition is its own inverse, so we only have execute the inverse
-of each step, in reverse order.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun inverse (a m)
+</span><span class="line">  (labels ((egcd (a b)
+</span><span class="line">             (cond ((= 1 a)
+</span><span class="line">                    (values 1 0))
+</span><span class="line">                   ((&gt; a b)
+</span><span class="line">                    (multiple-value-bind (y x)
+</span><span class="line">                        (egcd b a)
+</span><span class="line">                      (values x y)))
+</span><span class="line">                   (t
+</span><span class="line">                    (multiple-value-bind (q r)
+</span><span class="line">                        (truncate b a)
+</span><span class="line">                      (multiple-value-bind (y x)
+</span><span class="line">                          (egcd r a)
+</span><span class="line">                        (values (mod (- x (* y q)) m)
+</span><span class="line">                                y)))))))
+</span><span class="line">    (let* ((x (egcd a m))
+</span><span class="line">           (i (if (&lt; x 0) (+ x m) x)))
+</span><span class="line">      ;; i better be a's inverse...
+</span><span class="line">      (assert (= 1 (mod (* a i) m)))
+</span><span class="line">      i)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Definitely mixed results, but at least we have some intuition on why
-general rectangular transpositions are hard to perform in place:
-they’re hard to express as sequences of swaps.</p>
+<p>And a quick sanity check:</p>
 
-<h1 id="next-c-code-and-cycle-counts">Next: C code and cycle counts!</h1>
+<pre><code>CL-USER&gt; (loop for m from 2 upto (ash 1 10)
+               do (loop for i from 1 below m
+                        when (= 1 (gcd i m))
+                        do (inverse i m)))
+NIL ; no assertion failure
+</code></pre>
 
-<p>This post is the more theoretical prologue to
-<a href="/Blog/2014/04/13/k-ary-heapsort/">a low-level look</a>
-at <code>qsort(3)</code>: I really wanted to make sure the nice implicit tree
-layout in the first section had the space it deserves.</p>
+<p>The second issue is that the multiplicative inverse only exists if our
+divisor and our modulo (e.g., \(2\sp{32}\)) are coprime.  The good
+news is that \(\mathop{gcd}(a, 2\sp{w})\) can only be a power of
+two.  We only have to factor our divisor \(a = 2\sp{s} v\), and find
+\(i\), the multiplicative inverse of \(v\).  Division by \(a\)
+is then a right shift by \(s\) and a multiplication by \(i\).</p>
 
-<p>I tried to make in-order implicit trees fit in this number system
-approach. I can’t see how.  The problem is that in-order trees
-associate ranges (rather than indices) with nodes; for example, at
-what depth is index 1000? It depends on the size of the search
-tree. It might be the root (in a tree of 2000 vertices) or a leaf (in
-a tree of 1001 vertices).</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun trailing-zeros (x)
+</span><span class="line">  "Return the largest integer s such that 2^s | x"
+</span><span class="line">  (assert (plusp x))
+</span><span class="line">  (1- (integer-length (logxor x (1- x)))))
+</span><span class="line">
+</span><span class="line">(defun divisor (d m)
+</span><span class="line">  (let* ((zeros (trailing-zeros d))
+</span><span class="line">         (inverse (inverse (ash d (- zeros)) m)))
+</span><span class="line">    (lambda (x)
+</span><span class="line">      (mod (* (ash x (- zeros)) inverse) m))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>And now, a final round of tests:</p>
+
+<pre><code>CL-USER&gt; (defun test-divisor (d m)
+           (let ((divisor (divisor d m)))
+             (loop for i upfrom 0
+                   for j from 0 by d below m
+                   do (assert (= (funcall divisor j) i)))))
+TEST-DIVISOR
+CL-USER&gt; (loop for width from 1 upto 20
+               for mod = (ash 1 width)
+               do (loop for x from 1 below mod
+                        do (test-divisor x mod)))
+NIL
+</code></pre>
+
+<p>A simple transformation from integer division to shift and
+multiplication… that works only in very specific conditions.</p>
+
+<h1 id="what-are-modular-inverses-good-for-then">What are modular inverses good for, then?</h1>
+
+<p>I’ve only seen this transformation used for pointer subtractions in
+C-like languages: machines count in chars and programs in
+whatever the pointers point to.  Pointer arithmetic is only
+defined within the same array, so the compiler can assume that the
+distance between the two pointers is a multiple of the object size.</p>
+
+<p>The following program is deep in undefined behaviour, for
+example.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>foo.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#include &lt;stdio.h&gt;</span>
+</span><span class="line">
+</span><span class="line"><span class="k">struct</span> <span class="n">foo</span> <span class="p">{</span>
+</span><span class="line">	<span class="kt">char</span> <span class="n">buffer</span><span class="p">[</span><span class="mi">7</span><span class="p">];</span>
+</span><span class="line"><span class="p">};</span>
+</span><span class="line">
+</span><span class="line"><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">	<span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="n">x</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="p">)</span><span class="mi">0</span><span class="p">;</span>
+</span><span class="line">	<span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="n">y</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="p">)</span><span class="mi">9</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">	<span class="n">printf</span><span class="p">(</span><span class="s">&quot;%zd %i</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">y</span> <span class="o">-</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="o">&lt;</span> <span class="n">x</span><span class="p">);</span>
+</span><span class="line">	<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<pre><code>pkhuong:tmp pkhuong $ clang foo.c &amp;&amp; ./a.out
+-2635249153387078801 0
+</code></pre>
+
+<p>What I find interesting is that, if we pay attention to the
+correctness analysis, it’s clear that general div-by-mul
+transformations benefit from known common factors between the divisor
+and the dividend.  In the extreme case, when the dividend is always a
+multiple of the divisor, we can convert the division to a single
+double-wide multiplication, without any shift or additional multi-word
+arithmetic.  On architectures with fast multipliers or ones that let
+us compute the high half of product without the low part, the general
+case (coupled with a tight analysis) may be marginally quicker than
+this specialised transformation.  Yet, both GCC and clang convert
+pointer subtractions to shifts and multiplications by modular
+inverses.</p>
+
+<p>In the end multiplicative inverses seem mostly useful as a red
+herring, and as a minimal-complexity low hanging fruit.  The only
+reason I use them is that it’s easy to generate the coefficients in C,
+which is helpful when allocation sizes are determined at runtime.</p>
 </div>
   
   

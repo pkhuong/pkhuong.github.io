@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/08/16/how-to-define-new-intrinsics-in-sbcl/">How to define new intrinsics in SBCL</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/">Performance tuning ~ writing an essay</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Aug
+Oct
   
-16th, 
+19th, 
 2014
 
 
 
 
         
-         | <a href="/Blog/2014/08/16/how-to-define-new-intrinsics-in-sbcl/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/08/16/how-to-define-new-intrinsics-in-sbcl/"
+         | <a href="/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/"
 	      >Comments</a>
         
         
@@ -116,43 +116,121 @@ Aug
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>This
-<a href="http://stackoverflow.com/questions/25078285/replacing-a-32-bit-loop-count-variable-with-64-bit-introduces-crazy-performance">Stack Overflow</a>
-post points out an obscure and undocumented weakness in Intel’s
-implementation of the POPCNT instruction: although the population
-count (number of bits equal to 1) is only a function of the source
-argument, hardware schedules it as though it also depended on the
-destination.  GCC, clang and MSVC all fail to take this issue into
-account.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>&lt;a href=”#trust-no-one”“&gt;Skip to the meaty bits.&lt;/a&gt;</p>
 
-<p>Until a new patched version of my favourite C compiler is released,
-there aren’t many tasteful workarounds for this performance bug.  I’d
-have to switch to inline asm, and either force the compiler to
-allocate the same register to the input and the result, or force
-different registers and clear the spurious dependency with a xor.
-Ideally, I wouldn’t impose any additional constraint on the register
-allocator and only insert a xor if the destination and source
-registers don’t match.</p>
+<p>My work at <a href="http://www.appnexus.com/">AppNexus</a> mostly involves
+performance optimisation, at any level from microarchitecture-driven
+improvements to data layout and assembly code to improving the
+responsiveness of our distributed system under load.  Technically,
+this is similar to what I was doing as a lone developer on
+research-grade programs.  However, the scale of our (constantly
+changing) code base and collaboration with a dozen other coders mean
+that I approach the task differently: e.g., rather than
+single-mindedly improving throughput <em>now</em>, I aim to pick an evolution
+path that improves throughput today without imposing too much of a
+burden on future development or fossilising ourselves in a design
+dead-end.  So, although numbers still don’t lie (hah), my current
+approach also calls for something like judgment and taste, as well as
+a fair bit of empathy for others.  Rare are the obviously correct
+choices, and, in that regard, determining what changes to make and
+which to discard as
+<a href="http://fun.irq.dk/funroll-loops.org/">over-the-top ricing</a> feels like
+I’m drafting a literary essay.</p>
 
-<p>SBCL easily supports this use case, without having to re-release or
-even recompile the implementation: VOPs (virtual operations) execute
-arbitrary CL code during code generation and they can be defined at
-runtime.</p>
+<p>This view is probably tainted by the fact that, between English and
+French classes, I spent something like half of my time in High School
+critiquing essays, writing essays, or preparing to write one.
+Initially, there was a striking difference between the two languages:
+English teachers had us begin with the five paragraph format where one
+presents multiple arguments for the same thesis, while French teachers
+imposed a thesis/antithesis/synthesis triad (and never really let it
+go until CÉGEP, but that’s another topic).  When I write that
+performance optimisation feels like drafting essays, I’m referring to
+the latter “Hegelian” process, where one exposes arguments and
+counterarguments alike in order to finally make a stronger case.</p>
 
-<p>The first step is to make sure that SBCL’s assembler knows how to emit
-popcnt: the assembler can also be extended at runtime, but that’s more
-hairy and a topic for another post.  Instruction encodings are defined
-in <code>src/compiler/$ARCH/insts.lisp</code>, and a quick grep reveals
-<code>(define-instruction popcnt (segment dst src) ...)</code>: the x86-64
-backend learned about popcnt in May 2013 (thanks to Douglas Katzman).</p>
+<p>I’ll stretch the analogy further.  Reading between the lines gives us
+access to more arguments, but it’s also easy to get the context wrong and
+come up with hilariously far-fetched interpretations.  When I try to
+understand a system’s performance, the most robust metrics treat the
+system as a black box: it’s hard to get throughput under production
+data wrong.  However, I need finer grained information (e.g.,
+performance counters, instruction-level profiling, or
+application-specific metrics) to guide my work, and, the more useful
+that information can be – like domain specific metrics that highlight
+what we could do differently rather than how to do the same thing more
+efficiently – the easier it is to measure incorrectly.  That’s not a
+cause for despair, but rather a fruitful line of skepticism that helps
+me find more opportunities.</p>
 
-<p>We define VOPs via <code>define-vop</code>, a macro that exposes many options.
-Most of the time, it’s easiest to look at a pre-existing definition
-for an operation that’s similar to the one we want to add.  Popcount
-looks like integer negation: it has a single (machine integer)
-argument and returns another integer.  Integer negation is defined in
-<code>src/compiler/$ARCH/arith.lisp</code>:</p>
+<p>Just two weeks ago, questioning our application-specific metrics
+lead to an easy 10% improvement in throughput for our biggest
+consumer of CPU cycles.  The consumer is an application that
+determines whether internet advertising campaigns are eligible to bid
+on an ad slot, and if so, which creative (ad) to show and at what bid
+price.  For the longest time, the most time-consuming part of that
+process was the first step, testing for campaign eligibility.
+Consequently, we tracked the execution of that step precisely and
+worked hard to minimise the time spent on ineligible campaigns,
+without paying much attention to the rest of the pipeline.  However,
+we were clearly hitting diminishing returns in that area, so I asked
+myself how an adversary could use our statistics to mislead us.  The
+easiest way I could think of was to have campaigns that are eligible
+to bid, but without any creative compatible with the ad slot (e.g.,
+because it’s the wrong size or because the website forbids Flash ads):
+although the campaigns are technically eligible, they are unable to
+bid on the ad slot.  We added code to track these cases and found that
+almost half of our “eligible” campaigns simply had no creative in the
+right size.  Filtering these campaigns early proved to be a
+low-hanging fruit with an ideal code complexity:performance
+improvement ratio.</p>
 
+<h1 id="trust-no-one-not-even-performance-counters"><a href="#trust-no-one" name="trust-no-one">Trust no one, not even performance counters</a></h1>
+
+<p>I recently learned that we also had to second-guess instruction level
+profiles.  Contemporary x86oids are out of order, superscalar, and
+speculative machines, so profiles are always messy: “blame” is
+scattered around the real culprit, and some instructions (pipeline
+hazards like conditional jumps and uncached memory accesses, mostly)
+seem to account for more than their actual share.  What I never
+realised is that, in effect, some instructions systematically mislead
+and push their cycles to others.</p>
+
+<p>Some of our internal spinlocks use <code>mfence</code>.  I expected that to be
+suboptimal, since it’s
+<a href="https://blogs.oracle.com/dave/resource/NHM-Pipeline-Blog-V2.txt">common</a>
+<a href="http://shipilev.net/blog/2014/on-the-fence-with-dependencies/">knowledge</a>
+that <code>lock</code>ed instruction are more efficient barriers: serialising
+instructions like <code>mfence</code> have to affect streaming stores and other
+weakly ordered memory accesses, and that’s a lot more work than just
+preventing store/load reordering.  However, our profiles showed that
+we spent very little time on spinlocking so I never gave it much thought…
+until eliminating a set of spinlocks had a much better impact on
+performance than I would have expected from the profile.  Faced with
+this puzzle, I had to take a closer look at the way <code>mfence</code> and
+locked instructions affect hardware-assisted instruction profiles on
+our production Xeon E5s (Sandy Bridge).</p>
+
+<p>I came up with a simple synthetic microbenchmark to simulate locking
+on my E5-4617: the loop body is an adjustable set of memory accesses
+(reads and writes of out-of-TLB or uncached locations) or computations
+(divisions) bracketed by pairs of normal stores, <code>mfence</code>, or <code>lock
+inc/dec</code> to cached memory (I would replace the fences with an
+increment/decrement pair and it looks like all read-modify-write
+instructions are implemented similarly on Intel).  Comparing runtimes
+for normal stores with the other instructions helps us gauge their
+overhead.  I can then execute each version under <code>perf</code> and estimate
+the overhead from the instruction-level profile.  If <code>mfence</code> is
+indeed extra misleading, there should be a greater discrepancy between
+the empirical impact of the <code>mfence</code> pair and my estimate from the
+profile.</p>
+
+<p>You can find the
+<a href="/images/2014-10-19-performance-optimisation-~-writing-an-essay/fence.c">super crufty code here</a>,
+<a href="/images/2014-10-19-performance-optimisation-~-writing-an-essay/cycle.h">along with an <code>rdtscp</code> version of cycle.h</a>.</p>
+
+<p>With <code>lock</code>ed instructions and random reads that miss the L3 cache,
+the (cycle) profile for the microbenchmark loop is:</p>
 <div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
 <span class="line-number">3</span>
@@ -177,232 +255,35 @@ argument and returns another integer.  Integer negation is defined in
 <span class="line-number">22</span>
 <span class="line-number">23</span>
 <span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-<span class="line-number">31</span>
-<span class="line-number">32</span>
-<span class="line-number">33</span>
-<span class="line-number">34</span>
-<span class="line-number">35</span>
-<span class="line-number">36</span>
-<span class="line-number">37</span>
-<span class="line-number">38</span>
-<span class="line-number">39</span>
-<span class="line-number">40</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">;;;; unary operations
-</span><span class="line">
-</span><span class="line">(define-vop (fast-safe-arith-op)
-</span><span class="line">  (:policy :fast-safe)
-</span><span class="line">  (:effects)
-</span><span class="line">  (:affected))
-</span><span class="line">
-</span><span class="line">(define-vop (fixnum-unop fast-safe-arith-op)
-</span><span class="line">  (:args (x :scs (any-reg) :target res))
-</span><span class="line">  (:results (res :scs (any-reg)))
-</span><span class="line">  (:note "inline fixnum arithmetic")
-</span><span class="line">  (:arg-types tagged-num)
-</span><span class="line">  (:result-types tagged-num))
-</span><span class="line">
-</span><span class="line">(define-vop (signed-unop fast-safe-arith-op)
-</span><span class="line">  (:args (x :scs (signed-reg) :target res))
-</span><span class="line">  (:results (res :scs (signed-reg)))
-</span><span class="line">  (:note "inline (signed-byte 64) arithmetic")
-</span><span class="line">  (:arg-types signed-num)
-</span><span class="line">  (:result-types signed-num))
-</span><span class="line">
-</span><span class="line">(define-vop (fast-negate/fixnum fixnum-unop)
-</span><span class="line">  (:translate %negate)
-</span><span class="line">  (:generator 1
-</span><span class="line">    (move res x)
-</span><span class="line">    (inst neg res)))
-</span><span class="line">
-</span><span class="line">(define-vop (fast-negate/signed signed-unop)
-</span><span class="line">  (:translate %negate)
-</span><span class="line">  (:generator 2
-</span><span class="line">    (move res x)
-</span><span class="line">    (inst neg res)))
-</span><span class="line">
-</span><span class="line">(define-vop (fast-negate/unsigned signed-unop)
-</span><span class="line">  (:args (x :scs (unsigned-reg) :target res))
-</span><span class="line">  (:arg-types unsigned-num)
-</span><span class="line">  (:translate %negate)
-</span><span class="line">  (:generator 3
-</span><span class="line">    (move res x)
-</span><span class="line">    (inst neg res)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+</pre></td><td class="code"><pre><code class=""><span class="line">$ perf annotate -s cache_misses
+</span><span class="line">[...]
+</span><span class="line">    0.06 :        4006b0:       and    %rdx,%r10
+</span><span class="line">    0.00 :        4006b3:       add    $0x1,%r9
+</span><span class="line">    ;; random (out of last level cache) read
+</span><span class="line">    0.00 :        4006b7:       mov    (%rsi,%r10,8),%rbp
+</span><span class="line">   30.37 :        4006bb:       mov    %rcx,%r10
+</span><span class="line">    ;; foo is cached, to simulate our internal lock
+</span><span class="line">    0.12 :        4006be:       mov    %r9,0x200fbb(%rip)        # 601680 &lt;foo&gt;
+</span><span class="line">    0.00 :        4006c5:       shl    $0x17,%r10
+</span><span class="line">    [... Skipping arithmetic with &lt; 1% weight in the profile]
+</span><span class="line">    ;; locked increment of an in-cache "lock" byte
+</span><span class="line">    1.00 :        4006e7:       lock incb 0x200d92(%rip)        # 601480 &lt;private+0x200&gt;
+</span><span class="line">   21.57 :        4006ee:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    ;; random out of cache read
+</span><span class="line">    0.00 :        400704:       xor    (%rsi,%r10,8),%rbp
+</span><span class="line">   21.99 :        400708:       xor    %r9,%r8
+</span><span class="line">    [...]
+</span><span class="line">    ;; locked in-cache decrement
+</span><span class="line">    0.00 :        400729:       lock decb 0x200d50(%rip)        # 601480 &lt;private+0x200&gt;
+</span><span class="line">   18.61 :        400730:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    0.92 :        400755:       jne    4006b0 &lt;cache_misses+0x30&gt;</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The code snippet above includes a bit of boilerplate to factor out
-commonalities via inheritance.  The first definition introduces
-<code>fast-safe-arith-op</code>, VOPs that apply in both high speed and high
-safety settings (the rest is copy/pasted noise from earlier ports that
-sport a scheduler); the second one extends <code>fast-safe-arith-op</code> to
-define <code>fixnum-unop</code>, a base definition for single-argument operations
-on fixnums, while the third one is the same, but for machine integers.
-The last three definitions fill in the blanks so the compiler can
-compile <code>%negate</code> of fixnum, signed and unsigned integers.  The
-<code>(:translate %negate)</code> bit means that these VOPs can be emitted
-instead of calls to <code>%negate</code>.  The integer after <code>:generator</code> defines
-the “cost” of each variant; the compiler will choose the (applicable)
-variant with the least cost and execute the code sequence that follows
-to convert a call to <code>%negate</code> into machine code.</p>
+<p>Looking at that profile, I’d estimate that the two random reads
+account for ~50% of runtime, and the pair of <code>lock inc/dec</code> for ~40%.</p>
 
-<p>This kind of implementation inheritance is fine for an SBCL backend,
-where we define many VOPs and expect developers to understand the
-system.  I doubt it’s a didactic win.  Let’s do something simpler for
-<code>popcnt</code>.  In the interest of simplicity, I’ll also completely
-disregard powerful details in <code>define-vop</code> that are rarely relevant
-when defining intrinsics that map directly to machine instructions.</p>
-
-<p>First, we need to tell the compiler that we’re about to do special
-things to a function named <code>popcnt</code> (and to blow away any pre-existing
-information if the <code>defknown</code> form is re-evaluated).</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defpackage "POPCNT"
-</span><span class="line">  (:use "CL")
-</span><span class="line">  (:export "POPCNT"))
-</span><span class="line">
-</span><span class="line">(in-package "POPCNT")
-</span><span class="line">
-</span><span class="line">(sb-c:defknown popcnt ((unsigned-byte 64)) (integer 0 64)
-</span><span class="line">    (sb-c:foldable sb-c:flushable sb-c:movable)
-</span><span class="line">  :overwrite-fndb-silently t)</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>This says that <code>popcnt</code> accepts a 64-bit unsigned integer and returns
-an integer between 0 and 64 (inclusively), and that the function can
-be constant-folded, flushed (eliminated as dead code) and moved around
-(it’s pure).</p>
-
-<p>Now, to define a VOP that implements <code>popcnt</code>:</p>
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "SB-VM")
-</span><span class="line">
-</span><span class="line">(define-vop (popcnt:popcnt)
-</span><span class="line">  (:policy :fast-safe)
-</span><span class="line">  (:translate popcnt:popcnt)
-</span><span class="line">  (:args (x :scs (unsigned-reg) :target r))
-</span><span class="line">  (:arg-types unsigned-num)
-</span><span class="line">  (:results (r :scs (unsigned-reg)))
-</span><span class="line">  (:result-types unsigned-num)
-</span><span class="line">  (:generator 3
-</span><span class="line">    (unless (location= r x) ; only break the spurious dep. chain
-</span><span class="line">      (inst xor r r))       ; if r isn't the same register as x.
-</span><span class="line">    (inst popcnt r x)))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>We define a new VOP named <code>popcnt:popcnt</code> (the name is arbitrary, as
-long as it doesn’t collide with another VOP) that is applicable at all
-optimization policies (both high speed and high debug level), and that
-implements <code>popcnt:popcnt</code>.  Its first and only argument, <code>x</code>, is an
-<code>unsigned-num</code>, an unsigned machine integer, that can only be stored
-in a register.  Moreover, if possible, we’d like <code>x</code> to be allocated
-the same register as the result, <code>r</code>.  There’s only one result (<code>r</code>)
-and it’s an unsigned machine integer in a register, just like <code>x</code>.
-The generator, of cost 3 (a common default for arithmetic operations),
-breaks any dependency chain in <code>r</code> if necessary, and stores the
-population count of <code>x</code> in <code>r</code>.</p>
-
-<p>At first sight, the <code>defknown</code> form seems to conflict with the VOP.
-We declare that the return value of <code>popcnt</code> is a small integer,
-clearly a fixnum, and then define a VOP that returns a machine
-integer.  The subtlety is that <code>defknown</code> is concerned with IR1, the
-higher level intermediate representation, which works on CL types
-(i.e, types as sets) and abstract values.  VOPs, on the other hand,
-are defined for the lower level IR2, where types describe concrete
-representations (like C).  It is perfectly meaningful to say that a
-small integer will be represented as an untagged machine integer.</p>
-
-<p>The next step isn’t strictly necessary, but helps people who like
-their REPL.  The compiler knows how to compile calls to <code>popcnt</code>, so
-we can define <code>popcnt</code>… as a call to <code>popcnt</code>.  Our new function is
-now a first-class value that can be called from interpreted code and
-passed to higher-order functions, like the compiler’s constant-folding
-pass.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "POPCNT")
-</span><span class="line">
-</span><span class="line">(defun popcnt (x)
-</span><span class="line">  (popcnt x))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<pre><code>CL-USER&gt; (disassemble 'popcnt:popcnt)
-; disassembly for POPCNT:POPCNT
-; Size: 25 bytes
-; 07FCDB6E:       4831D2           XOR RDX, RDX               ; no-arg-parsing entry point
-;       71:       F3480FB8D1       POPCNT RDX,RCX
-;       76:       48D1E2           SHL RDX, 1
-;       79:       488BE5           MOV RSP, RBP
-;       7C:       F8               CLC
-;       7D:       5D               POP RBP
-;       7E:       C3               RET
-[ error trap noise ]
-CL-USER&gt; (popcnt:popcnt 42)
-3
-</code></pre>
-
-<p>The disassembly shows that we get the code that we expect, including
-the dependency-breaking workaround, and the smoke test passes.
-There’s one interesting detail: we only defined a VOP that returns a
-machine integer.  However, <code>popcnt</code> returns a tagged value (a fixnum),
-and does so with an efficient shift.  IR2 takes care of inserting any
-coercion needed between VOPs (e.g., between <code>popcnt</code> and the VOP used to
-return boxed values from functions), and the IR1 <code>defknown</code> guarantees
-that the result of <code>popcnt</code>, despite being <em>represented</em> in an
-unsigned machine integer, is small enough for a fixnum.</p>
-
-<p>Let’s see what happens when we feed arithmetic into <code>popcnt</code>, e.g.:</p>
-
-<pre><code>CL-USER&gt; (disassemble (lambda (x y)
-                        (declare (type (unsigned-byte 32) x y))
-                        (popcnt:popcnt (+ x y))))
-; disassembly for (LAMBDA (X Y))
-; Size: 55 bytes
-; 0752BD59:       4801FA           ADD RDX, RDI               ; no-arg-parsing entry point
-;       5C:       48D1FA           SAR RDX, 1
-;       5F:       F3480FB8D2       POPCNT RDX,RDX
-;       64:       48D1E2           SHL RDX, 1
-;       67:       488BE5           MOV RSP, RBP
-;       6A:       F8               CLC
-;       6B:       5D               POP RBP
-;       6C:       C3               RET
-</code></pre>
-
-<p>After adding two fixnums, an automatic coercion unboxes the resulting
-fixnum into a machine integer which is then passed to <code>popcnt</code>
-(note the lack of dependency-breaking <code>xor</code> now that the source and
-destination are the same register).</p>
-
-<p>That’s pretty good code, but we can do better: fixnums are tagged with
-0, so we can simply pass fixnums to <code>popcnt</code> without untagging.</p>
-
-<p>This is where the cost parameter to <code>:generator</code> comes in: we can
-define another VOP for <code>popcnt</code> of fixnums and bias the compiler to
-prefer the fixnum VOP.</p>
+<p>The picture is completely different for <code>mfence</code>.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
@@ -417,54 +298,112 @@ prefer the fixnum VOP.</p>
 <span class="line-number">11</span>
 <span class="line-number">12</span>
 <span class="line-number">13</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "SB-VM")
-</span><span class="line">
-</span><span class="line">(define-vop (popcnt/fx)
-</span><span class="line">  (:policy :fast-safe)
-</span><span class="line">  (:translate popcnt:popcnt)
-</span><span class="line">  (:args (x :scs (any-reg) :target r))
-</span><span class="line">  (:arg-types positive-fixnum)
-</span><span class="line">  (:results (r :scs (unsigned-reg)))
-</span><span class="line">  (:result-types unsigned-num)
-</span><span class="line">  (:generator 2 ; 2 is lower than 3, so popcnt/fx is preferable to popcnt
-</span><span class="line">    (unless (location= r x)
-</span><span class="line">      (inst xor r r))
-</span><span class="line">    (inst popcnt r x)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">$ perf annotate -s cache_misses
+</span><span class="line">[...]
+</span><span class="line">    0.00 :        4006b0:       and    %rdx,%r10
+</span><span class="line">    0.00 :        4006b3:       add    $0x1,%r9
+</span><span class="line">    ;; random read
+</span><span class="line">    0.00 :        4006b7:       mov    (%rsi,%r10,8),%rbp
+</span><span class="line">   42.04 :        4006bb:       mov    %rcx,%r10
+</span><span class="line">    ;; store to cached memory (lock word)
+</span><span class="line">    0.00 :        4006be:       mov    %r9,0x200fbb(%rip)        # 601680 &lt;foo&gt;
+</span><span class="line">    [...]
+</span><span class="line">    0.20 :        4006e7:       mfence 
+</span><span class="line">    5.26 :        4006ea:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    ;; random read
+</span><span class="line">    0.19 :        400700:       xor    (%rsi,%r10,8),%rbp
+</span><span class="line">   43.13 :        400704:       xor    %r9,%r8
+</span><span class="line">    [...]
+</span><span class="line">    0.00 :        400725:       mfence 
+</span><span class="line">    4.96 :        400728:       add    $0x1,%rax
+</span><span class="line">    0.92 :        40072c:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    0.36 :        40074d:       jne    4006b0 &lt;cache_misses+0x30&gt;</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<pre><code>CL-USER&gt; (disassemble (lambda (x y)
-                        (declare (type (unsigned-byte 32) x y))
-                        (popcnt:popcnt (+ x y))))
-; disassembly for (LAMBDA (X Y))
-; Size: 47 bytes
-; 07BEABE9:       4801FA           ADD RDX, RDI               ; no-arg-parsing entry point
-;      BEC:       F3480FB8D2       POPCNT RDX,RDX
-;      BF1:       48D1E2           SHL RDX, 1
-;      BF4:       488BE5           MOV RSP, RBP
-;      BF7:       F8               CLC
-;      BF8:       5D               POP RBP
-;      BF9:       C3               RET
+<p>It looks like the loads from uncached memory represent ~85% of the
+runtime, while the <code>mfence</code> pair might account for <em>at most</em> ~15%, if
+I include all the noise from surrounding instructions.</p>
+
+<p>If I trusted the profile, I would worry about eliminating <code>lock</code>ed
+instructions, but not so much for <code>mfence</code>.  However, runtimes (in
+cycles), which is what I’m ultimately interested in, tell a different
+story.  The same loop of LLC load misses takes 2.81e9 cycles for 32M
+iterations without any atomic or fence, versus 3.66e9 for <code>lock
+inc/dec</code> and 19.60e9 cycles for <code>mfence</code>.  So, while the profile for
+the <code>mfence</code> loop would let me believe that only ~15% of the time is
+spent on synchronisation, the <code>mfence</code> pair really represents 86%
+\(((19.6 - 2.81) / 19.6)\) of the runtime for that loop!  Inversely,
+the profile for the <code>lock</code>ed pair would make me guess that we spend
+about 40% of the time there, but, according to the timings, the real
+figure is around 23%.</p>
+
+<p>The other tests all point to the same conclusion: the overhead of
+<code>mfence</code> is strongly underestimated by instruction level profiling,
+and that of <code>lock</code>ed instructions exaggerated, especially when
+adjacent instructions write to memory.</p>
+
+<pre><code>  setup     cycles   (est. overhead)  ~actual overhead
+
+div [ALU] (100 Mi iterations)
+ atomic: 20153782848   (20%)          ~ 3.8%
+ mfence: 28202315112   (25%)          ~31.3%
+vanilla: 19385020088
+
+Reads:
+
+TLB misses (64Mi iterations)
+ atomic:  3776164048   (80%)          ~39.3%
+ mfence: 12108883816   (50%)          ~81.1%
+vanilla:  2293219400 
+
+LLC misses (32Mi iterations)
+ atomic:  3661686632   (40%)          ~23.3%
+ mfence: 19596840824   (15%)          ~85.7%
+vanilla:  2807258536
+
+Writes:
+
+TLB (64Mi iterations)
+ atomic:  3864497496   (80%)          ~10.4%
+ mfence: 13860666388   (50%)          ~75.0%
+vanilla:  3461354848
+
+LLC (32Mi iterations)
+ atomic:  4023626584   (60%)          ~16.9%
+ mfence: 21425039912   (20%)          ~84.4%
+ vanilla: 3345564432
 </code></pre>
 
-<p>Unlike many low-level languages, CL includes a standard function for
-population count, <code>logcount</code>.  SBCL includes a VOP for <code>logcount</code>
-(with a cost of 14), which we can supersede with our own <code>popcnt</code>-based
-VOPs: we only have to replace <code>(:translate popcnt:popcnt)</code> with 
-<code>(:translate logcount)</code>.  That’s an easy improvement but isn’t in trunk
-because <code>popcnt</code> is a recent x86 extension.</p>
+<p>I can guess why we observe this effect; it’s not like Intel is
+intentionally messing with us.  <code>mfence</code> is a full pipeline flush: it
+slows code down because it waits for all in-flight instructions to
+complete their execution.  Thus, while it’s flushing that slows us
+down, the profiling machinery will attribute these cycles to the
+instructions that are being flushed.  Locked instructions instead
+affect stores that are still queued.  By forcing such stores to
+retire, locked instructions become responsible for the extra cycles
+and end up “paying” for writes that would have taken up time anyway.</p>
 
-<p>Adding VOPs for (ad-hoc) polymorphic or otherwise generic functions
-can be surprising: a VOP will only be considered if the arguments <em>and
-the return values</em> are known to have CL types that are compatible with
-the VOP’s representation specification.  For <code>popcnt</code>, we guarantee
-that the return value is a positive integer between 0 and 64; for
-<code>cl:logcount</code>, the <code>defknown</code> guarantees that the return value is a
-positive fixnum.  In both cases, the return values can always be
-represented as an unsigned machine integer, so our new VOPs will
-always match if the argument fits in positive fixnums or unsigned
-machine integers (and will have priority over the generic x86-64 VOP
-because their cost is lower).  More complex cases depend on
-<code>derive-type</code> optimizers, but that’s rarely necessary when defining
-instrinsics for low-level code.</p>
+<p>Losing faith in hardware profiling being remotely representative of
+reality makes me a sad panda; I now have to double check <code>perf</code>
+profiles when hunting for misleading metrics.  At least I can tell
+myself that knowing about this phenomenon helps us make better
+informed – if less definite – decisions and ferret out more easy
+wins.</p>
+
+<p>P.S., if you find this stuff interesting, feel free to send an email
+(pkhuong at $WORK.com).  My team is hiring both experienced developers
+and recent graduates (:</p>
 </div>
   
   

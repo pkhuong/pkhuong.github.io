@@ -5,7 +5,7 @@
 <!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
 <head>
   <meta charset="utf-8">
-  <title>Paul Khuong: some Lisp</title>
+  <title>Too much locality for store forwarding - Paul Khuong: some Lisp</title>
   <meta name="author" content="Paul Khuong">
   <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
   
@@ -16,7 +16,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   
-  <link rel="canonical" href="https://www.pvk.ca/posts/2/">
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2020/02/01/too-much-locality-for-store-forwarding.markdown/">
   <link href="/favicon.png" rel="icon">
   <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
   <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
@@ -79,15 +79,14 @@
   <div id="main">
     <div id="content">
       
-      <div class="blog-index">
+      <div>
+<article class="hentry" role="article">
   
-  
-  
-    <article>
-      
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2020/02/01/too-much-locality-for-store-forwarding.markdown/">Too much locality for store forwarding</a></h1>
+      
+        <h1 class="entry-title" style="font-family: ">Too much locality for store forwarding</h1>
+      
     
     
       <p class="meta">
@@ -106,7 +105,7 @@ Feb
 
 
         
-         | <a href="/Blog/2020/02/01/too-much-locality-for-store-forwarding.markdown/#disqus_thread"
+         | <a href="#disqus_thread"
               data-disqus-identifier="https://www.pvk.ca/Blog/2020/02/01/too-much-locality-for-store-forwarding.markdown/"
 	      >Comments</a>
         
@@ -116,7 +115,7 @@ Feb
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: ">I've been responsible for [Backtrace.io](https://backtrace.io/)'s crash analytics database for a couple months now.[^started-work]
+<div class="entry-content" style="font-family: ; font-size: ">I've been responsible for [Backtrace.io](https://backtrace.io/)'s crash analytics database for a couple months now.[^started-work]
 I have focused my recent efforts on improving query times for in-memory grouped aggregations, i.e.,
 the archetypal MapReduce use-case where we generate key-value pairs, and [fold](https://en.wikipedia.org/wiki/Fold_(higher-order_function)) over the values
 for each key in some [(semi)](https://en.wikipedia.org/wiki/Semigroup)[group](https://en.wikipedia.org/wiki/Group_(mathematics)).
@@ -235,21 +234,59 @@ TL;DR: When a function is hot enough to look into, it's worth asking why it's ca
 
 <p><hr style="width: 50%"></p>
 </div>
-  
-  
 
 
-    </article>
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Feb
   
-  <div class="pagination">
+1st, 
+2020
+
+
+
+
+      
+      
+
+
+    </p>
     
-      <a class="prev" href="/posts/3">&larr; Older</a>
+      <div class="sharing">
+  
+  
+  
+</div>
+
     
-    <a href="/Blog/archives">Blog Archives</a>
-    
-    <a class="next" href="/">Newer &rarr;</a>
-    
-  </div>
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/Blog/2020/01/20/lazy-linear-knapsack/" title="Previous Post: Lazy Linear Knapsack">&laquo; Lazy Linear Knapsack</a>
+      
+      
+        <a class="basic-alignment right" href="/Blog/2020/02/01/too-much-locality-for-store-forwarding/" title="Next Post: Too much locality for store forwarding">Too much locality for store forwarding &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
 </div>
 
     </div>
@@ -262,6 +299,24 @@ TL;DR: When a function is hot enough to look into, it's worth asking why it's ca
   
 
 <script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2020/02/01/too-much-locality-for-store-forwarding.markdown/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2020/02/01/too-much-locality-for-store-forwarding.markdown/';
+      this.page.title = 'Too much locality for store forwarding';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
 
 
 
