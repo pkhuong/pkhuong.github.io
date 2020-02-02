@@ -1,17 +1,20 @@
 ---
 layout: post
-title: "Too much locality for store forwarding"
-date: 2020-02-01 17:29:17 -0500
+title: "Too much locality... for stores to forward"
+date: 2020-02-01 17:29:21 -0500
 comments: true
 categories: 
 ---
 
-I've been responsible for [Backtrace.io](https://backtrace.io/)'s crash analytic database for a couple months now.[^started-work]
+<small>Apologies for the failed [Cake reference](https://www.youtube.com/watch?v=K3DRkVjuqmc).<br/>
+2020-02-02: Refer to Travis Down's investigation into this pathological case for forwarding.</small>
+
+I've been responsible for [Backtrace.io](https://backtrace.io/)'s crash analytic database[^started-work] for a couple months now.
 I have focused my recent efforts on improving query times for in-memory grouped aggregations, i.e.,
-the archetypal Map-Reduce use-case where we generate key-value pairs, and [fold](https://en.wikipedia.org/wiki/Fold_(higher-order_function)) over the values
+the archetypal MapReduce use-case where we generate key-value pairs, and [fold](https://en.wikipedia.org/wiki/Fold_(higher-order_function)) over the values
 for each key in some [(semi)](https://en.wikipedia.org/wiki/Semigroup)[group](https://en.wikipedia.org/wiki/Group_(mathematics)).
 We have a cute cache-efficient data structure for this type of workload;
-the inner loop is simply inserting in a small hash table with [Robin Hood linear probing](/Blog/more_numerical_experiments_in_hashing.html),
+the inner loop simply inserts in a small hash table with [Robin Hood linear probing](/Blog/more_numerical_experiments_in_hashing.html),
 in order to guarantee entries in the table are ordered by hash value.  This
 ordering lets us easily dump the entries in sorted order, and [block](https://www2.eecs.berkeley.edu/Pubs/TechRpts/1993/6309.html) the merge loop for an arbitrary number of sorted arrays
 into a unified, larger, ordered hash table (which we can, again, dump to a sorted array).[^more-later]
@@ -26,7 +29,7 @@ Observation
 As I updated more operators to use this data structure, I noticed that we were spending a lot of time in its inner loop.
 In fact, [perf](http://www.brendangregg.com/linuxperf.html) showed that the query server as a whole was spending 4% of its CPU time on one instruction in that loop:
 
-     2.17 |       modvqu     (%rbx),%xmm0
+     2.17 |       movdqu     (%rbx),%xmm0
     39.63 |       lea        0x1(%r8),%r14  # that's 40% of the annotated function
           |       mov        0x20(%rbx),%rax
      0.15 |       movaps     %xmm0,0xa0(%rsp)
@@ -69,14 +72,24 @@ which means our job as micro-optimisers is, at a high level, to avoid long depen
 When that's too hard, we should distribute as much scheduling slack as possible between nodes in a chain, in order to absorb the knock-on effects of cache misses and other latency spikes.
 If we fail, the chip will often find itself with no instruction ready to execute; stalling the pipeline like that is like slowing down by a factor of 10.
 
-[^but-forwarding]: Store-to-load forwarding can help improve the performance of this pattern, when we use forwarding patterns supported by the hardware. However, this mechanism can only decrease the penalty, e.g., by shaving a cycle or two compared to serially writing to L1 and reading from L1.  This is fundamentally a scheduling issue.
+[^but-forwarding]: Store-to-load forwarding can help improve the performance of this pattern, when we use forwarding patterns that the hardware supports. However, this mechanism can only decrease the penalty of serial dependencies, e.g., by shaving away some or all of the time it takes to store a result to cache and load it back; even when results can feed directly into dependencies, we still have to wait for inputs to be computed. This is fundamentally a scheduling issue.
 
 The initial inner loop simply executes steps A, B, and C in order, where step C depends on the result of step B, and step B on that of step A.
 In theory, a chip with a wide enough instruction reordering window could pipeline multiple loop iterations.
 In practice, real hardware can only [plan on the order of 100-200 instructions ahead](http://blog.stuffedcow.net/2013/05/measuring-rob-capacity/), and that mechanism depends on branches being predicted correctly.
 We have to explicitly insert slack in our dataflow schedule, and we must distribute it well enough for instruction reordering to see the gaps.
 
-As it is, the dataflow graph for each loop iteration is a pure chain:
+This specific instance is a particularly bad case for contemporary machines:
+step B populates the entry with regular (64-bit) register writes,
+while step C copies the same bytes with vector reads and writes.
+[Travis Down looked into this forwarding scenario](https://gist.github.com/travisdowns/bc9af3a0aaca5399824cf182f85b9e9c) and found that no other read-after-write setup behaves this badly, on Intel or AMD.
+That's probably why the `movdqu` vector load instruction was such an issue.
+If the compiler had emitted the copy with GPR reads and writes,
+that *might* have been enough for the hardware to hide the latency.
+However, as [Travis points out on Twitter](https://twitter.com/trav_downs/status/1223766684932222976), it's hard for a compiler to get that right across compilation units.
+In any case, our most reliable (more so than passing this large struct by value and hoping the compiler will avoid mismatched instructions) and powerful tool to fix this at the source level is to schedule operations manually.
+
+The dataflow graph for each loop iteration is currently a pure chain:
 
              A1
              |
@@ -93,7 +106,7 @@ As it is, the dataflow graph for each loop iteration is a pure chain:
                     v
                     C2
 
-How does one add slack? With bounded queues!
+How does one add slack to these chains? With bounded queues!
 
 Experiment
 ==========
@@ -139,7 +152,7 @@ we can compute hashes ahead of time, and accelerate random accesses to the hash 
 The profile for the new inner loop is flatter, and the hottest part is as follows
 
           |       mov        0x8(%rsp),%rdx
-     9.91 |       lea        (%r12,%12,4),%rax
+     9.91 |       lea        (%r12,%r12,4),%rax
      0.64 |       prefetcht0 (%rdx,%rax,8)
     17.04 |       cmp        %rcx,0x28(%rsp)
    
@@ -150,8 +163,9 @@ It doesn't really matter if these instructions are slow: they're still far from 
 
 I described two tools that I use regularly when optimising code for contemporary hardware.
 Finding ways to scatter around scheduling slack is always useful, both in software and in real life planning.[^unless-people]
-However, I think the more powerful one is using buffering to expose bulk operations, which tends to open up more opportunities than just doing the same thing in a loop.
-In the case above, we found a 20% speed-up which, for someone who visit their [Backtrace dashboard](https://help.backtrace.io/en/articles/2765535-triage) a couple times a day, can add up to an hour or two at the end of the year.
+One simple way to do so is to add bounded buffers, and to flush buffers as soon as they fill up (or refill when they become empty), instead of waiting until the next write to the buffer.
+However, I think the more powerful transformation is using buffering to expose bulk operations, which tends to open up more opportunities than just doing the same thing in a loop.
+In the case above, we found a 20% speed-up; for someone who visit their [Backtrace dashboard](https://help.backtrace.io/en/articles/2765535-triage) a couple times a day, that can add up to an hour or two at the end of the year.
 
 TL;DR: When a function is hot enough to look into, it's worth asking why it's called so often, in order to focus on higher level bulk operations.
 
