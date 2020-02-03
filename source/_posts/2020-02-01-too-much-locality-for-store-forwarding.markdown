@@ -7,7 +7,7 @@ categories:
 ---
 
 <small>Apologies for the failed [Cake reference](https://www.youtube.com/watch?v=K3DRkVjuqmc).<br/>
-2020-02-02: Refer to Travis Down's investigation into this pathological case for forwarding.</small>
+2020-02-02: Refer to Travis Downs's investigation into this pathological case for forwarding.</small>
 
 I've been responsible for [Backtrace.io](https://backtrace.io/)'s crash analytic database[^started-work] for a couple months now.
 I have focused my recent efforts on improving query times for in-memory grouped aggregations, i.e.,
@@ -82,7 +82,7 @@ We have to explicitly insert slack in our dataflow schedule, and we must distrib
 This specific instance is a particularly bad case for contemporary machines:
 step B populates the entry with regular (64-bit) register writes,
 while step C copies the same bytes with vector reads and writes.
-[Travis Down looked into this forwarding scenario](https://gist.github.com/travisdowns/bc9af3a0aaca5399824cf182f85b9e9c) and found that no other read-after-write setup behaves this badly, on Intel or AMD.
+[Travis Downs looked into this forwarding scenario](https://gist.github.com/travisdowns/bc9af3a0aaca5399824cf182f85b9e9c) and found that no other read-after-write setup behaves this badly, on Intel or AMD.
 That's probably why the `movdqu` vector load instruction was such an issue.
 If the compiler had emitted the copy with GPR reads and writes,
 that *might* have been enough for the hardware to hide the latency.
