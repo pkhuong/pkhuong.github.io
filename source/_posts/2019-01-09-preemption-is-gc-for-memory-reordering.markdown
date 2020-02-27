@@ -910,3 +910,5 @@ that's essentially SPARC, and I'm not sure that platform still
 warrants the maintenance burden.
 
 But, we'll see, maybe we can make the above work on AArch64 or POWER.
+
+<p><hr style="width: 50%"></p>
