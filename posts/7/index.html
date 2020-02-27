@@ -823,14 +823,7 @@ membarrier (<code>IPI</code>) is usually slightly faster than <code>mprotect</co
 <code>IPI</code> via expedited membarrier hits a worst-case of 0.041 ms, versus
 0.046 for <code>mprotect</code>.</p>
 
-<table>
-  <tbody>
-    <tr>
-      <td>[//]: # &gt; ggplot(data[data$method == ‘IPI’</td>
-      <td>data$method == ‘mprotect’, ], aes(x=latency, color=method)) + geom_density() + labs(title=”Distribution of IPI-based global barrier latency on an unloaded system”, colour=”Method”) + xlab(“Latency (ms)”) + ylab(“Density”) + coord_cartesian(xlim=c(0, 0.02))</td>
-    </tr>
-  </tbody>
-</table>
+<!-- # > ggplot(data[data$method == 'IPI' | data$method == 'mprotect', ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of IPI-based global barrier latency on an unloaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") + coord_cartesian(xlim=c(0, 0.02)) -->
 
 <p><a href="/images/2019-01-09-preemption-is-gc-for-memory-reordering/unloaded-global-ipi-large.png">
 <img class="center" src="/images/2019-01-09-preemption-is-gc-for-memory-reordering/unloaded-global-ipi.png" />
@@ -846,14 +839,7 @@ million observations for each method, and the worst case for <code>IPI</code> vi
 expedited membarrier was 0.076 ms (0.041 ms on an unloaded system),
 compared to a more stable 0.047 ms for <code>mprotect</code>.</p>
 
-<table>
-  <tbody>
-    <tr>
-      <td>[//]: # &gt; ggplot(loaded[loaded$method == ‘IPI’</td>
-      <td>loaded$method == ‘mprotect’, ], aes(x=latency, color=method)) + geom_density() + labs(title=”Distribution of IPI-based global barrier latency on a loaded system”, colour=”Method”) + xlab(“Latency (ms)”) + ylab(“Density”) + coord_cartesian(xlim=c(0, 0.04))</td>
-    </tr>
-  </tbody>
-</table>
+<!-- # > ggplot(loaded[loaded$method == 'IPI' | loaded$method == 'mprotect', ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of IPI-based global barrier latency on a loaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") + coord_cartesian(xlim=c(0, 0.04)) -->
 
 <p><a href="/images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-ipi-large.png">
 <img class="center" src="/images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-ipi.png" />
@@ -875,7 +861,7 @@ after 10 ms of inaction: that’s the spike at 20ms.  The values for
 should add another fallback mechanism based on <code>membarrier</code> to improve
 <code>barrierd</code>’s performance on lightly loaded machines.</p>
 
-<p>[//]: # &gt; ggplot(data[data$method != ‘IPI’ &amp; data$method != ‘mprotect’ &amp; data$latency &lt; 86, ], aes(x=latency, color=method)) + geom_density() + labs(title=”Distribution of preemption-based global barrier latency on an unloaded system”, colour=”Method”) + xlab(“Latency (ms)”) + ylab(“Density”)</p>
+<!-- # > ggplot(data[data$method != 'IPI' & data$method != 'mprotect' & data$latency < 86, ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of preemption-based global barrier latency on an unloaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") -->
 
 <p><a href="/images/2019-01-09-preemption-is-gc-for-memory-reordering/unloaded-global-preemption-large.png">
 <img class="center" src="/images/2019-01-09-preemption-is-gc-for-memory-reordering/unloaded-global-preemption.png" />
@@ -899,7 +885,7 @@ than <code>membarrier</code> (geometric mean of 5.6x), but this time with a mere
 three 9s (as fast as membarrier \(99.91-99.96\%\) of the time,
 \(p&lt;10\sp{-12}\)).</p>
 
-<p>[//]: # ggplot(loaded[loaded$method != ‘IPI’ &amp; loaded$method != ‘mprotect’ &amp; loaded$latency &lt; 100, ], aes(x=latency, color=method)) + geom_density() + labs(title=”Distribution of preemption-based global barrier latency on a loaded system”, colour=”Method”) + xlab(“Latency (ms)”) + ylab(“Density”) + coord_cartesian(xlim=c(0, 100))</p>
+<!-- # ggplot(loaded[loaded$method != 'IPI' & loaded$method != 'mprotect' & loaded$latency < 100, ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of preemption-based global barrier latency on a loaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") + coord_cartesian(xlim=c(0, 100)) -->
 
 <p><a href="/images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-preemption-large.png">
 <img class="center" src="/images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-preemption.png" />
@@ -1014,6 +1000,8 @@ that’s essentially SPARC, and I’m not sure that platform still
 warrants the maintenance burden.</p>
 
 <p>But, we’ll see, maybe we can make the above work on AArch64 or POWER.</p>
+
+<p><hr style="width: 50%" /></p>
 <div class="footnotes">
   <ol>
     <li id="fn:model-ooe">
