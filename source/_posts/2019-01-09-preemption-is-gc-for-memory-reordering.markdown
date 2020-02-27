@@ -731,7 +731,7 @@ membarrier (`IPI`) is usually slightly faster than `mprotect`;
 `IPI` via expedited membarrier hits a worst-case of 0.041 ms, versus
 0.046 for `mprotect`.
 
-[//]: # > ggplot(data[data$method == 'IPI' | data$method == 'mprotect', ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of IPI-based global barrier latency on an unloaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") + coord_cartesian(xlim=c(0, 0.02))
+<!-- # > ggplot(data[data$method == 'IPI' | data$method == 'mprotect', ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of IPI-based global barrier latency on an unloaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") + coord_cartesian(xlim=c(0, 0.02)) -->
 
 <a href="/images/2019-01-09-preemption-is-gc-for-memory-reordering/unloaded-global-ipi-large.png">
 {% img center /images/2019-01-09-preemption-is-gc-for-memory-reordering/unloaded-global-ipi.png %}
@@ -749,7 +749,7 @@ compared to a more stable 0.047 ms for `mprotect`.
 
 [^CSM]: I computed these extreme confidence intervals with my [old code to test statistical SLOs](/Blog/2018/07/06/testing-slo-type-properties-with-the-confidence-sequence-method/).
 
-[//]: # > ggplot(loaded[loaded$method == 'IPI' | loaded$method == 'mprotect', ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of IPI-based global barrier latency on a loaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") + coord_cartesian(xlim=c(0, 0.04))
+<!-- # > ggplot(loaded[loaded$method == 'IPI' | loaded$method == 'mprotect', ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of IPI-based global barrier latency on a loaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") + coord_cartesian(xlim=c(0, 0.04)) -->
 
 <a href="/images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-ipi-large.png">
 {% img center /images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-ipi.png %}
@@ -771,7 +771,7 @@ after 10 ms of inaction: that's the spike at 20ms.  The values for
 should add another fallback mechanism based on `membarrier` to improve
 `barrierd`'s performance on lightly loaded machines.
 
-[//]: # > ggplot(data[data$method != 'IPI' & data$method != 'mprotect' & data$latency < 86, ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of preemption-based global barrier latency on an unloaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density")
+<!-- # > ggplot(data[data$method != 'IPI' & data$method != 'mprotect' & data$latency < 86, ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of preemption-based global barrier latency on an unloaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") -->
 
 <a href="/images/2019-01-09-preemption-is-gc-for-memory-reordering/unloaded-global-preemption-large.png">
 {% img center /images/2019-01-09-preemption-is-gc-for-memory-reordering/unloaded-global-preemption.png %}
@@ -795,7 +795,7 @@ than `membarrier` (geometric mean of 5.6x), but this time with a mere
 three 9s (as fast as membarrier \\(99.91-99.96\%\\) of the time,
 \\(p<10\sp{-12}\\)).
 
-[//]: # ggplot(loaded[loaded$method != 'IPI' & loaded$method != 'mprotect' & loaded$latency < 100, ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of preemption-based global barrier latency on a loaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") + coord_cartesian(xlim=c(0, 100))
+<!-- # ggplot(loaded[loaded$method != 'IPI' & loaded$method != 'mprotect' & loaded$latency < 100, ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of preemption-based global barrier latency on a loaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") + coord_cartesian(xlim=c(0, 100)) -->
 
 <a href="/images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-preemption-large.png">
 {% img center /images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-preemption.png %}
