@@ -529,13 +529,15 @@ error for those extrema wasn’t actually larger than for the points we
 were already considering, so the solution was still feasible and
 optimal.</p>
 
-<p>The fractions will be more readable in floats:
-    CL-USER&gt; (values (float * 1d0) (map ‘simple-vector
-                                        (lambda (x) (float x 1d0))
-                                        (second /)))
-    5.466676005138464d-4
-    #(1.0000900001021278d0 0.9973092516744465d0 0.4988351170902357d0
-      0.177345274368841d0 0.044155517622880315d0)</p>
+<p>The fractions will be more readable in floats:</p>
+
+<pre><code>CL-USER&gt; (values (float * 1d0) (map 'simple-vector
+                                    (lambda (x) (float x 1d0))
+                                    (second /)))
+5.466676005138464d-4
+#(1.0000900001021278d0 0.9973092516744465d0 0.4988351170902357d0
+  0.177345274368841d0 0.044155517622880315d0)
+</code></pre>
 
 <p>Now, we have nearly exactly (up to a couple bits) the same values as
 <a href="http://lol.zoy.org/wiki/doc/maths/remez/tutorial-exponential">LolRemez’s example</a>.
