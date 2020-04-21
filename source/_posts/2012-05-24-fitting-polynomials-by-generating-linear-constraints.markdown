@@ -423,6 +423,7 @@ were already considering, so the solution was still feasible and
 optimal.
 
 The fractions will be more readable in floats:
+
     CL-USER> (values (float * 1d0) (map 'simple-vector
                                         (lambda (x) (float x 1d0))
                                         (second /)))
