@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2018/06/24/an-old-conjecture-on-stream-transducers/">An old conjecture on stream transducers</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2018/08/25/restartable-sequences-with-the-polysemic-null-segment-selector/">Restartable sequences with the polysemic null segment selector</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-June
+Aug
   
-24th, 
+25th, 
 2018
 
 
 
 
         
-         | <a href="/Blog/2018/06/24/an-old-conjecture-on-stream-transducers/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2018/06/24/an-old-conjecture-on-stream-transducers/"
+         | <a href="/Blog/2018/08/25/restartable-sequences-with-the-polysemic-null-segment-selector/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2018/08/25/restartable-sequences-with-the-polysemic-null-segment-selector/"
 	      >Comments</a>
         
         
@@ -116,61 +116,503 @@ June
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I’ve been thinking about stream processing again, and came back to 
-<a href="https://www.pvk.ca/Blog/Lisp/Pipes/introducing_pipes.html">an old pick-two-of-three conjecture</a>
-of mine: for stream processing without dynamic allocation, “arbitrary
-outputs per input, multiple consumers, multiple producers: choose
-two.”</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>Implementing <a href="https://en.wikipedia.org/wiki/Non-blocking_algorithm">non-blocking algorithms</a> is one of the few things that are
+easier to code in a kernel than in userspace (the only other one I can
+think of is physically wrecking a machine). In the kernel, we only
+have to worry about designing a protocol that achieves forward
+progress even if some threads stop participating. We must guarantee
+the absence of conceptual locks (we can’t have 
+operations that must be paired, or barriers that everyone must
+reach), but are free to implement the protocol by naïvely
+spinlocking around individual steps: kernel code can temporarily
+<a href="https://elixir.bootlin.com/linux/v4.18/source/kernel/locking/spinlock.c#L61">disable preemption and interrupts</a> to bound a critical section’s execution time.</p>
 
-<p>The question is interesting because stream processing
-in constant space is a subset of <a href="https://complexityzoo.uwaterloo.ca/Complexity_Zoo:L">L</a>
-(or <a href="https://en.wikipedia.org/wiki/FL_(complexity)">FL</a>, and thus
-probably not P-complete, let alone Turing complete. Having easily characterisable
-subsets of stream processing that can be implemented in constant
-space would be a boon for the usability of stream DSLs.</p>
+<p>Getting these non-blocking protocols right is still challenging, but
+the challenge is one fundamental for reliable systems. The same
+problems, solutions, and space/functionality trade-offs appear in
+all distributed systems. Some would even argue that the kind of
+interfaces that guarantee lock- or wait- freedom are closer to the
+object oriented ideals.</p>
 
-<p>I think I find this academic trope as suspicious as 
-<a href="https://twitter.com/DRMacIver">@DRMavIver</a> 
-does, so I have mixed feelings about the fact that this one still
-feels true seven years later.</p>
+<p>Of course, there is still a place for clever instruction sequences
+that avoid internal locks, for code that may be paused anywhere without
+freezing the whole system: interrupts can’t always be disabled, read
+operations should avoid writing to shared memory if they can,
+and a single atomic read-modify-write operation may be faster than
+locking. The key point for me is that this complexity is opt-in: we
+can choose to tackle it incrementally, as a performance problem rather
+than as a prerequisite for correctness.</p>
 
-<blockquote class="tw-center-align twitter-tweet" data-lang="en"><p lang="en" dir="ltr">Is it just me or do impossibility theorems which claim &quot;these three obviously desirable properties cannot simultaneously be satisfied&quot; always include at least one obviously undesirable or at least suspicious property?</p>&mdash; David R. MacIver (@DRMacIver) <a href="https://twitter.com/DRMacIver/status/1008977092028059648?ref_src=twsrc%5Etfw">June 19, 2018</a></blockquote>
-<script async="" src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+<p>We don’t have the same luxury in userspace. We can’t start by focusing
+on the fundamentals of a non-blocking algorithm, and only implement
+interruptable sequences where it makes sense. Userspace can’t disable
+preemption, so we must think about the minutiae of interruptable code
+sequences from the start; non-blocking algorithms in userspace are
+always in hard mode, where every step of the protocol might be paused
+at any instruction.</p>
 
-<p>The main reason I believe in this conjecture is the following
-example, <code>F(S(X), X)</code>, where <code>S</code> is the function that takes a stream
-and ouputs every other value. Or, more formally, \(F\sb{i} = f(X\sb{2i}, X\sb{i})\).</p>
+<p>Specifically, the problem with non-blocking code in user space isn’t
+that threads or processes can be preempted at any point, but rather
+that the preemption can be observed. It’s a
+<a href="http://fare.tunes.org/tmp/emergent/pclsr.htm">PCLSRing</a> issue! Even
+Unices guarantee programmers won’t observe a thread in the middle of a
+syscall: when a thread (process) must be interrupted, any pending
+syscall either runs to completion, or returns with an error<sup id="fnref:1"><a href="#fn:1" class="footnote">1</a></sup>.
+What we need is a similar guarantee for steps of our own
+non-blocking protocols<sup id="fnref:sun"><a href="#fn:sun" class="footnote">2</a></sup>.</p>
 
-<p><img class="center" src="/images/2018-06-24-an-old-conjecture-on-stream-transducers/network.png" /></p>
+<p>Hardware transactional memory kind of solves the problem
+(preemption aborts any pending transaction) but is a bit slow<sup id="fnref:a"><a href="#fn:a" class="footnote">3</a></sup>, and
+needs a fallback mechanism. Other emulation schemes for PCLSRing
+userspace code divide the problem in two:</p>
 
-<p>Let’s say <code>X</code> is some stream of values that can’t be easily
-re-computed (e.g., each output value is the result of a slow
-computation). How do we then compute <code>F(S(X), X)</code> without either
-recomputing the stream <code>X</code>, or buffering an unbounded amount of past
-values from that stream? I don’t see a way to do so, not just in any
-stream processing DSL (domain specific language), but also in any
-general purpose language.</p>
+<ol>
+  <li>Determining that another thread was preempted in the middle of a
+critical section.</li>
+  <li>Guaranteeing that that other thread will not blindly resume
+executing its critical section (i.e., knowing that the thread knows
+that we know it’s been interrupted<sup id="fnref:2"><a href="#fn:2" class="footnote">4</a></sup>).</li>
+</ol>
 
-<p>For me, the essence of the problem is that the two inputs to <code>F</code> are
-out of sync with respect to the same source of values, <code>X</code>: one
-consumes two values of <code>X</code> per invocation of <code>F</code>, and the other only
-one. This issue could also occur if we forced stream transducers
-(processing nodes) to output a fixed number of value at each
-invocation: let <code>S</code> repeat each value of <code>X</code> twice,
-i.e., interleave <code>X</code> with <code>X</code> (\(F\sb{i} = f(X\sb{\lfloor i / 2\rfloor}, X\sb{i})\)).</p>
+<p>The first part is relatively easy. For per-CPU data, it suffices to
+observe that we are running on a given CPU (e.g., core #4), and that
+another thread claims to own the same CPU’s (core #4’s) data. For
+global locks,
+<a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.219.6486&amp;rep=rep1&amp;type=pdf">we can instead spin for a while before entering a slow path</a> 
+that determines whether the holder has been preempted, by reading
+scheduling information in <a href="http://man7.org/linux/man-pages/man5/proc.5.html"><code>/proc</code></a>.</p>
 
-<p>Forcing each invocation of a transducer to always produce exactly one
-value is one way to rule out this class of stream processing network.
-Two other common options are to forbid either forks (everything is
-single-use or subtrees copied and recomputed for each reuse) or
-joins (only single-input stream processing nodes).</p>
+<p>The second part is harder. I have played with schemes that relied on
+<a href="http://man7.org/linux/man-pages/man7/signal.7.html">signals</a>, but was never satisfied: I found Linux perf
+will rarely, but not never, drop interrupts when I used it to
+“profile” context switches, and signaling when we determine that
+the holder has been pre-empted has memory visibility issues for
+per-CPU data<sup id="fnref:3"><a href="#fn:3" class="footnote">5</a></sup>.</p>
 
-<p>I don’t think this turtle-and-hare desynchronisation problem is a
-weakness in stream DSLs, I only see a reasonable task that can’t be
-performed in constant space.  Given the existence of such tasks, I’d
-like to see stream processing DSLs be explicit about the tradeoffs
-they make to balance performance <em>guarantees</em>, expressiveness, and
-usability, especially when it comes to the performance model.</p>
+<p>Until earlier this month, the best known solution on mainline Linux
+involved <em>cross-modifying code</em>! When a CPU executes a memory write
+instruction, that write is affected by the registers, virtual memory
+mappings, and the instruction’s bytes. Contemporary operating systems
+rarely let us halt and tweak another thread’s general purpose
+registers (Linux won’t let us self-<a href="http://man7.org/linux/man-pages/man2/ptrace.2.html">ptrace</a>, nor pause an individual
+thread). Virtual memory mappings are per-process, and can’t be
+modified from the outside. The only remaining angle is modifying the
+premptee’s machine code.</p>
+
+<p>That’s what <a href="https://github.com/facebookexperimental/Rseq">Facebook’s experimental library Rseq (restartable sequences)</a> actually does.</p>
+
+<p>I’m not happy with that solution either: while it “works,” it requires
+per-thread clones of each critical section, and makes us deal with
+cross-modifying code. I’m not comfortable with leaving code pages
+writable, and we also have to guarantee the pre-emptee’s writes are
+visible. For me, the only defensible implementation is to modify
+the code by mmap-ing pages in place, which incurs an IPI per
+modification. The total system overhead thus scales superlinearly with
+the number of CPUs.</p>
+
+<p>With Mathieu Desnoyers’s, Paul Turner’s, and Andrew Hunter’s patch to
+<a href="https://github.com/torvalds/linux/blob/v4.18/kernel/rseq.c">add an rseq syscall to Linux 4.18</a>, we
+finally have a decent answer. Rather than triggering special code when
+a thread detects that another thread has been pre-empted in the middle
+of a critical section, userspace can associate recovery code with the
+address range for each restartable critical section’s
+instructions. Whenever the kernel preempts a thread, it detects
+whether the interruptee is in such a restartable sequence, and, if so,
+redirects the instruction pointer to the associated recovery code.
+This essentially means that critical sections must be read-only
+except for the last instruction in the section, but that’s not too
+hard to satisfy. It also means that we incur recovery even when no one
+would have noticed, but the overhead should be marginal (there’s at
+most one recovery per timeslice), and we get a simpler programming
+model in return.</p>
+
+<p>Earlier this year, I found another way to prevent critical sections
+from resuming normal execution after being preempted. It’s a total
+hack that exercises a state saving defect in Linux/x86-64, but I’m
+comfortable sharing it now that Rseq is in mainline: if anyone needs
+the functionality, they can update to 4.18, or backport the feature.</p>
+
+<h2 id="heres-a-riddle">Here’s a riddle!</h2>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>riddle.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">static</span> <span class="k">const</span> <span class="kt">char</span> <span class="n">values</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="sc">&#39;X&#39;</span><span class="p">,</span> <span class="sc">&#39;Y&#39;</span> <span class="p">};</span>
+</span><span class="line">
+</span><span class="line"><span class="k">static</span> <span class="kt">char</span>
+</span><span class="line"><span class="nf">read_value</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="cm">/*</span>
+</span><span class="line"><span class="cm">         * New feature in GCC 6; inline asm would also works.</span>
+</span><span class="line"><span class="cm">         * https://gcc.gnu.org/onlinedocs/gcc-6.1.0/gcc/Named-Address-Spaces.html#Named-Address-Spaces</span>
+</span><span class="line"><span class="cm">         */</span>
+</span><span class="line">        <span class="k">return</span> <span class="o">*</span><span class="p">(</span><span class="k">const</span> <span class="n">__seg_gs</span> <span class="kt">char</span> <span class="o">*</span><span class="p">)(</span><span class="kt">uintptr_t</span><span class="p">)</span><span class="n">values</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="kt">int</span>
+</span><span class="line"><span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="cm">/* ... */</span>
+</span><span class="line">        <span class="kt">char</span> <span class="n">before_switch</span> <span class="o">=</span> <span class="n">read_value</span><span class="p">();</span>  <span class="cm">/* Returns &#39;X&#39;. */</span>
+</span><span class="line">        <span class="n">usleep</span><span class="p">(</span><span class="mi">1000</span> <span class="o">*</span> <span class="mi">1000</span><span class="p">);</span>  <span class="cm">/* Or any other wait for preemption. */</span>
+</span><span class="line">        <span class="kt">char</span> <span class="n">after_switch</span> <span class="o">=</span> <span class="n">read_value</span><span class="p">();</span>  <span class="cm">/* Returns &#39;Y&#39;. */</span>
+</span><span class="line">        <span class="cm">/* ... */</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>With an appropriate setup, the <code>read_value</code> function above will return
+a different value once the executing thread is switched out. No, the
+kernel isn’t overwriting read-only data while we’re switched out. When
+I listed the set of inputs that affect a memory store or load
+instruction (general purpose registers, virtual memory mappings, and
+the instruction bytes), I left out one last x86 thing: segment registers.</p>
+
+<p>Effective addresses on x86oids are about as feature rich as it gets:
+they sum a base address, a shifted index, a constant offset, <em>and,
+optionally, a segment base</em>. Today, we simply use segment bases to implement
+thread-local storage (each thread’s <code>FS</code> or <code>GS</code> offset points to its
+thread-local block), but that usage
+repurposes memory segmentation, an old 8086 feature… and x86-64 still
+maintains some backward compatibility with its 16-bit ancestor.
+There’s a lot of unused complexity there, so it’s plausible that we’ll
+find information leaks or otherwise flawed architectural state
+switching by poking around segment registers.</p>
+
+<h2 id="how-to-set-that-up">How to set that up</h2>
+
+<p>After learning about this <a href="http://lackingrhoticity.blogspot.com/2018/01/observing-interrupts-from-userland-on-x86.html">trick to observe interrupts from userland</a>,
+I decided to do a close reading of Linux’s task switching code on
+x86-64 and eventually found <a href="https://elixir.bootlin.com/linux/v4.18/source/arch/x86/kernel/process_64.c#L174">this interesting comment</a><sup id="fnref:4"><a href="#fn:4" class="footnote">6</a></sup>.</p>
+
+<p>Observing a value of <code>0</code> in the <code>FS</code> or <code>GS</code> registers can mean
+two things:</p>
+
+<ol>
+  <li>Userspace explicitly wrote the null segment selector in there,
+and reset the segment base to <code>0</code>.</li>
+  <li>The kernel wrote a <code>0</code> in there before setting up the segment base
+directly, with <code>WR{FS,GS}BASE</code> or by writing to a model-specific
+register (MSR).</li>
+</ol>
+
+<p>Hardware has to efficiently keep track of which is actually in
+effect. If userspace wrote a <code>0</code> in <code>FS</code> or <code>GS</code>, prefixing an
+instruction with that segment has no impact; if the MSR write is
+still active (and is non-zero), using that segment must
+impact effective address computation.</p>
+
+<p>There’s no easy way to do the same in software. Even in ring 0, the
+only sure-fire way to distinguish between the two cases is to actually
+read the current segment base value, and that’s slow. Linux instead
+fast-paths the common case, where the segment register is 0 because
+the kernel is handling segment bases.  It prioritises that use case so
+much that the code knowingly sacrifices correctness when userspace
+writes <code>0</code> in a segment register after asking the kernel to setup its
+segment base directly.</p>
+
+<p>This incorrectness is acceptable because it only affects the thread
+that overwrites its segment register, and no one should go through
+that sequence of operations. Legacy code can still manipulate segment
+descriptor tables and address them in segment registers.  However,
+being legacy code, it won’t use the modern syscall that directly
+manipulates the segment base. Modern code can let the kernel
+set the segment base without playing with descriptor tables, and
+has no reason to look at segment registers.</p>
+
+<p>The only way to observe the buggy state saving is to go looking for
+it, with something like the code below (which uses <code>GS</code> because <code>FS</code>
+is already taken by <code>glibc</code> to implement thread-local storage).</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>h4x.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+<span class="line-number">61</span>
+<span class="line-number">62</span>
+<span class="line-number">63</span>
+<span class="line-number">64</span>
+<span class="line-number">65</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define RUN_ME </span><span class="cm">/*</span>
+</span><span class="line"><span class="cm">gcc-6 -std=gnu99 $0 -o h4x &amp;&amp; ./h4x; exit $?;</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">Should output</span>
+</span><span class="line"><span class="cm">Reads: XXYX</span>
+</span><span class="line"><span class="cm">Re-reads: XYX</span>
+</span><span class="line"><span class="cm">*/</span><span class="cp"></span>
+</span><span class="line"><span class="cp">#define _GNU_SOURCE</span>
+</span><span class="line"><span class="cp">#include &lt;asm/prctl.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;assert.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;stdint.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;stdio.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;sys/prctl.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;sys/syscall.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;unistd.h&gt;</span>
+</span><span class="line">
+</span><span class="line"><span class="k">static</span> <span class="k">const</span> <span class="kt">char</span> <span class="n">values</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="sc">&#39;X&#39;</span><span class="p">,</span> <span class="sc">&#39;Y&#39;</span> <span class="p">};</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/* Directly set GS&#39;s base with a syscall. */</span>
+</span><span class="line"><span class="k">static</span> <span class="kt">void</span>
+</span><span class="line"><span class="nf">set_gs_base</span><span class="p">(</span><span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">base</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">int</span> <span class="n">ret</span> <span class="o">=</span> <span class="n">syscall</span><span class="p">(</span><span class="n">__NR_arch_prctl</span><span class="p">,</span> <span class="n">ARCH_SET_GS</span><span class="p">,</span> <span class="n">base</span><span class="p">);</span>
+</span><span class="line">        <span class="n">assert</span><span class="p">(</span><span class="n">ret</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/* Write a 0 in GS. */</span>
+</span><span class="line"><span class="k">static</span> <span class="kt">void</span>
+</span><span class="line"><span class="nf">set_gs</span><span class="p">(</span><span class="kt">unsigned</span> <span class="kt">short</span> <span class="n">value</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="n">asm</span> <span class="k">volatile</span><span class="p">(</span><span class="s">&quot;movw %0, %%gs&quot;</span> <span class="o">::</span> <span class="s">&quot;r&quot;</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="o">:</span> <span class="s">&quot;memory&quot;</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/* Read gs:values[0]. */</span>
+</span><span class="line"><span class="k">static</span> <span class="kt">char</span>
+</span><span class="line"><span class="nf">read_value</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="cm">/*</span>
+</span><span class="line"><span class="cm">         * New feature in GCC 6; inline asm would also works.</span>
+</span><span class="line"><span class="cm">         * https://gcc.gnu.org/onlinedocs/gcc-6.1.0/gcc/Named-Address-Spaces.html#Named-Address-Spaces</span>
+</span><span class="line"><span class="cm">         */</span>
+</span><span class="line">        <span class="k">return</span> <span class="o">*</span><span class="p">(</span><span class="k">const</span> <span class="n">__seg_gs</span> <span class="kt">char</span> <span class="o">*</span><span class="p">)(</span><span class="kt">uintptr_t</span><span class="p">)</span><span class="n">values</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="kt">int</span>
+</span><span class="line"><span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">char</span> <span class="n">reads</span><span class="p">[</span><span class="mi">4</span><span class="p">];</span>
+</span><span class="line">        <span class="kt">char</span> <span class="n">re_reads</span><span class="p">[</span><span class="mi">3</span><span class="p">];</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">reads</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">read_value</span><span class="p">();</span>
+</span><span class="line">        <span class="n">reads</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">set_gs</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">read_value</span><span class="p">());</span>
+</span><span class="line">        <span class="n">reads</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">set_gs_base</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">read_value</span><span class="p">());</span>
+</span><span class="line">        <span class="n">reads</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">set_gs</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">read_value</span><span class="p">());</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">printf</span><span class="p">(</span><span class="s">&quot;Reads: %.4s</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">reads</span><span class="p">);</span>
+</span><span class="line">        <span class="n">fflush</span><span class="p">(</span><span class="nb">NULL</span><span class="p">);</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">re_reads</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">read_value</span><span class="p">();</span>
+</span><span class="line">        <span class="n">re_reads</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">usleep</span><span class="p">(</span><span class="mi">1000</span> <span class="o">*</span> <span class="mi">1000</span><span class="p">),</span> <span class="n">read_value</span><span class="p">());</span>
+</span><span class="line">        <span class="n">re_reads</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">set_gs</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">read_value</span><span class="p">());</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">printf</span><span class="p">(</span><span class="s">&quot;Re-reads: %.3s</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">re_reads</span><span class="p">);</span>
+</span><span class="line">        <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Running the above on my Linux 4.14/x86-64 machine yields</p>
+
+<pre><code>$ gcc-6 -std=gnu99 h4x.c &amp;&amp; ./a.out
+Reads: XXYX
+Re-reads: XYX
+</code></pre>
+
+<p>The first set of reads shows that:</p>
+
+<ol>
+  <li>our program starts with no offset in <code>GS</code> (<code>reads[0] == values[0]</code>)</li>
+  <li>explicitly setting <code>GS</code> to 0 does not change that (<code>reads[1] == values[0]</code>)</li>
+  <li>changing the <code>GS</code> base to 1 with <code>arch_prctl</code> does work (<code>reads[2] == values[1]</code>)</li>
+  <li>resetting the <code>GS</code> selector to 0 resets the base (<code>reads[3] == values[0]</code>).</li>
+</ol>
+
+<p>The second set of reads shows that:</p>
+
+<ol>
+  <li>the reset base survives short syscalls (<code>re_reads[0] == values[0]</code>)</li>
+  <li>an actual context switch reverts the <code>GS</code> base to the <code>arch_prctl</code>
+value (<code>re_reads[1] == values[1]</code>)</li>
+  <li>writing a 0 in <code>GS</code> resets the base again (<code>re_reads[2] == values[0]</code>).</li>
+</ol>
+
+<h2 id="cute-hack-why-is-it-useful">Cute hack, why is it useful?</h2>
+
+<p>The property demonstrated in the hack above is that, after our call to
+<code>arch_prctl</code>, we can write a <code>0</code> in <code>GS</code> with a regular instruction to
+temporarily reset the <code>GS</code> base to 0, and know it will revert to the
+<code>arch_prctl</code> offset again when the thread resumes execution, after
+being suspended.</p>
+
+<p>We now have to ensure our restartable sequences are no-ops when the
+<code>GS</code> base is reset to the <code>arch_prctl</code> offset, and that the no-op is
+detected as such. For example, we could set the <code>arch_prctl</code> offset to
+something small, like 4 or 8 bytes, and make sure that any address we
+wish to mutate in a critical section is followed by 4 or 8 bytes of
+padding that can be detected as such.  If a thread is switched out in
+the middle of a critical section, its <code>GS</code> base will be reset to 4 or
+8 when the thread resumes execution; we must guarantee that this 
+offset will make the critical section’s writes fail.</p>
+
+<p>If a write is a compare-and-swap, we only have to make sure the
+padding’s value is unambiguously different from real data: reading the
+padding instead of the data will make compare-and-swap fail, and the
+old value will tell us that it failed because we read padding, which
+should only happen after the section is pre-empted. We can play
+similar tricks with fetch-and-add (e.g., real data is always even,
+while the padding is odd), or atomic bitwise operations (steal the
+sign bit).</p>
+
+<p>If we’re willing to eat a signal after a context switch, we can set
+the <code>arch_prctl</code> offset to something very large, and take a
+segmentation fault after being re-scheduled.  Another option is to set
+the <code>arch_prctl</code> offset to 1, and use a double-wide compare-and-swap
+(<code>CMPXCHG16B</code>), or turn on the AC (alignment check) bit in
+EFLAGS. After a context switch, our destination address will be
+misaligned, which will trigger a <code>SIGBUS</code> that we can handle.</p>
+
+<p>The last two options aren’t great, but, if we make sure to regularly
+write a 0 in <code>GS</code>, signals should be triggered rarely, only when
+pre-emption happens between the last write to <code>GS</code> and a critical
+section. They also have the advantages of avoiding the need for
+padding, and making it trivial to detect when a restartable section was
+interrupted. Detection is crucial because it often isn’t safe to
+assume an operation failed when it succeeded (e.g., unwittingly
+succeeding at popping from a memory allocator’s freelist would leak
+memory). When a <code>GS</code>-prefixed instruction fails, we must be able to
+tell from the instruction’s result, and nothing else. We can’t just
+check if the segment base is still what we expect, after the fact: our
+thread could have been preempted right after the special <code>GS</code>-prefixed
+instruction, before our check.</p>
+
+<p>Once we have restartable sections, we can use them to implement
+per-CPU data structures (instead of per-thread), or to let thread
+acquire locks and hold them until they are preempted: with
+restartable sections that only write if there was no preemption
+between the lock acquisition and the final store instruction, we can
+<a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.219.6486&amp;rep=rep1&amp;type=pdf">create a revocable lock abstraction</a> and implement <a href="https://www.cl.cam.ac.uk/research/srg/netos/papers/2002-casn.pdf">wait-free coöperation</a> or <a href="http://mcg.cs.tau.ac.il/papers/spaa2010-fc.pdf">flat-combining</a>.</p>
+
+<p>Unfortunately, our restartable sections will always be hard to debug:
+observing a thread’s state in a regular debugger like GDB will reset
+the <code>GS</code> base and abort the section. That’s not unique to the segment
+hack approach.  Hardware transactional memory will abort critical
+sections when debugged, and there’s similar behaviour with the
+official <code>rseq</code> syscall. It’s hard enough to PCLSR userspace code; it
+would be even harder to
+PCLSR-except-when-the-interruption-is-for-debugging.</p>
+
+<h2 id="whos-to-blame">Who’s to blame?</h2>
+
+<p>The null <code>GS</code> hack sounds like it only works because of a pile of
+questionable design decisions. However, if we look at the historical
+context, I’d say everything made sense.</p>
+
+<p>Intel came up with segmentation back when 16 bit pointers were big,
+but 64KB of RAM not quite capacious enough.  They didn’t have 32 bit
+(never mind 64 bit) addresses in mind, nor threads; they only wanted
+to address 1 MB of RAM with their puny registers.  When thread
+libraries abused segments to implement thread-local storage, the only
+other options were to over-align the stack and hide information there,
+or to steal a register. Neither sounds great, especially with x86’s
+six-and-a-half general purpose registers.  Finally, when AMD decided
+to rip out segmentation, but keep <code>FS</code> and <code>GS</code>, they needed to make
+porting x86 code as easy as possible, since that was the whole value
+proposition for AMD64 over Itanium.</p>
+
+<p>I guess that’s what systems programming is about. We take our
+tools, get comfortable with their imperfections, and use that
+knowledge to build new tools by breaking the ones we already have (<a href="https://www.usenix.org/system/files/1311_05-08_mickens.pdf">#Mickens</a>).</p>
+
+<p><small>Thank you Andrew for a fun conversation that showed the segment
+hack might be of interest to someone else, and to Gabe for snarkily
+reminding us <code>Rseq</code> is another Linux/Silicon Valley
+re-invention.</small></p>
+<div class="footnotes">
+  <ol>
+    <li id="fn:1">
+      <p>That’s not as nice as rewinding the PC to just before the syscall, with a fixed up state that will resume the operation, but is simpler to implement, and usually good enough. Classic worst is better (Unix semantics are also safer with concurrency, but that could have been opt-in…). <a href="#fnref:1" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:sun">
+      <p>That’s not a new observation, and SUN heads like to point to prior art like <a href="https://pdfs.semanticscholar.org/5c9e/780fb6e6890d853fb5e44d1b7ce51a68a900.pdf">Dice’s and Garthwaite’s Mostly Lock-Free Malloc</a>, <a href="https://www.usenix.org/legacy/events/vee05/full_papers/p24-garthwaite.pdf">Garthwaite’s, Dice’s, and White’s work on Preemption notification for per-CPU buffers</a>, or <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.219.6486&amp;rep=rep1&amp;type=pdf">Harris’s and Fraser’s Revocable locks</a>. Linux sometimes has to reinvent everything with its special flavour. <a href="#fnref:sun" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:a">
+      <p>For instance, <a href="http://supertech.csail.mit.edu/papers/Kuszmaul15.pdf">SuperMalloc optimistically uses TSX to access per-CPU caches</a>, but TSX is slow enough that SuperMalloc first tries to use a per-thread cache. <a href="https://timharris.uk/papers/2016-lhp.pdf">Dice and Harris</a> explored the use of hardware transactional lock elision solely to abort on context switches; they maintained high system throughput under contention by trying the transaction once before falling back to a regular lock. <a href="#fnref:a" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:2">
+      <p>I did not expect systems programming to get near multi-agent epistemic logic ;) <a href="#fnref:2" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:3">
+      <p>Which is fixable with LOCKed instructions, but that defeats the purpose of per-CPU data. <a href="#fnref:3" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:4">
+      <p>I actually found the logic bug before the Spectre/Meltdown fire drill and was worried the hole would be plugged. This one survived the purge. <em>fingers crossed</em> <a href="#fnref:4" class="reversefootnote">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
 </div>
   
   

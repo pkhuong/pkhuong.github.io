@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/">A couple of (probabilistic) worst-case bounds for Robin Hood linear probing</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2020/01/20/lazy-linear-knapsack/">Lazy Linear Knapsack</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Sept
+Jan
   
-29th, 
-2019
+20th, 
+2020
 
 
 
 
         
-         | <a href="/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/"
+         | <a href="/Blog/2020/01/20/lazy-linear-knapsack/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2020/01/20/lazy-linear-knapsack/"
 	      >Comments</a>
         
         
@@ -116,304 +116,536 @@ Sept
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I like to think of Robin Hood hash tables with linear probing as
-arrays sorted on uniformly distributed keys, with gaps.  That makes it
-clearer that we can use these tables to implement algorithms based on
-merging sorted streams in bulk, as well as ones that rely on fast
-point lookups.  A key question with randomised data structures is how
-badly we can expect them to perform.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>The <a href="https://en.wikipedia.org/wiki/Continuous_knapsack_problem">continuous knapsack problem</a> may be the simplest non-trivial linear
+programming problem:</p>
 
-<h2 id="a-bound-on-the-length-of-contiguous-runs-of-entries">A bound on the length of contiguous runs of entries</h2>
+<p>\[\max_{x \in [0, 1]^n} p’x\]
+subject to
+\[w’x \leq b.\]</p>
 
-<p>There’s a lot of work on the <em>expected</em> time complexity of operations
-on linear probing Robin Hood hash tables.  <a href="https://dblp.uni-trier.de/pers/hd/v/Viola:Alfredo">Alfredo Viola</a>,
-along with a
-<a href="http://algo.inria.fr/flajolet/Publications/FlPoVi98.pdf">few collaborators</a>,
-has <a href="https://cs.uwaterloo.ca/research/tr/1995/50/CS95-50.pdf">long</a>
-been exploring the <a href="http://www2.math.uu.se/~svante/papers/sj297-aofa.pdf">distribution of displacements</a> (i.e., search times)
-for random elements.  The <a href="https://www3.cs.stonybrook.edu/~bender/newpub/BenderHu07-TODS.pdf">packed memory array</a> angle has also been around
-for <a href="https://www.cs.cmu.edu/~jcreed/p251-willard.pdf">a while</a>.<sup id="fnref:waterloo"><a href="#fn:waterloo" class="footnote">1</a></sup></p>
+<p>It has a linear objective, one constraint, and each decision variable
+is bounded to ensure the optimum exists.  Note the key difference from
+the <a href="https://en.wikipedia.org/wiki/Knapsack_problem#0/1_knapsack_problem">binary knapsack problem</a>: decision variables are allowed to take any
+value between 0 and 1.  In other words, we can, e.g., stick half of
+a profitable but large item in the knapsack. That’s why this knapsack
+problem can be solved in linear time.</p>
 
-<p>I’m a bit wary of the “random element” aspect of the linear probing
-bounds: while I’m comfortable with an expectation over the hash
-function (i.e., over the uniformly distributed hash values), a program
-could repeatedly ask for the same key, and consistently experience
-worse-than-expected performance.  I’m more interested in bounding the
-worst-case displacement (the distance between the ideal location for
-an element, and where it is actually located) across all values in a
-randomly generated<sup id="fnref:memory-less"><a href="#fn:memory-less" class="footnote">2</a></sup> Robin Hood table, with high enough
-probability.  That probability doesn’t have to be extremely high:
-\(p = 0.9\) or even \(p = 0.5\) is good enough, as long as we can
-either rehash with an independent hash function, or the probability of
-failure drops exponentially enough as the displacement leeway grows.</p>
+<h2 id="dual-to-primal-is-reasonable">Dual to primal is reasonable</h2>
 
-<p>The people who study hashing with buckets, or hashing as load
-balancing, seem more interested in these probable worst-case bounds:
-as soon as one bucket overflows, it’s game over for that hash table!
-In that context, we wish to determine how much headroom we must
-reserve in each bucket, on top of the expected occupancy, in order to
-make sure failures are rare enough.  That’s a <a href="https://en.wikipedia.org/wiki/Balls_into_bins_problem">balls into bins problem</a>, where
-the \(m\) balls are entries in the hash table, and the \(n\) bins
-its hash buckets.</p>
+<p>Duality also lets us determine the shape of all optimal solutions to
+this problem.  For each item \(i\) with weight \(w_i\) and profit
+\(p_i\), let its profit ratio be \(r_i = p_i / w_i,\)
+and let \(\lambda^\star\) be the optimal dual (Lagrange or linear)
+multiplier associated with the capacity constraint \(w’x \leq b.\)
+If \(\lambda^\star = 0,\) we simply take all items with a positive
+profit ratio (\(r_i &gt; 0\)) and a non-negative weight \(w_i \geq 0.\)
+Otherwise, every item with a profit ratio \(r_i &gt; \lambda^\star\)
+will be at its weight upper bound (1 if \(w_i \geq 0\), 0
+otherwise), and items with \(r_i &lt; \lambda^\star\) will instead be
+at their lower bound (0 of \(w_i \leq 0\), and 1 otherwise).</p>
 
-<p><a href="http://www.dblab.ntua.gr/~gtsat/collection/scheduling/Balls%20into%20Bins%20A%20Simple%20and%20Tight%20Anal.pdf">Raab and Steger’s Simple and Tight Analysis</a>
-of the “balls into bins” problem shows that the case where the average occupancy grows
-with \((\log m)\sp{k}\) and \(k &gt; 1\) has potential, when it comes
-to worst-case bounds that shrink quickly enough: we only need headroom
-that grows with \(\sqrt{\log\sp{k+1} m} = \log\sp{(k+1)/2} m\), 
-slightly more than the square root of the average occupancy.</p>
+<p>Critical items, items with \(r_i = \lambda^\star,\) will take any value
+that results in \(w’x = b.\) Given \(\lambda^\star,\) we can
+derive the sum of weights for non-critical items; divide the
+remaining capacity for critical items by the total weight of critical
+items, and let that be the value for every critical item (with the
+appropriate sign for the weight).</p>
 
-<p>The only issue is that the balls-into-bins analysis is asymptotic,
-and, more importantly, doesn’t apply at all to linear probing!</p>
+<p>For example, if we have capacity \(b = 10,\) and the sum of weights
+for non-critical items in the knsapsack is \(8,\) we’re left with another
+two units of capacity to distribute however we want among
+critical items (they all have the same profit ratio \(r_i =
+\lambda^\star,\) so it doesn’t matter where that capacity goes).  Say
+critical items with a positive weight have a collective weight of 4;
+we could then assign a value of \(2 / 4 = 0.5\) to the corresponding
+decision variable (and 0 for critical items with a non-positive
+weight).</p>
 
-<p>One could propose a form of packed memory array, where the sorted set
-is subdivided in chunks such that the expected load per chunk is in
-\(\Theta(\log\sp{k} m)\), and the size of each chunk
-multiplicatively larger (more than \(\log\sp{(k+1)/2}m\))…</p>
+<p>We could instead have \(b = 10,\) and the sum of weights for
+non-critical items in the knapsack \(12\): we must find two units of
+capacity among critical items (they all cost \(r_i = \lambda^\star\)
+per unit, so it doesn’t matter which).  If critical items with a
+negative weight have a collective weight of \(-3,\) we could assign
+a value of \(-2 / -3 = 0.6\overline{6}\) to the corresponding decision
+variables, and 0 for critical items with a non-negative weight.</p>
 
-<p>Can we instead derive similar bounds with regular linear probing?  It
-turns out that Raab and Steger’s bounds are indeed simple: they
-find the probability of overflow for one bucket, and derive a
-<a href="https://en.wikipedia.org/wiki/Boole%27s_inequality">union bound</a> for the probability of overflow for any bucket by
-multiplying the single-bucket failure probability by the number of
-buckets.  Moreover, the single-bucket case itself is a <a href="https://en.wikipedia.org/wiki/Binomial_distribution">Binomial</a> confidence interval.</p>
+<p>The last case highlights something important about the knapsack: in
+general, we can’t assume that the weights <em>or profits</em> are positive.
+We could have an item with a non-positive weight and non-negative
+profit (that’s always worth taking), an item with positive weight and
+negative profit (never interesting), or weights and profits of the
+same sign.  The last case is the only one that calls for actual
+decision making.  Classically, items with negative weight and profit
+are rewritten away, by assuming they’re taken in the knapsack, and
+replacing them with a decision variable for the complementary decision
+of removing that item from the knapsack (i.e., removing the additional
+capacity in order to improve the profit).  I’ll try to treat them
+directly as much as possible, because that reduction can be a
+significant fraction of solve times in practice.</p>
 
-<p>We can use the same approach for linear probing; I don’t expect a tight
-result, but it might be useful.</p>
+<p>The characterisation of optimal solutions above makes it easy to
+directly handle elements with a negative weight: just find the optimal
+multiplier, compute the contribution of non-critical elements (with
+decision variables at a bound) to the left-hand side of the capacity
+constraint, separately sums the negative and positive weights for
+critical elements, then do a final pass to distribute the remaining
+capacity to critical elements (and 0-weight / 0-value elements if one
+wishes).</p>
 
-<p>Let’s say we want to determine how unlikely it is to observe a clump
-of \(\log\sp{k}n\) entries, where \(n\) is the capacity of the hash
-table.  We can bound the probability of observing such a clump
-starting at index 0 in the backing array, and multiply by the size of
-the array for our union bound (the clump could start anywhere in the array).</p>
+<h2 id="solving-the-dual-looks-like-selection">Solving the dual looks like selection</h2>
 
-<p>Given density \(d = m / n\), where \(m\) is the number of
-entries and \(n\) is the size of the array that backs the hash
-table, the probability that any given element falls in a range of size
-\(\log\sp{k}n\) is \(p = d/n \log\sp{k}n\).  The number of entries
-in such a range follows a Binomial distribution \(B(dn, p)\), with
-expected value \(d \log\sp{k}n\).  We want to determine the maximum
-density \(d\) such that 
-\(\mathrm{Pr}[B(dn, p) &gt; \log\sp{k}n] &lt; \frac{\alpha}{dn}\), where
-\(\alpha\) is our overall failure rate. If rehashing is acceptable,
-we can let \(\alpha = 0.5\), and expect to find a
-suitably uniform hash function after half a rehash on average.</p>
+<p>Finding the optimal multiplier \(\lambda^\star\) is similar to a
+selection problem: the value is either 0 (the capacity constraint is
+redundant), or one of the profit ratios \(r_i,\) and, given a
+multiplier value \(\lambda,\) we can determine if it’s too high or
+too low in linear time.  If the non-critical elements yield a left-hand
+side such that critical elements
+can’t add enough capacity (i.e., no solution with the optimal form can
+be feasible), \(\lambda\) is too low.  If the maximum weight of
+potentially optimal solutions is too low, \(\lambda\) is too high.</p>
 
-<p>We know we want \(k &gt; 1\) for the tail to shrink rapidly enough as
-\(n\) grows, but even \(\log\sp{2}n\) doesn’t shrink very rapidly.
-After some trial and error, I settled on a chunk size
-\(s(n) = 5 \log\sb{2}\sp{3/2} n\).  That’s not great for small or medium sized
-tables (e.g., \(s(1024) = 158.1\)), but grows slowly, and reflects
-extreme worst cases; in practice, we can expect the worst case for
-any table to be more reasonable.</p>
+<p>We can thus sort the items by profit ratio \(r_i\), compute the
+total weight corresponding to each ratio with a prefix sum (with a
+pre-pass to sum all negative weights), and perform a linear (or
+binary) search to find the critical profit ratio.
+Moreover, the status of non-critical items is monotonic as
+\(\lambda\) grows: if an item with positive weight is taken at
+\(\lambda_0\), it is also taken for every \(\lambda \leq
+\lambda_0\), and a negative-weight item that’s taken at
+\(\lambda_0\) is also taken for every \(\lambda \geq \lambda_0.\)
+This means we can adapt selection algorithms like <a href="https://en.wikipedia.org/wiki/Quickselect">Quickselect</a> to solve
+the continuous knapsack problem in linear time.</p>
 
-<p>Assuming we have a quantile function for the Binomial distribution, we
-can find the occupancy of our chunk, at \(q = 1 - \frac{\alpha}{n}\). 
-The occupancy is a monotonic function of the density, so we can use,
-e.g., bisection search to find the maximum density such that the
-probability that we saturate our chunk is \(\frac{\alpha}{n}\),
-and thus the probability that any continuous run of entries has size
-at least \(s(n) =  5 \log\sb{2}\sp{3/2} n\) is less than \(\alpha\).</p>
+<p>I’m looking at large instances, so I would like to run these
+algorithms in parallel or even distributed on multiple machines, and
+ideally use GPUs or SIMD extensions.  Unfortunately, selection doesn’t
+parallelise very well: we can run a distributed quickselect where
+every processor partitions the data in its local RAM, but that still
+requires a logarithmic number of iterations.</p>
 
-<p>For \(\alpha = 0.5\), the plot of densities looks like the following.</p>
+<h2 id="selection-looks-like-quantile-estimation-does-the-dual">Selection looks like quantile estimation; does the dual?</h2>
 
-<p><img class="center" src="/images/2019-09-29-a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/alpha-half.png" /></p>
+<p><a href="https://cs.stackexchange.com/questions/27685/can-someone-explain-lazyselect">Lazy Select</a> offers a completely different angle for the selection
+problem.  Selecting the \(k\)th smallest element from a list of
+\(n\) elements is the same as finding the \(k / n\)th quantile<sup id="fnref:abuse-of-language"><a href="#fn:abuse-of-language" class="footnote">1</a></sup> in
+that list of \(n\) elements.  We can use <a href="https://en.wikipedia.org/wiki/Hoeffding%27s_inequality">concentration bounds</a><sup id="fnref:binomial"><a href="#fn:binomial" class="footnote">2</a></sup> to estimate quantiles from a sample of, e.g.,
+\(m = n^{3/4}\) elements: the population quantile value is very
+probably between the \(qm - \frac{\log m}{\sqrt{m}}\)th and \(qm +
+\frac{\log m}{\sqrt{m}}\)th values of the sample.  Moreover, this
+range very probably includes at most \(\mathcal{O}(n^{3/4})\)
+elements<sup id="fnref:same-bounds"><a href="#fn:same-bounds" class="footnote">3</a></sup>, so a second pass suffices to buffer all the
+elements around the quantile, and find the exact quantile.  Even with
+a much smaller sample size \(m = \sqrt{n},\) we would only need four
+passes.</p>
 
-<!-- sizer <- function(x) { 5 * (log(x, 2)^1.5) };
-     max_overflow <- function(sizer, density, n, p) { n <- ceiling(n); run <- floor(sizer(n)); num_starts = max(1, 1 + n - run); qbinom(1 - (p / num_starts), n, density * run / n) / run }
-     density <- sapply(n, function (n) uniroot(function (density) max_overflow(sizer, density, n, 0.5) - 1, c(0, 1))$root)
-     ggplot(data=data.frame(n, density), aes(x = n, y = density)) + geom_line()
-     -->
+<p>Unfortunately, we can’t directly use that correspondence between
+selection and quantile estimation for the continuous knapsack.</p>
 
-<p>This curve roughly matches the shape of some
-<a href="https://www.pvk.ca/Blog/more_numerical_experiments_in_hashing.html">my older purely numerical experiments with Robin Hood hashing</a>.
-When the table is small (less than \(\approx 1000\)), \(\log n\) is
-a large fraction of \(n\), so the probability of finding a run of
-size \(s(n) = 5 \log\sb{2}\sp{3/2} n\) is low.  When the table is
-much larger, the asymptotic result kicks in, and the probabiliy slowly
-shrinks.  However, even around the worst case \(n \approx 4500\),
-we can exceed \(77\%\) density and only observe a run of length
-\(s(n)\) half the time.</p>
+<p>I tried to apply a similar idea by sampling the knapsack elements
+equiprobably, and extrapolating from a solution to the sample.  For
+every \(\lambda,\) we can derive a selection function 
+\(f_\lambda (i) = I[r_i \geq \lambda]w_i\) 
+(invert the condition if the weight is negative),
+and scale up \(\sum_i f(i)\) from the sample to the population).
+As long as we sample independently of \(f\), we can reuse the
+same sample for all \(f_\lambda.\)
+The difficulty here is that, while the error for Lazy Select
+scales as a function of \(n,\) the equivalent bounds with
+variable weights are a function of \(n(|\max_i w_i| + |\min_i w_i|)^2.\)
+That doesn’t seem necessarily practical; scaling with \(\sum_i |w_i|\)
+would be more reasonable.</p>
 
-<p>If we really don’t want to rehash, we can let \(\alpha = 10\sp{-10}\),
-which compresses the curve and shifts it down: the minimum value is
-now slightly above \(50\%\) density, and we can clearly see the
-growth in permissible density as the size of the table grows.</p>
+<p>Good news: we can hit that, thanks to linearity.</p>
 
-<!-- density <- sapply(n, function (n) uniroot(function (density) max_overflow(sizer, density, n, 1e-10) - 1, c(0, 1))$root)
-     ggplot(data=data.frame(n, density), aes(x = n, y = density)) + geom_line()
-     -->
+<p>Let’s assume weights are all integers.  Any item with weight \(w_i\)
+is equivalent to \(w_i\) subitems with unit weight (or \(-w_i\)
+elements with negative unit weight), and the same profit ratio \(r_i\),
+i.e., profit \(p_i / |w_i|\).  The range of <em>subitem</em> weights is now a constant.</p>
 
-<p><img class="center" src="/images/2019-09-29-a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/alpha-marginal.png" /></p>
+<p>We could sample uniformly from the subitems with a <a href="https://en.wikipedia.org/wiki/Bernoulli_distribution">Bernoulli</a> for each
+subitem, but that’s clearly linear time in the sum of weights, rather
+than the number of elements.  If we wish to sample roughly \(m\) elements
+from a total weight \(W = \sum_i |w_i|,\) we can instead determine how
+many subitems (units of weight) to skip before sampling with a
+<a href="https://en.wikipedia.org/wiki/Geometric_distribution">Geometric</a> of
+success probability \(m / W.\) This shows us how to lift the
+integrality constraint on weights: sample from an <a href="https://en.wikipedia.org/wiki/Exponential_distribution">Exponential</a>
+with the same parameter \(m / W!\)</p>
 
-<p>In practice, we can dynamically compute the worst-case displacement,
-which is always less than the longest run (i.e., less than \(s(n) = 5
-\log\sb{2}\sp{3/2} n\)).  However, having non-asymptotic bounds lets
-us write size-specialised code and know that its assumptions are
-likely to be satisfied in real life.</p>
+<p>That helps, but we could still end up spending much more than constant
+time on very heavy elements.  The trick is to deterministically
+special-case these elements: stash any element with large weight
+\(w_i \geq W / m\) to the side, exactly once.  By <a href="https://en.wikipedia.org/wiki/Markov%27s_inequality">Markov’s inequality</a>,<sup id="fnref:pigeonhole"><a href="#fn:pigeonhole" class="footnote">4</a></sup>
+we know there aren’t too many heavy elements: at most \(m.\)</p>
 
-<h2 id="bounding-buffer-sizes-for-operations-on-sorted-hashed-streams">Bounding buffer sizes for operations on sorted hashed streams</h2>
+<h2 id="lets-test-this-out">Let’s test this out</h2>
 
-<p>I mentioned at the beginning of this post that we can also manipulate
-Robin Hood hash tables as sorted sets, where the sort keys are
-uniformly distributed hash values.</p>
+<p>The heart of the estimation problem can be formalised as follows:
+given a list of elements \(i \in [n]\) with weight \(w_i \geq 0\),
+generate a sample of \(m \leq n\) elements ahead of time. After the
+sample has been generated, we want to accept an arbitrary predicate
+\(p \in \{0,1\}^n\) and estimate \(\sum_{i\in [n]} p(i) w_i.\)</p>
 
-<p>Let’s say we wished to merge the immutable source table <code>S</code> into the
-larger destination table <code>D</code> in-place, without copying all of <code>D</code>.
-For example, from</p>
+<p>We just had a sketch of an algorithm for this problem.  Let’s see
+what it looks like in Python.  The initial sample logic has to
+determine the total weight, and sample items with probability
+proportional to their weight.  Items heavier than the cutoff are not
+considered in the sample and instead saved to an auxiliary list.</p>
 
-<pre><code>S = [2, 3, 4]
-D = [1, 6, 7, 9, 10];
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>sample.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">total_weight</span><span class="p">(</span><span class="n">items</span><span class="p">):</span>
+</span><span class="line">    <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="n">weight</span> <span class="k">for</span> <span class="p">(</span><span class="n">_</span><span class="p">,</span> <span class="n">weight</span><span class="p">)</span> <span class="ow">in</span> <span class="n">items</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">sample_by_weight</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">cutoff</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Samples from a list of (index, weight), with weight &gt;= 0.</span>
+</span><span class="line">
+</span><span class="line"><span class="sd">    Items with weight &gt;= cutoff are taken with probability one.</span>
+</span><span class="line"><span class="sd">    Others are sampled with rate `rate` / unit of weight.</span>
+</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
+</span><span class="line">    <span class="n">sample</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span class="line">    <span class="n">large</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span class="line">    <span class="n">next_sample</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">expovariate</span><span class="p">(</span><span class="n">rate</span><span class="p">)</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">items</span><span class="p">:</span>
+</span><span class="line">        <span class="n">index</span><span class="p">,</span> <span class="n">weight</span> <span class="o">=</span> <span class="n">item</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">weight</span> <span class="o">&gt;=</span> <span class="n">cutoff</span><span class="p">:</span>
+</span><span class="line">            <span class="n">large</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
+</span><span class="line">        <span class="k">else</span><span class="p">:</span>
+</span><span class="line">            <span class="n">next_sample</span> <span class="o">-=</span> <span class="n">weight</span>
+</span><span class="line">            <span class="k">while</span> <span class="n">next_sample</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">                <span class="n">sample</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+</span><span class="line">                <span class="n">next_sample</span> <span class="o">+=</span> <span class="n">random</span><span class="o">.</span><span class="n">expovariate</span><span class="p">(</span><span class="n">rate</span><span class="p">)</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">sample</span><span class="p">,</span> <span class="n">large</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>we want the merged result</p>
+<p>We can assemble the resulting sample (and list of “large” elements) to
+compute a lower bound on the weight of items that satisfy any
+predicate that’s independent of the sampling decisions.  The value for
+large elements is trivial: we have a list of all large elements.
+We can subtract the weight of all large elements from the total item
+weight, and determine how much we have to extrapolate up.</p>
 
-<pre><code>D' = [1, 2, 3, 4, 6, 7, 9, 10].
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>extrapolate.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hoeffding</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Determines how much we can expect a sample of n i.i.d. values</span>
+</span><span class="line"><span class="sd">    sampled from a Bernouli to differ, given an error rate of alpha.</span>
+</span><span class="line">
+</span><span class="line"><span class="sd">    Given a sample X of n i.i.d. values from a Bernoulli distribution,</span>
+</span><span class="line"><span class="sd">    let delta be \bar{X} - E[\bar{X}], the one-sided difference</span>
+</span><span class="line"><span class="sd">    between the sample average value and the expected sample average.</span>
+</span><span class="line">
+</span><span class="line"><span class="sd">    Hoeffding&#39;s upper bound (see below) is conservative when the</span>
+</span><span class="line"><span class="sd">    empirical probability is close to 0 or 1 (trivially, it can yield</span>
+</span><span class="line"><span class="sd">    confidence bounds that are outside [0, 1]!), but simple, and in</span>
+</span><span class="line"><span class="sd">    general not much worse than tighter confidence interval.</span>
+</span><span class="line">
+</span><span class="line"><span class="sd">    P(delta &gt;= eps) &lt;= exp(-2 eps^2 n) = alpha</span>
+</span><span class="line"><span class="sd">      -&gt; -2 eps^2 n = ln alpha</span>
+</span><span class="line"><span class="sd">     &lt;-&gt;        eps = sqrt[-(ln alpha) / 2n ]</span>
+</span><span class="line">
+</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="o">-</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">alpha</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">n</span><span class="p">))</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">eval_weight</span><span class="p">(</span><span class="n">total_weight</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">large</span><span class="p">,</span> <span class="n">predicate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Given a population&#39;s total weight, a memoryless sample (by weight)</span>
+</span><span class="line"><span class="sd">    from the population&#39;s items, and large items that were</span>
+</span><span class="line"><span class="sd">    deterministically picked, evaluates a lower bound for the sum of</span>
+</span><span class="line"><span class="sd">    weights for items in the population that satisfy predicate.</span>
+</span><span class="line"><span class="sd">    </span>
+</span><span class="line"><span class="sd">    The lower bound is taken with error rate &lt;= alpha.</span>
+</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
+</span><span class="line">    <span class="n">large_sum</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">weight</span> <span class="k">for</span> <span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">weight</span><span class="p">)</span> <span class="ow">in</span> <span class="n">large</span> <span class="k">if</span> <span class="n">predicate</span><span class="p">(</span><span class="n">index</span><span class="p">))</span>
+</span><span class="line">    <span class="c1"># The remainder was up for sampling, unit of weight at a time.</span>
+</span><span class="line">    <span class="n">sampled_weight</span> <span class="o">=</span> <span class="n">total_weight</span> <span class="o">-</span> <span class="nb">sum</span><span class="p">(</span><span class="n">weight</span> <span class="k">for</span> <span class="p">(</span><span class="n">_</span><span class="p">,</span> <span class="n">weight</span><span class="p">)</span> <span class="ow">in</span> <span class="n">large</span><span class="p">)</span>
+</span><span class="line">    <span class="k">if</span> <span class="n">sampled_weight</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">sample</span><span class="p">:</span>
+</span><span class="line">        <span class="k">return</span> <span class="n">large_sum</span>
+</span><span class="line">    <span class="c1"># Estimate the Binomial success rate with a Beta</span>
+</span><span class="line">    <span class="n">successes</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">if</span> <span class="n">predicate</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">else</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">sample</span><span class="p">)</span>
+</span><span class="line">    <span class="n">failures</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">sample</span><span class="p">)</span> <span class="o">-</span> <span class="n">successes</span>
+</span><span class="line">    <span class="c1"># We want a lower bound, and the uniform prior can result in a</span>
+</span><span class="line">    <span class="c1"># (valid) bound that&#39;s higher than the empirical rate, so take the</span>
+</span><span class="line">    <span class="c1"># min of the two.</span>
+</span><span class="line">    <span class="n">empirical_rate</span> <span class="o">=</span> <span class="n">successes</span> <span class="o">/</span> <span class="n">sampled_weight</span>
+</span><span class="line">    <span class="n">delta</span> <span class="o">=</span> <span class="n">hoeffding</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sample</span><span class="p">),</span> <span class="n">alpha</span><span class="p">)</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">large_sum</span> <span class="o">+</span> <span class="n">sampled_weight</span> <span class="o">*</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">empirical_rate</span> <span class="o">-</span> <span class="n">delta</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The issue here is that, even with gaps, we might have to overwrite
-elements of <code>D</code>, and buffer them in some scratch space until we get to
-their final position.  In this case, all three elements of <code>S</code> must be
-inserted between the first and second elements of <code>D</code>, so we could
-need to buffer <code>D[1:4]</code>.</p>
+<p>And finally, here’s how we can sample from an arbitrary list of items,
+compure a lower bound on the weight of items that satisfy a predicate,
+and compare that with the real lower bound.</p>
 
-<p>How large of a merge buffer should we reasonably plan for?</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>lower_bound.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">compare_bounds</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">,</span> <span class="n">predicate</span><span class="p">):</span>
+</span><span class="line">    <span class="n">total</span> <span class="o">=</span> <span class="n">total_weight</span><span class="p">(</span><span class="n">items</span><span class="p">)</span>
+</span><span class="line">    <span class="c1"># We expect a sample size of roughly rate * len(items), and</span>
+</span><span class="line">    <span class="c1"># at most rate * len(items) large items.</span>
+</span><span class="line">    <span class="n">sample</span><span class="p">,</span> <span class="n">large</span> <span class="o">=</span> <span class="n">sample_by_weight</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">rate</span> <span class="o">*</span> <span class="n">total</span><span class="p">)</span>
+</span><span class="line">    <span class="n">lower_bound</span> <span class="o">=</span> <span class="n">eval_weight</span><span class="p">(</span><span class="n">total</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">large</span><span class="p">,</span> <span class="n">predicate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">)</span>
+</span><span class="line">    <span class="c1"># Check if the lower bound is valid.</span>
+</span><span class="line">    <span class="n">actual</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">weight</span> <span class="k">for</span> <span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">weight</span><span class="p">)</span> <span class="ow">in</span> <span class="n">items</span> <span class="k">if</span> <span class="n">predicate</span><span class="p">(</span><span class="n">index</span><span class="p">))</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">lower_bound</span> <span class="o">&lt;=</span> <span class="n">actual</span> <span class="o">+</span> <span class="mf">1e-8</span><span class="p">,</span> <span class="n">lower_bound</span><span class="p">,</span> <span class="n">actual</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>In general, we might have to buffer as many elements as there are in
-the smaller table of <code>S</code> and <code>D</code>.  However, we’re working with hash
-values, so we can expect them to be distributed uniformly.  That
-should give us some grip on the problem.</p>
+<p>How do we test that? Far too often, I see tests for randomised
+algorithms where the success rate is computed over randomly generated
+inputs.  That’s too weak!  For example, this approach could lead us to accept
+that the identity function is a randomised sort function, with success
+probability \(\frac{1}{n!}.\)</p>
 
-<p>We can do even better and only assume that both sorted sets were
-sampled from the same underlying distribution.  The key idea
-is that the rank of an element in <code>S</code> is equal to the
-value of <code>S</code>’s
-<a href="https://en.wikipedia.org/wiki/Empirical_distribution_function">empirical distribution function</a>
-for that element, multiplied by the size of <code>S</code> (similarly for
-<code>D</code>).</p>
+<p>The property we’re looking for is that, for any input, the success
+rate (with the expectation over the pseudorandom sampling decisions)
+is as high as requested.</p>
 
-<p>The amount of buffering we might need is simply a measure of the
-worst-case difference between the two empirical DFs: the more <code>S</code> get
-ahead of <code>D</code>, the more we need to buffer values of <code>D</code> before
-overwriting them (if we’re very unlucky, we might need a buffer the
-same size as <code>S</code>).  That’s the
-two-sample <a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test#Kolmogorov%E2%80%93Smirnov_statistic">Kolmogorov-Smirnov statistic</a>, and we have 
-<a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test#Two-sample_Kolmogorov%E2%80%93Smirnov_test">simple bounds for that distance</a>.</p>
+<p>For a given input (list of items and predicate), we can use the <a href="http://pvk.ca/Blog/2018/07/06/testing-slo-type-properties-with-the-confidence-sequence-method/">Confidence sequence method (CSM)</a>
+to confirm that the lower bound is valid at least
+\(1 - \alpha\) of the time.</p>
 
-<p>With probability \(1 - \alpha\), we’ll consume from <code>S</code> and <code>D</code>
-at the same rate \(\pm \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}}\).
-We can let \(\alpha = 10\sp{-10}\) and pre-allocate a buffer of size</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>csm_test.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">compare_bounds_generator</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
+</span><span class="line">    <span class="n">items</span> <span class="o">=</span> <span class="p">[(</span><span class="n">i</span><span class="p">,</span> <span class="n">w</span><span class="p">)</span> <span class="k">for</span> <span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="n">_</span><span class="p">))</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">test_case</span><span class="p">)]</span>
+</span><span class="line">    <span class="n">chosen</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">i</span> <span class="k">for</span> <span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">_</span><span class="p">,</span> <span class="n">p</span><span class="p">))</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">test_case</span><span class="p">)</span> <span class="k">if</span> <span class="n">p</span><span class="p">)</span>
+</span><span class="line">    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+</span><span class="line">        <span class="k">yield</span> <span class="n">compare_bounds</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">chosen</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">check_bounds</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Test case is a list of pairs of weight and predicate value</span>
+</span><span class="line"><span class="sd">       rate is the sample rate</span>
+</span><span class="line"><span class="sd">       alpha is the confidence parameter for the lower bound.</span>
+</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
+</span><span class="line">    <span class="n">wanted</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">alpha</span>  <span class="c1"># The Hoeffding bound is conservative, so</span>
+</span><span class="line">                        <span class="c1"># this should let csm_driver stop quickly.</span>
+</span><span class="line">    <span class="n">result</span> <span class="o">=</span> <span class="n">csm</span><span class="o">.</span><span class="n">csm_driver</span><span class="p">(</span><span class="n">compare_bounds_generator</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span>
+</span><span class="line">                                                     <span class="n">rate</span><span class="p">,</span>
+</span><span class="line">                                                     <span class="n">alpha</span><span class="p">),</span>
+</span><span class="line">                            <span class="n">wanted</span><span class="p">,</span>
+</span><span class="line">                            <span class="mf">1e-6</span><span class="p">,</span>  <span class="c1"># Wrong conclusion with p &lt; 1e-6.</span>
+</span><span class="line">                            <span class="nb">file</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stderr</span>
+</span><span class="line">                            <span class="p">)</span>
+</span><span class="line">    <span class="n">stop</span><span class="p">,</span> <span class="n">actual</span><span class="p">,</span> <span class="o">*</span><span class="n">_</span> <span class="o">=</span> <span class="n">result</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">actual</span> <span class="o">&gt;=</span> <span class="n">wanted</span><span class="p">,</span> <span class="s2">&quot;Result: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="nb">str</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<table>
-  <tbody>
-    <tr>
-      <td>\[</td>
-      <td>S</td>
-      <td>\sqrt{-\frac{(</td>
-      <td>S</td>
-      <td>+</td>
-      <td>D</td>
-      <td>) \ln \alpha}{2</td>
-      <td>S</td>
-      <td> </td>
-      <td>D</td>
-      <td>}} &lt; \sqrt{\frac{23.03</td>
-      <td>S</td>
-      <td>(</td>
-      <td>S</td>
-      <td>+</td>
-      <td>D</td>
-      <td>)}{2</td>
-      <td>D</td>
-      <td>}}.\]</td>
-    </tr>
-  </tbody>
-</table>
+<p>With a false positive rate of at most one in a million,<sup id="fnref:lotta-errors"><a href="#fn:lotta-errors" class="footnote">5</a></sup> we can
+run automated tests against <code>check_bounds</code>.  I’ll use
+<a href="https://hypothesis.works/">Hypothesis</a> to generate list of pairs of weight and predicate value:</p>
 
-<p>In the worst case, \(|S| = |D|\), and we can preallocate a buffer of
-size \(\sqrt{23.03 |D|} &lt; 4.8 \sqrt{|D|}\) and only need to grow
-the buffer every ten billion (\(\alpha\sp{-1}\)) merge.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_bounds.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="kn">from</span> <span class="nn">hypothesis</span> <span class="kn">import</span> <span class="n">given</span><span class="p">,</span> <span class="n">settings</span><span class="p">,</span> <span class="n">Verbosity</span>
+</span><span class="line"><span class="kn">import</span> <span class="nn">hypothesis.strategies</span> <span class="kn">as</span> <span class="nn">st</span>
+</span><span class="line">
+</span><span class="line"><span class="nd">@given</span><span class="p">(</span><span class="n">test_case</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">lists</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">tuples</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span>
+</span><span class="line">                                    <span class="n">st</span><span class="o">.</span><span class="n">booleans</span><span class="p">())),</span>
+</span><span class="line">       <span class="n">rate</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mf">1e-6</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mf">0.5</span><span class="p">),</span>
+</span><span class="line">       <span class="n">alpha</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mf">0.25</span><span class="p">))</span>
+</span><span class="line"><span class="k">def</span> <span class="nf">test_bounds</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
+</span><span class="line">    <span class="n">check_bounds</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The same bound applies in a stream processing setting; I assume this
-is closer to what <a href="https://twitter.com/frankmcsherry">Frank</a> had in
-mind when he brought up this question.</p>
+<p>Bimodal inputs tend to be harder, so we can add a specialised test
+generator.</p>
 
-<p>Let’s assume a “push” dataflow model, where we still work on sorted
-sets of uniformly distributed hash values (and the data tuples
-associated with them), but now in streams that generate values every
-tick.  The buffer size problem now sounds as follows.  We wish to
-implement a sorted merge operator for two input streams that generate
-one value every tick, and we can’t tell our sources to cease producing
-values; how much buffer space might we need in order to merge them
-correctly?</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_bimodal_bounds.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="nd">@given</span><span class="p">(</span><span class="n">test_case</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">lists</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">tuples</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">one_of</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">just</span><span class="p">(</span><span class="mf">0.1</span><span class="p">),</span> <span class="n">st</span><span class="o">.</span><span class="n">just</span><span class="p">(</span><span class="mi">1</span><span class="p">)),</span>
+</span><span class="line">                                    <span class="n">st</span><span class="o">.</span><span class="n">booleans</span><span class="p">())),</span>
+</span><span class="line">       <span class="n">rate</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mf">1e-6</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mf">0.5</span><span class="p">),</span>
+</span><span class="line">       <span class="n">alpha</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mf">0.25</span><span class="p">))</span>
+</span><span class="line"><span class="k">def</span> <span class="nf">test_bimodal_bounds</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
+</span><span class="line">    <span class="n">check_bounds</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Again, we can go back to the Kolmogorov-Smirnov statistic.  In this
-case however, we could buffer each stream independently, so we’re
-looking for critical values for the one-sided one-sample
-Kolmogorov-Smirnov test (how much one stream might get ahead of the
-hypothetical exactly uniform stream).  We have recent (<a href="https://projecteuclid.org/euclid.aop/1176990746">1990</a>)
-<a href="https://en.wikipedia.org/wiki/Dvoretzky%E2%80%93Kiefer%E2%80%93Wolfowitz_inequality">simple and tight bounds</a>
-for this case as well.</p>
+<p>Again, we use <a href="https://hypothesis.readthedocs.io/en/latest/data.html">Hypothesis</a> to generate inputs, and
+the <a href="https://github.com/pkhuong/csm">Confidence sequence method (available in C, Common Lisp, and Python)</a> to check that the lower bound is
+valid with probability at least \(1 - \alpha\).  The CSM tests
+for this statistical property with power 1 and adjustable error rate
+(in our case, one in a million): we only provide a generator
+for success values, and the driver adaptively determines when it makes
+sense to make a call and stop generating more data, while accounting
+for multiple hypothesis testing.</p>
 
-<p>The critical values for the one-sided case are stronger than the
-two-sided two-sample critical values we used earlier: given an
-overflow probability of \(1 - \alpha\), we need to buffer at most
-\(\sqrt{-\frac{n \ln \alpha}{2}},\) elements.  For 
-\(\alpha = 10\sp{-20}\) that’s less than \(4.8 \sqrt{n}\).<sup id="fnref:three-centuries"><a href="#fn:three-centuries" class="footnote">3</a></sup>
-This square root scaling is pretty good news in practice: shrinking
-\(n\) to \(\sqrt{n}\) tends to correspond to going down a rung or two in
-the storage hierarchy.  For example, \(10\sp{15}\) elements is
-clearly in the range of distributed storage; however, such a humongous
-stream calls for a buffer of fewer than \(1.5 \cdot 10\sp{8}\)
-elements, which, at a couple gigabytes, should fit in RAM on one large
-machine.  Similarly, \(10\sp{10}\) elements might fill the RAM on
-one machine, but the corresponding buffer of less than half a
-million elements could fit in L3 cache, while one million elements
-could fill the L3, and 4800 elements fit in L1 or L2.</p>
+<p>TL;DR: the estimation algorithm for individual sampling passes works,
+and the combination of <a href="https://hypothesis.works/">Hypothesis</a> and <a href="https://github.com/pkhuong/csm">Confidence Sequence Method</a>
+lets us painlessly test for a statistical property.</p>
 
-<p>What I find neat about this (probabilistic) bound on the buffer size
-is its independence from the size of the other inputs to the merge
-operator.  We can have a shared \(\Theta(\sqrt{n})\)-size buffer in
-front of each stream, and do all our operations without worrying about
-getting stuck (unless we’re extremely unlucky, in which case we can
-grow the buffer a bit and resume or restart the computation).</p>
+<p>We can iteratively use this sampling procedure to derive lower and
+(symmetrically) upper bounds for the optimal Lagrange multiplier
+\(\lambda^\star,\) and Hoeffding’s inequality lets us control the
+probability that the lower and upper bounds are valid.  Typically,
+we’d use a tolerance of \(\sqrt{\log(n) / n},\) for an error
+rate of \(1 / n^2.\) I prefer to simply use something like \(7 /
+\sqrt{n}:\) the error rate is then less than \(10^{-42},\)
+orders of manitude smaller than the probability of hardware failure in any given
+nanosecond.<sup id="fnref:memory-error"><a href="#fn:memory-error" class="footnote">6</a></sup>
+We can still check for failure of our Las Vegas algorithm,
+but if something went wrong, it’s much more likely that we detected
+a hardware failure than anything else.  It’s like running <a href="https://en.wikipedia.org/wiki/Super_PI">SuperPi</a>
+to stress test a computer, except the work is useful. 😉</p>
 
-<p>Probably of more theoretical interest is the fact that these bounds do
-not assume a uniform distribution, only that all the input streams are
-identically and independently sampled from the same underlying
-distribution. That’s the beauty of working in terms of the (inverse)
-distribution functions.</p>
+<h2 id="repeat-as-necessary-to-solve-a-knapsack">Repeat as necessary to solve a knapsack</h2>
 
-<h2 id="i-dont-think-theres-anything-deeper">I don’t think there’s anything deeper</h2>
+<p>How many sampling passes do we need? Our bounds are in terms of the
+sum of item weight: if we let our sample size be in
+\(\Theta(\sqrt{n}),\) the sum of weights \(\sum_i |w_i|\) for
+unfathomed items (that may or may not be chosen depending on the exact
+optimal multiplier \(\lambda^\star\) in the current range) will very
+probably shrink by a factor of \(\Omega(n^{1/4}).\) The initial sum can, in
+the worst case, be exponentially larger than the bitlength of the
+input, so even a division by \(n^{1/4}\) isn’t necessarily that
+great.</p>
 
-<p>That’s it. Two cute tricks that use well-understood statistical
-distributions in hashed data structure and algorithm design.  I doubt
-there’s anything to generalise from either bounding approach.</p>
+<p>I intend to apply this Lazy Linear Knapsack algorithm on subproblems in
+a more interesting solver, and I know that the sum of weights is
+bounded by the size of the initial problem, so that’s good enough for
+me!  After a constant (\(\approx 4\)) number of passes, the
+difference in item weight between the lower and upper bound on
+\(\lambda^\star\) should also be at most 1.  One or two additional
+passes will get me near optimality (e.g., within \(10^{-4}\)),
+and the lower bound on \(\lambda^\star\) should thus yield
+a super-optimal solution that’s infeasible by at most \(10^{-4},\)
+which is, for my intended usage (again), good enough.</p>
 
-<p>However, I definitely believe they’re useful in practice. I like knowing
-that I can expect the maximum displacement for a table of \(n\)
-elements with Robin Hood linear probing to be less than \(5
-\log\sb{2}^{3/2} n\), because that lets me select an appropriate
-option for each table, as a function of that table’s maximum
-displacement, while knowing the range of displacements I might have to
-handle.  Having a strong bound on how much I might have to buffer for
-stream join operators feels even more useful: I can pre-allocate a
-single buffer per stream and not think about efficiently growing the
-buffer, or signaling that a consumer is falling behind.  The
-probability that I’ll need a larger buffer is so low that I just need
-to handle it, however inefficiently.  In a replicated system, where
-each node picks an independent hash function, I would even consider
-crashing when the buffer is too small!</p>
+<p>Given an optimal enough \(\lambda^\star,\) we can construct an
+explicit solution in one pass, plus a simple fixup for critical items.
+This Lazy Knapsack seems pretty reasonable for parallel or GPU
+computing: each sampling pass only needs to read the items (i.e., no
+partitioning-like shuffling) before writing a fraction of the data to
+a sample buffer, and we only need a constant number of passes (around
+6 or 7) in the worst case.</p>
+
+<p><hr style="width: 50%" /></p>
 <div class="footnotes">
   <ol>
-    <li id="fn:waterloo">
-      <p>I swear the Waterloo theme isn’t some <a href="https://en.wikipedia.org/wiki/Canadian_content">CanCon</a> thing. <a href="#fnref:waterloo" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:abuse-of-language">
+      <p>It’s more like a fractional percentile, but you know what I mean: the value such that the distribution function at that point equals \(k / n\). <a href="#fnref:abuse-of-language" class="reversefootnote">&#8617;</a></p>
     </li>
-    <li id="fn:memory-less">
-      <p>With consistent tie-breaking, the layout of entries in a Robin hood hash table is a function of the set of entries, independently of the sequence of add and remove operations. <a href="#fnref:memory-less" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:binomial">
+      <p>Binomial bounds offer even stronger confidence intervals when the estimate is close to 0 or 1 (where Hoeffding’s bound would yield a confidence interval that juts outside \([0, 1]\)), but don’t impact worst-case performance. <a href="#fnref:binomial" class="reversefootnote">&#8617;</a></p>
     </li>
-    <li id="fn:three-centuries">
-      <p>Assuming we consume ten streams per nanosecond, we expect to experience underbuffering once every 316 years. <a href="#fnref:three-centuries" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:same-bounds">
+      <p>Thanks to Hoeffding’s inequality, again. <a href="#fnref:same-bounds" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:pigeonhole">
+      <p>That’s a troll. I think any self-respecting computer person would rather see it as a sort of pigeonhole argument. <a href="#fnref:pigeonhole" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:lotta-errors">
+      <p>We’re juggling a handful of error rates here. We’re checking whether the success rate for the Lazy Knapsack sampling subroutine is at least as high as \(1 - \alpha,\) as requested in the test parameters, and we’re doing so with another randomised procedure that will give an incorrect conclusion at most once every one million invocation. <a href="#fnref:lotta-errors" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:memory-error">
+      <p><a href="http://www.cs.toronto.edu/~bianca/papers/sigmetrics09.pdf">This classic Google study</a> found 8% of DIMMs hit at least one error per year; that’s more than one single-bit error every \(10^9\) DIMM-second, and they’re mostly hard errors.  <a href="https://users.ece.cmu.edu/~omutlu/pub/memory-errors-at-facebook_dsn15.pdf">More recently, Facebook</a> reported that uncorrectable errors affect 0.03% of servers each month; that’s more than one uncorrectable error every \(10^{10}\) server-second.  If we performed one statistical test every nanosecond, the probability of memory failure alone would still dominate statistical errors by \(10^{20}!\) <a href="#fnref:memory-error" class="reversefootnote">&#8617;</a></p>
     </li>
   </ol>
 </div>

@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-02-26T19:28:56-05:00</updated>
+  <updated>2020-05-02T17:24:58-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -12,6 +12,1227 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Check for borrows in bitwise operations]]></title>
+    <link href="https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations/"/>
+    <updated>2020-05-02T17:24:36-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations</id>
+    <content type="html"><![CDATA[<p>In the <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">fourth installment of his series on sorting with AVX2</a>,
+<a href="https://twitter.com/damageboy">@damageboy</a> has a short aside where he
+tries to detect partitioning (pivot) patterns where elements less than
+and greater than or equal to the pivot are already in the correct
+order: in that case, the partitioning routine does not need to permute
+the block of values.  The practical details are irrelevant for this
+post; what matters is that we wish to quickly identify whether a byte
+value matches any of the follow nine cases:</p>
+
+<ul>
+  <li><code>0b11111111</code></li>
+  <li><code>0b11111110</code></li>
+  <li><code>0b11111100</code></li>
+  <li><code>0b11111000</code></li>
+  <li><code>0b11110000</code></li>
+  <li><code>0b11100000</code></li>
+  <li><code>0b11000000</code></li>
+  <li><code>0b10000000</code></li>
+  <li><code>0b00000000</code></li>
+</ul>
+
+<p>Looking at the bit pattern,<sup id="fnref:b-for-bit-literal"><a href="#fn:b-for-bit-literal" class="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
+is pretty natural.  These instructions are somewhat complex (latency
+closer to 3 cycles than 1, and often port restricted), 
+and it seems like the sort of problem that would have had efficient
+solutions before SSE4 finally graced x86 with a <a href="https://en.wikipedia.org/wiki/Hamming_weight">population count</a> instruction.</p>
+
+<p>In the context of a sorting library’s partition loop, <code>popcnt</code> and
+<code>bsf</code> is probably more than good enough:
+<a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">the post shows that the real issue is branch mispredictions</a>
+being slower than permuting unconditionally.
+This is just a fun challenge to think about (:</p>
+
+<h2 id="warm-up-is_power_of_two">Warm-up: <code>is_power_of_two</code></h2>
+
+<p>Detecting whether a machine integer is a power of two (or zero) is
+another task that has a straightforward solution in terms of popcount
+or bitscan.  There’s also a simpler classic solution to this problem:</p>
+
+<p><code>x == 0 || is_power_of_two(x) &lt;==&gt; (x &amp; (x - 1)) == 0</code></p>
+
+<p>How does that expression work?  Say <code>x</code> is a power of two. Its binary
+representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian"><a href="#fn:big-endian" class="footnote">2</a></sup> 
+a single “1” bit, and trailing zeros (maybe none).  Let’s see what happens when
+we subtract 1 from <code>x</code>:</p>
+
+<pre><code>x           = 0b00...0010...0
+     x - 1  = 0b00...0001...1
+x &amp; (x - 1) = 0b00...0000...0
+</code></pre>
+
+<p>The subtraction triggered a chain of <a href="https://en.wikipedia.org/wiki/Carry_(arithmetic)">borrows</a>
+throughout the trailing zeros, until we finally hit that 1 bit.
+In decimal, subtracting one from <code>10...0</code> yields <code>09...9</code>;
+in binary we instead find <code>01...1</code>.
+If you ever studied the circuit depth (latency) of carry chains
+(for me, that was for circuit complexity theory), you know
+that this is difficult to do well.
+Luckily for us, <a href="https://en.wikipedia.org/wiki/Kogge%E2%80%93Stone_adder">chip makers work hard to pull it off</a>,
+and we can just use carries as a data-controlled
+primitive to efficiently flip ranges of bits.</p>
+
+<p>When <code>x</code> is a power of two, <code>x</code> and <code>x - 1</code> have no “1” bit in common,
+so taking the bitwise <code>and</code> yields zero.  That’s also true when <code>x</code> is 0,
+since <code>and</code>ing anything with 0 yields zero.  Let’s see what happens
+for non-zero, non-power-of-two values <code>x = 0bxx...xx10..0</code>,
+i.e., where <code>x</code> consists of an arbitrary non-zero sequence of bits <code>xx..xx</code>
+followed by the least set bit (there’s at least one, since <code>x</code> is neither zero nor a power of two), and the trailing zeros:</p>
+
+<pre><code>x           = 0bxx...xx10...0
+     x - 1  = 0bxx...xx01...1
+x &amp; (x - 1) = 0bxx...xx000000
+</code></pre>
+
+<p>The leading not-all-zero <code>0bxx...xx</code> is unaffected by the subtraction,
+so it passes through the bitwise <code>and</code> unscathed (<code>and</code>ing any bit with
+itself yields that same bit), and we know there’s at least one non-zero
+bit in there; our test correctly rejects it!</p>
+
+<h2 id="stretching-decoding-varints">Stretching: decoding varints</h2>
+
+<p>When decoding variable length integers in <a href="https://en.wikipedia.org/wiki/LEB128#Unsigned_LEB128">ULEB</a>
+format, e.g., for <a href="https://developers.google.com/protocol-buffers/docs/encoding">protocol buffers</a>,
+it quickly becomes clear that, in order to avoid byte-at-a-time logic,
+we must rapidly segment (<a href="https://en.wikipedia.org/wiki/Lexical_analysis">lex or tokenize</a>, in a way) our byte stream to determine where each ULEB
+ends.  Let’s focus on the fast path, when the encoded ULEB fits in a
+machine register.</p>
+
+<p>We have <code>uleb = 0bnnnnnnnnmmmmmmmm...1zzzzzzz0yyyyyyy0...</code>: a sequence of bytes<sup id="fnref:remember-endianness"><a href="#fn:remember-endianness" class="footnote">3</a></sup> with the topmost bit equal to 0, followed by a byte with the top bit set to 1, and, finally, arbitrary nuisance bytes (<code>m...m</code>, <code>n...n</code>, etc.) we wish to ignore.  Ideally, we’d
+extract <code>data = 0b0000000000000000...?zzzzzzz?yyyyyyy?...</code> from <code>uleb</code>: we want to clear the
+nuisance bytes, and are fine with arbitrary values in the 
+ULEB’s control bits.</p>
+
+<p>It’s pretty clear that the first thing to do is to
+clear out everything but potential ULEB control bits (the high bit of
+each byte), with <code>c = uleb &amp; (128 * (WORD_MAX / 255))</code>, i.e.,
+compute the bitwise <code>and</code> of <code>uleb</code> with a bitmask of the high bit in each byte.</p>
+
+<pre><code>   uleb = 0bnnnnnnnnmmmmmmmm...1zzzzzzz0yyyyyyy0...
+      c = 0bn0000000m0000000...10000000000000000...
+</code></pre>
+
+<p>We could now bitscan to find the index of the first 1 (marking the
+last ULEB byte), and then generate a mask.  However, it seems wasteful to
+generate an index with a scan, only to convert it back into bitmap
+space with a shift.  We’ll probably still want that index to know how
+far to advance the decoder’s cursor, but we can hopefully update the
+cursor in parallel with decoding the current ULEB value.</p>
+
+<p>When we were trying to detect powers of two, we subtracted <code>1</code> from
+<code>x</code>, a value kind of like <code>c</code>, in order to generate a new value
+that differed from <code>x</code> in all the bits up to and including the first
+set (equal to <code>1</code>) bit of <code>x</code>, and identical in the remaining bits.  We
+then used the fact that <code>and</code>ing a bit with itself yields that same
+bit to detect whether there was any non-zero bit in the remainder.</p>
+
+<p>Here, we wish to do something else with the remaining untouched bits, we
+wish to set them all to zero.  Another bitwise operator does
+what we want: <code>xor</code>ing a bit with itself always yields zero, while
+<code>xor</code>ing bits that differ yields <code>1</code>.  That’s the plan for ULEB. We’ll
+subtract 1 from <code>c</code> and <code>xor</code> that back with <code>c</code>.</p>
+
+<pre><code>     uleb   = 0bnnnnnnnnmmmmmmmm...1zzzzzzz0yyyyyyy0...
+c           = 0bn0000000m0000000...10000000000000000...
+     c - 1  = 0bn0000000m0000000...01111111111111111...
+c ^ (c - 1) = 0b0000000000000000...11111111111111111...
+</code></pre>
+
+<p>We now just have to bitwise <code>and</code> <code>uleb</code> with <code>c ^ (c - 1)</code>
+to obtain the bits of the first <code>ULEB</code> value in <code>uleb</code>, while
+overwriting everything else with 0.  Once we have that, we can either
+<a href="https://www.felixcloutier.com/x86/pext">extract data bits with <code>PEXT</code></a>,
+or, if one is stuck with older or AMD chips, pull out interesting stunts for <a href="https://en.wikipedia.org/wiki/SWAR">SWAR</a> shifts by variable amounts.</p>
+
+<h2 id="now-for-damageboys-problem">Now for <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">@damageboy</a>’s problem</h2>
+
+<p>Let’s first repeat the question that motivated this post.  We want to detect when a byte <code>p</code> is one of the following nine values:</p>
+
+<ul>
+  <li><code>0b11111111</code></li>
+  <li><code>0b11111110</code></li>
+  <li><code>0b11111100</code></li>
+  <li><code>0b11111000</code></li>
+  <li><code>0b11110000</code></li>
+  <li><code>0b11100000</code></li>
+  <li><code>0b11000000</code></li>
+  <li><code>0b10000000</code></li>
+  <li><code>0b00000000</code></li>
+</ul>
+
+<p>These bit patterns feel similar to those for power of two bytes: if we
+complement the bits, these values are all 1 less than a power of two
+(or -1, one less than zero).  We already know how to detect when a
+value <code>x</code> is zero or a power of two (<code>x &amp; (x - 1) == 0</code>), so it’s easy
+to instead determine whether <code>~p</code> is one less than zero or a power of
+two: <code>(~p + 1) &amp; ~p == 0</code>.</p>
+
+<p>This is already pretty good: bitwise <code>not</code> the byte <code>p</code>,
+and check if it’s one less than zero or a power of two (three simple
+instructions on the critical path).  We can do better.</p>
+
+<p>There’s another name for <code>~p + 1</code>, i.e., for bitwise complementing a value and
+adding one: that’s simply <code>-p</code>, the additive inverse of <code>p</code> in two’s
+complement!  We can use <code>-p &amp; ~p == 0</code>.  That’s one fewer
+instruction on the critical path of our dependency graph (down to two, since we can <a href="https://www.felixcloutier.com/x86/test"><code>test</code> whether <code>and</code>ing yields zero</a>), and still only
+uses simple instructions that are unlikely to be port constrained.</p>
+
+<p>Let’s check our logic by enumerating all byte-sized values.</p>
+
+<pre><code>CL-USER&gt; (dotimes (p 256)
+           (when (zerop (logand (- p) (lognot p) 255))
+             (format t "0b~2,8,'0r~%" p)))
+0b00000000
+0b10000000
+0b11000000
+0b11100000
+0b11110000
+0b11111000
+0b11111100
+0b11111110
+0b11111111
+</code></pre>
+
+<p>These <em>are</em> the bytes we’re looking for (in ascending rather
+than descending order)!</p>
+
+<h2 id="remember-the-power-of-borrows">Remember the power of borrows</h2>
+
+<p>I hope the examples above communicated a pattern I often observe when
+mangling bits: operations that are annoying (not hard, just a bit more
+complex than we’d like) in the bitmap domain can be simpler in two’s
+complement arithmetic.  Arithmetic operations are powerful mutators
+for bitmaps, but they’re often hard to control.  Subtracting or adding
+1 are the main exceptions: it’s easy to describe their impact in terms
+of the low bits of the bitmap.  In fact, we can extend that trick to
+subtracting or adding powers of two: it’s the same carry/borrow chain effect as for 1,
+except that bits smaller than the power of two pass straight 
+through…
+which might be useful when we expect a known tag followed by a ULEB value that must be decoded.</p>
+
+<p>If you find yourself wishing for a way to flip ranges of bits in a
+data-dependent fashion, it’s always worth considering the two’s
+complement representation of the problem for a couple minutes.  Adding
+or subtracting powers of two doesn’t always work, but the payoff is
+pretty good when it does.</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes">
+  <ol>
+    <li id="fn:b-for-bit-literal">
+      <p>I use the <code>0b...</code> syntax throughout this post to denote bit literals, similarly to the usual <code>0x...</code> hexadecimal literals. <a href="#fnref:b-for-bit-literal" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:big-endian">
+      <p>While I prefer to work with little-endian bytes, I find everything makes more sense with big-endian bits. <a href="#fnref:big-endian" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:remember-endianness">
+      <p>Remember, while ULEB is little-endian, we use big bit-endianness. <a href="#fnref:remember-endianness" class="reversefootnote">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[How hard is it to guide test case generators with branch coverage feedback?]]></title>
+    <link href="https://www.pvk.ca/Blog/2020/03/11/how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/"/>
+    <updated>2020-03-11T18:00:26-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2020/03/11/how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback</id>
+    <content type="html"><![CDATA[<p>To make a long story short, it’s almost easy,
+now that <a href="https://github.com/torvalds/linux/blob/master/tools/perf/Documentation/intel-bts.txt">tracing</a> is available on commodity hardware,
+especially with a <a href="https://gist.github.com/pkhuong/1ce34e33c6df4b9be3bc9beb22415a47">small library to handle platform-specific setup</a>.</p>
+
+<p>Here’s a graph of the empirical distribution functions
+for the number of calls into <a href="https://github.com/google/fuzzer-test-suite/tree/7e08b745d1e264eedb9a91b1fd0a931f1bec3b83/openssl-1.0.1f">OpenSSL 1.0.1f</a>
+it takes for <a href="https://hypothesis.works/">Hypothesis</a>
+to find <a href="https://en.wikipedia.org/wiki/Heartbleed">Heartbleed</a>,
+given a description of the <a href="https://tools.ietf.org/html/rfc6520">format for Heartbeat requests</a> (“grammar”),
+and the same with additional branch coverage feedback (“bts”, for Intel Branch Trace Store).</p>
+
+<!-- ggplot(data, aes(x=Calls, colour=Impl)) + stat_ecdf() + scale_color_discrete(name="Implementation") + scale_x_log10() + ylab("Cumulative fraction") + xlab("Calls to OpenSSL until crash") -->
+<p><img class="center" src="/images/2020-03-11-how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/ecdf.png" /></p>
+
+<p>On average, knowing the grammar for Heartbeat requests lets Hypothesis find
+the vulnerability after 535 calls to OpenSSL;
+when we add branch coverage feedback, the average goes down to 473<sup id="fnref:realtime"><a href="#fn:realtime" class="footnote">1</a></sup> calls, 11.5% faster.
+The plot shows that,
+as long as we have time for more than 100 calls to OpenSSL,
+branch coverage information makes it more likely that Hypothesis will find Heartbleed
+for every attempt budget.
+I’ll describe this experiment in more details later in the post;
+first, why did I ask that question?</p>
+
+<h2 id="enumerating-test-cases-by-hand-is-a-waste-of-peoples-time">Enumerating test cases by hand is a waste of people’s time</h2>
+
+<p>I care about efficiently generating test cases because
+I believe that most of the time people spend writing, reviewing, and maintaining
+classic <a href="https://testing.googleblog.com/2010/12/test-sizes.html">small or medium tests</a>
+is misallocated.
+There’s a place for them, same as there is for manual QA testing… but their returns curve is strongly concave.</p>
+
+<p>Here are the sort of things I want to know when I look at typical unit test code:</p>
+<ol>
+  <li>Why do we make this exact assertion; what makes a result acceptable?<sup id="fnref:matchers"><a href="#fn:matchers" class="footnote">2</a></sup></li>
+  <li>Why do we feed this or that input; what makes input data useful or interesting?</li>
+  <li>What is expected to change when I tweak the external behaviour of the system under test;<sup id="fnref:change-detector"><a href="#fn:change-detector" class="footnote">3</a></sup> how are answers to the previous two questions encoded?</li>
+</ol>
+
+<p>As programmers, I think it’s natural to say that,
+if we need to formalize how we come up with assertions, or how we decide what inputs to use during testing,
+we should express that in code.
+But once we have that code, why would we enumerate test cases manually?
+That’s a job for a computer!</p>
+
+<h2 id="property-based-testing-at-backtrace"><a href="https://increment.com/testing/in-praise-of-property-based-testing/">Property-based testing</a> at Backtrace</h2>
+
+<p>I have such conviction in this thesis that,
+as soon as I took over the query processing component (a library written in C with a dash of intrinsics and inline assembly) at <a href="https://backtrace.io">Backtrace</a>,
+I introduced a new testing approach based on <a href="https://hypothesis.readthedocs.io/en/latest/index.html">Hypothesis</a>.
+The query engine was always designed and built as a discrete library,
+so it didn’t take too much work to disentangle it from other pieces of business logic.
+That let us quickly add coverage for the external interface (partial coverage, this is still work
+in progress), as well as for key internal components that we chose to expose for testing.</p>
+
+<p>Along the way, I had to answer a few reasonable questions:</p>
+
+<ol>
+  <li>What is Hypothesis?</li>
+  <li>Why Hypothesis?</li>
+  <li>Wait, there are multiple language backends for Hypothesis, but none for C or C++; how does that work?</li>
+</ol>
+
+<h3 id="what-is-hypothesis">What is Hypothesis?</h3>
+<p><a href="https://hypothesis.works/">Hypothesis</a> is a Python library that helps programmers generate test cases programmatically,
+and handles a lot of the annoying work involved in making such generators practical to use.
+Here’s an excerpt from real test code for our vectorised operations on arrays of 64-bit integers.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_u64_block.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="kn">from</span> <span class="nn">hypothesis</span> <span class="kn">import</span> <span class="n">given</span>
+</span><span class="line"><span class="kn">import</span> <span class="nn">hypothesis.strategies</span> <span class="kn">as</span> <span class="nn">st</span>
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">check_u64_bitmask</span><span class="p">(</span><span class="n">booleans</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Given a list of 8 booleans, generates the corresponding array of</span>
+</span><span class="line"><span class="sd">    u64 masks, and checks that they are correctly compressed to a u8</span>
+</span><span class="line"><span class="sd">    bitmask.</span>
+</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
+</span><span class="line">    <span class="n">expected</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">booleans</span><span class="p">):</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">value</span><span class="p">:</span>
+</span><span class="line">            <span class="n">expected</span> <span class="o">|=</span> <span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="n">i</span>
+</span><span class="line">    <span class="n">masks</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s2">&quot;8Q&quot;</span><span class="p">,</span> <span class="o">*</span><span class="p">[</span><span class="mi">2</span> <span class="o">**</span> <span class="mi">64</span> <span class="o">-</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">boolean</span> <span class="k">else</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">boolean</span> <span class="ow">in</span> <span class="n">booleans</span><span class="p">])</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">expected</span> <span class="o">==</span> <span class="n">C</span><span class="o">.</span><span class="n">u64_block_bitmask</span><span class="p">(</span><span class="n">FFI</span><span class="o">.</span><span class="n">from_buffer</span><span class="p">(</span><span class="s2">&quot;uint64_t[]&quot;</span><span class="p">,</span> <span class="n">masks</span><span class="p">))</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">class</span> <span class="nc">TestU64BlockOp</span><span class="p">(</span><span class="n">TestCase</span><span class="p">):</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@given</span><span class="p">(</span><span class="n">bits</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">lists</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">booleans</span><span class="p">(),</span> <span class="n">min_size</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">max_size</span><span class="o">=</span><span class="mi">8</span><span class="p">))</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">test_u64_block_bitmask</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bits</span><span class="p">):</span>
+</span><span class="line">        <span class="n">check_u64_bitmask</span><span class="p">(</span><span class="n">bits</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>A key component of these operations is a C (SSE intrinsics, really) function that accepts eight 64-bit masks as four 128-bit SSE registers (one pair of masks per register),
+and returns a byte, with one bit per mask.
+In order to test that logic, we expose <code>u64_block_bitmask</code>, a wrapper that accepts an array of eight masks
+and forwards its contents to the mask-to-bit function.</p>
+
+<p><img class="center" src="/images/2020-03-11-how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/reduction.jpg" /></p>
+
+<p><code>check_u64_bitmask</code> calls that wrapper function from Python, and asserts that its return value is as expected: 1 for each mask that’s all 1s, and 0 for each mask that’s all 0s.
+We turn <code>check_u64_bitmask</code> into a test cases generator
+by annotating the test method <code>test_u64_block_bitmask</code> with a <a href="https://hypothesis.readthedocs.io/en/latest/details.html#hypothesis.given"><code>@given</code> decorator</a>
+that asks Hypothesis to generate arbitrary lists of eight booleans.</p>
+
+<p>Of course, there are only 256 lists of eight booleans; we should test that exhaustively.
+Hypothesis has the <a href="https://hypothesis.readthedocs.io/en/latest/reproducing.html#hypothesis.example"><code>@example</code> decorator</a>,
+so it’s really easy to implement our own Python decorator to apply
+<code>hypothesis.example</code> once for each element in an iterable.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_u64_block.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">all_examples</span><span class="p">(</span><span class="n">examples</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Applies a list of hypothesis.examples.&quot;&quot;&quot;</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">apply_examples</span><span class="p">(</span><span class="n">fn</span><span class="p">):</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">ex</span> <span class="ow">in</span> <span class="nb">reversed</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">examples</span><span class="p">)):</span>
+</span><span class="line">            <span class="n">fn</span> <span class="o">=</span> <span class="n">example</span><span class="p">(</span><span class="n">ex</span><span class="p">)(</span><span class="n">fn</span><span class="p">)</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">apply_examples</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">extract_bits</span><span class="p">(</span><span class="n">number</span><span class="p">,</span> <span class="n">num_bits</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Converts the num_bits bit number to a list of booleans.&quot;&quot;&quot;</span>
+</span><span class="line">    <span class="k">return</span> <span class="p">[(</span><span class="n">number</span> <span class="o">&amp;</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="n">shift</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">shift</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_bits</span><span class="p">)]</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">class</span> <span class="nc">TestU64BlockOp</span><span class="p">(</span><span class="n">TestCase</span><span class="p">):</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@all_examples</span><span class="p">(</span><span class="n">extract_bits</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="mi">8</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">256</span><span class="p">))</span>
+</span><span class="line">    <span class="nd">@given</span><span class="p">(</span><span class="n">bits</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">lists</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">booleans</span><span class="p">(),</span> <span class="n">min_size</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">max_size</span><span class="o">=</span><span class="mi">8</span><span class="p">))</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">test_u64_block_bitmask</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bits</span><span class="p">):</span>
+</span><span class="line">        <span class="n">check_u64_bitmask</span><span class="p">(</span><span class="n">bits</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>That’s pretty cool, but we could enumerate that more efficiently in C.
+Where Hypothesis shines is in reporting easily actionable failures.
+We’re wasting computer time in order to save developer time, and that’s usually a reasonable trade-off.
+For example, here’s what Hypothesis spits back via pytest when I introduce a bug to ignore the
+last pair of masks, masks 6 and 7, and instead reuse the register that holds masks 4 and 5 (a mistake that’s
+surprisingly easy to make when writing intrinsics by hand).</p>
+
+<p><img class="center" src="/images/2020-03-11-how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/bad-reduction.jpg" /></p>
+
+<pre><code>booleans = [False, False, False, False, False, False, ...]
+
+    def check_u64_bitmask(booleans):
+        """Given a list of 8 booleans, generates the corresponding array of
+        u64 masks, and checks that they are correctly compressed to a u8
+        bitmask.
+        """
+        expected = 0
+        for i, value in enumerate(booleans):
+            if value:
+                expected |= 1 &lt;&lt; i
+        masks = struct.pack("8Q", *[2 ** 64 - 1 if boolean else 0 for boolean in booleans])
+&gt;       assert expected == C.u64_block_bitmask(FFI.from_buffer("uint64_t[]", masks))
+E       AssertionError: assert 128 == 0
+E         -128
+E         +0
+
+test_u64_block.py:40: AssertionError
+-------------------------------------- Hypothesis ----------------------------------------------
+Falsifying example: test_u64_block_bitmask(
+    self=&lt;test_u64_block.TestU64BlockOp testMethod=test_u64_block_bitmask&gt;,
+    bits=[False, False, False, False, False, False, False, True],
+)
+</code></pre>
+
+<p>Hypothesis finds the bug in a fraction of a second,
+but, more importantly, it then works harder to report a minimal counter-example.<sup id="fnref:unless-examples"><a href="#fn:unless-examples" class="footnote">4</a></sup>
+With all but the last mask set to 0,
+it’s easy to guess that we’re probably ignoring the value of
+the last mask (and maybe more), which would be why we found a bitmask of
+0 rather than 128.</p>
+
+<h3 id="why-hypothesis">Why Hypothesis?</h3>
+<p>So far this is all regular property-based testing,
+with a hint of more production-readiness than we’ve come to expect from clever software correctness tools.
+What really sold me was <a href="https://hypothesis.readthedocs.io/en/latest/stateful.html">Hypothesis’s stateful testing</a>
+capability, which makes it easy to test not only individual functions, but also methods on stateful objects.</p>
+
+<p>For example, here is the test code for our specialised representation of lists of row ids (of 64-bit integers),
+which reuses internal bits as inline storage in the common case when the list is small (the type is called <code>entry</code> because it’s
+a pair of a key and a list of values).</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_inlined_list.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">PregrouperEntryList</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Populate a pregrouper entry in LIST mode; it should have all row</span>
+</span><span class="line"><span class="sd">    ids in insertion order.</span>
+</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
+</span><span class="line">
+</span><span class="line">    <span class="n">MODE</span> <span class="o">=</span> <span class="n">C</span><span class="o">.</span><span class="n">PREGROUP_MODE_LIST</span>
+</span><span class="line">    <span class="n">U64S</span> <span class="o">=</span> <span class="n">st</span><span class="o">.</span><span class="n">one_of</span><span class="p">(</span>
+</span><span class="line">        <span class="c1"># Either one of the sentinel values</span>
+</span><span class="line">        <span class="n">st</span><span class="o">.</span><span class="n">sampled_from</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">2</span> <span class="o">**</span> <span class="mi">64</span> <span class="o">-</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span> <span class="o">**</span> <span class="mi">64</span><span class="p">))),</span>
+</span><span class="line">        <span class="c1"># or any row id.</span>
+</span><span class="line">        <span class="n">st</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mi">2</span> <span class="o">**</span> <span class="mi">64</span> <span class="o">-</span> <span class="mi">1</span><span class="p">),</span>
+</span><span class="line">    <span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">error</span> <span class="o">=</span> <span class="n">FFI</span><span class="o">.</span><span class="n">new</span><span class="p">(</span><span class="s2">&quot;crdb_error_t *&quot;</span><span class="p">)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">entry</span> <span class="o">=</span> <span class="bp">None</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">teardown</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+</span><span class="line">            <span class="n">C</span><span class="o">.</span><span class="n">pregrouper_entry_deinit</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">MODE</span><span class="p">)</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">entry</span> <span class="o">=</span> <span class="bp">None</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">perror</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+</span><span class="line">        <span class="k">return</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">: </span><span class="si">%s</span><span class="s2"> </span><span class="si">%i</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">FFI</span><span class="o">.</span><span class="n">string</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">error</span><span class="o">.</span><span class="n">message</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">error</span><span class="o">.</span><span class="n">error</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">row</span><span class="o">=</span><span class="n">U64S</span><span class="p">)</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">create_entry</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">row</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">entry</span> <span class="o">=</span> <span class="n">FFI</span><span class="o">.</span><span class="n">new</span><span class="p">(</span><span class="s2">&quot;struct crdb_pregrouper_entry *&quot;</span><span class="p">)</span>
+</span><span class="line">        <span class="n">C</span><span class="o">.</span><span class="n">pregrouper_entry_init</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">,</span> <span class="p">[</span><span class="n">row</span><span class="p">])</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">rows</span> <span class="o">=</span> <span class="p">[</span><span class="n">row</span><span class="p">]</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">row</span><span class="o">=</span><span class="n">U64S</span><span class="p">)</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">add_row</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">row</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">pregrouper_entry_add_row</span><span class="p">(</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">MODE</span><span class="p">,</span> <span class="p">[</span><span class="n">row</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">error</span>
+</span><span class="line">        <span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">perror</span><span class="p">(</span><span class="s2">&quot;add_row&quot;</span><span class="p">)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">row</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">finalize</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">pregrouper_entry_finalize</span><span class="p">(</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">MODE</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">error</span>
+</span><span class="line">        <span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">perror</span><span class="p">(</span><span class="s2">&quot;finalize&quot;</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">check</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">finalize</span><span class="p">()</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">rows</span> <span class="o">==</span> <span class="p">[</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="o">.</span><span class="n">payload</span><span class="o">.</span><span class="n">list</span><span class="o">.</span><span class="n">values</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+</span><span class="line">            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="o">.</span><span class="n">payload</span><span class="o">.</span><span class="n">list</span><span class="o">.</span><span class="n">n_entries</span><span class="p">)</span>
+</span><span class="line">        <span class="p">]</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="n">TestPregrouperEntryList</span> <span class="o">=</span> <span class="n">PregrouperEntryList</span><span class="o">.</span><span class="n">TestCase</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Most <a href="https://hypothesis.readthedocs.io/en/latest/stateful.html#hypothesis.stateful.rule"><code>@rule</code>-decorated</a> methods call a C function
+before updating a Python-side model of the values we expect to find in the list.
+The <a href="https://hypothesis.readthedocs.io/en/latest/stateful.html#hypothesis.stateful.rule"><code>@rule</code> decorator</a> mark methods that Hypothesis may call to generate examples;
+the decorator’s arguments declare how each method should be invoked.
+Some methods also have a <a href="https://hypothesis.readthedocs.io/en/latest/stateful.html#preconditions"><code>@precondition</code> decorator</a> to specify when they can be invoked
+(a <code>@rule</code> without any <code>@precondition</code> is always safe to call).
+There is one method (<code>create_entry</code>) to create a new list populated with an initial row id,
+another (<code>add_row</code>) to add a row id to the list,
+one to <code>finalize</code> the list, something which should always be safe to call and <em>must</em> be done before reading the list’s contents
+(finalizing converts away from the inline representation),
+and a <code>check</code> to compare the list of row ids in C to the one we maintained in Python.</p>
+
+<p>Row ids are arbitrary 64-bit integers, so we could simply
+ask Hypothesis to generate integers in \([0, 2^{64} - 1]\).
+However, we also know that the implementation uses high row id values around
+<code>UINT64_MAX</code> as sentinels in its implementation of inline storage, as shown below.</p>
+
+<pre><code>struct inlined_list {
+    union {
+        uint64_t data[2];
+        struct {
+            uint64_t *arr;
+            unsigned int capacity;
+            unsigned int length;
+        };
+    };
+    uint64_t control;
+};
+
+          Out of line list      Inline list of 2      Inline list of 3
+          ----------------      ----------------      ----------------
+data[0]:    arr                   elt #0                elt #0
+data[1]:    capacity &amp; length     elt #1                elt #1
+control:    UINT64_MAX            UINT64_MAX - 2        elt #2 &lt; UINT64_MAX - 2
+</code></pre>
+
+<p>That’s why we
+bias the data generation towards row ids that could also be mistaken for sentinel values:
+we generate each row id by either sampling from a set of sentinel-like values, 
+or by sampling from all 64-bit integers.
+This approach to defining the input data is decidedly non-magical,
+compared to the way I work with fuzzers.
+However, fuzzers also tend to be slow and somewhat fickle.
+I think it makes sense to ask programmers to think about how their own code should be tested,
+instead of hoping a computer program will eventually intuit what edge cases look like.<sup id="fnref:no-preconception"><a href="#fn:no-preconception" class="footnote">5</a></sup></p>
+
+<p>It’s pretty cool that Hypothesis will now generate a bunch of API calls for me, but,
+again, what makes Hypothesis really valuable is the way it
+minimises long sequences of random calls into
+understandable counter-examples.
+Here’s what Hypothesis/pytest reports when I remove a guard that saves us from writing a row id
+to a control word when that id would look like a sentinel value.</p>
+
+<pre><code>self = PregrouperEntryList({})
+
+    @precondition(lambda self: self.entry)
+    @rule()
+    def check(self):
+        self.finalize()
+&gt;       assert self.rows == [
+            self.entry.payload.list.values[i]
+            for i in range(self.entry.payload.list.n_entries)
+        ]
+E       AssertionError: assert [184467440737...4073709551613] == [184467440737...4073709551613]
+E         Left contains one more item: 18446744073709551613
+E         Full diff:
+E         - [18446744073709551613, 18446744073709551613, 18446744073709551613]
+E         ?                        ----------------------
+E         + [18446744073709551613, 18446744073709551613]
+
+test_pregroup_merge.py:81: AssertionError
+------------------------------------------ Hypothesis ------------------------------------------
+Falsifying example:
+state = PregrouperEntryList()
+state.create_entry(row=18446744073709551613)
+state.add_row(row=18446744073709551613)
+state.add_row(row=18446744073709551613)
+state.check()
+state.teardown()
+</code></pre>
+
+<p>We can see that we populated a list
+thrice with the same row id, <code>18446744073709551613</code>,
+but only found it twice in the final C-side list.
+That row id is \(2^{64} - 3,\) the value we use to denote inline lists of two values.
+This drawing shows how the last write ended up going to a control word where it was treated as a sentinel, making the inline representation look
+like a list of two values, instead of three values.</p>
+
+<pre><code>           Bad list of 3                Identical list of 2
+          ----------------             ---------------------
+data[0]:    UINT64_MAX - 2              UINT64_MAX - 2
+data[1]:    UINT64_MAX - 2              UINT64_MAX - 2
+control:    UINT64_MAX - 2 (payload)    UINT64_MAX - 2 (sentinel)
+
+</code></pre>
+
+<p>I restored the logic to prematurely stop using the inline representation
+and convert to a heap-allocated vector whenever the row value would be interpreted as a sentinel,
+and now Hypothesis doesn’t find anything wrong.
+We also know that this specific failure is fixed,
+because Hypothesis retries examples from its <a href="https://hypothesis.readthedocs.io/en/latest/database.html">failure database</a><sup id="fnref:failure-in-ci"><a href="#fn:failure-in-ci" class="footnote">6</a></sup> on every rerun.</p>
+
+<h3 id="but-hypothesis-is-a-python-library">But Hypothesis is a Python library?!</h3>
+<p>There are multiple language-specific libraries under the <a href="https://github.com/HypothesisWorks/hypothesis">Hypothesis project</a>;
+none of them is in C, and only the Python implementation is actively maintained.
+One might think that makes Hypothesis inappropriate for testing C.
+However, the big ideas in Hypothesis are language-independent.
+There is a practical reason for the multiple implementations:
+for a tool to be really usable, it has to integrate well with the programming language’s surrounding ecosystem.
+In most languages, we also expect to write test code in the same language as the system under test.</p>
+
+<p>C (and C++, I would argue) is an exception.
+When I tell an experienced C developer they should write test code in Python,
+I expect a sigh of relief.
+The fact that Hypothesis is written in Python,
+as opposed to another managed language like Ruby or C# also helps:
+embedding and calling C libraries is Python’s bread and butter.
+The weak state of C tooling is another factor:
+no one has a strong opinion regarding how to invoke C test code,
+or how the results should be reported.
+I’ll work with anything standard enough (e.g., pytest’s JUnit dump) to be ingested by Jenkins.</p>
+
+<p>The last thing that sealed the deal for me is <a href="https://cffi.readthedocs.io/en/latest/">Python’s CFFI</a>.
+With that library, I simply had to make sure my public header files were clean enough to be parsed without a full-blown compiler;
+I could then write some simple Python code to <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-crdb-py-L58">strip away preprocessor directive</a>,
+<a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-crdb-py-L70">read headers in dependency order</a>,
+and <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-crdb-py-L77">load the production shared object</a>,
+without any test-specific build step.
+The snippets of test code above don’t look that different from tests for a regular Python module,
+but there’s also a clear mapping from each Python call to a C call.
+The level of magic is just right.</p>
+
+<p>There is one testing concern that’s almost specific to C and C++ programs:
+we must be on the lookout for memory management bugs.
+For that, we use our <a href="https://github.com/google/sanitizers/wiki/AddressSanitizer">ASan</a>
+build and bubble up <em>some</em> issues (e.g., read overflows or leaks) back to Python;
+everything else results in an <code>abort()</code>, which, while suboptimal for minimisation, is still useful.
+I simplified our test harness for the Heartbleed experiment;
+see below for <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb">gists that anyone can use as starting points</a>.</p>
+
+<h2 id="why-not-fuzzing">Why not fuzzing?</h2>
+
+<p>I abused fuzzers a lot at Google,
+mostly because the tooling was there
+and it was trivial to burn hundreds of CPU-hours.
+Technical workarounds seemed much easier than trying to add support for actual property-based testers,
+so I would add domain specific assertions in order to detect more than crash conditions,
+and translate bytes into more structured inputs or even convert them to series of method calls.
+Now that I don’t have access to prebuilt infrastructure for fuzzers,
+that approach doesn’t make as much sense.
+That’s particularly true when byte arrays don’t naturally fit the entry point:
+I spent a lot of time making sure the fuzzer was exercising branches in the system under test, not the test harness,
+and designing input formats such that common fuzzer mutations, e.g., removing a byte, had a local effect and not, e.g., cause a frameshift mutation for the rest of the input…
+and that’s before considering the time I wasted manually converting bytes to their structured interpretation on failures.</p>
+
+<p>Hypothesis natively supports structured inputs and function calls,
+and reports buggy inputs in terms of these high level concepts.
+It is admittedly slower than fuzzers,
+especially when compared to fuzzers that (like Hypothesis) don’t fork/exec for each evaluation.
+I’m comfortable with that: my experience with NP-Hard problems tells me it’s better
+to start by trying to do smart things with the structure of the problem, and later speed that up,
+rather than putting all our hopes in making bad decisions really really fast.
+Brute force can only do so much to an exponential-time cliff.</p>
+
+<p>I had one niggling concern when leaving the magical world of fuzzers for staid property-based testing.
+In some cases, I had seen coverage information steer fuzzers towards really subtle bugs;
+could I benefit from the same smartness in Hypothesis?
+That’s how I came up with the idea of simulating a reasonable testing process that ought to find <a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0160">CVE-2014-0160</a>,
+<a href="https://heartbleed.com/">Heartbleed</a>.</p>
+
+<h2 id="role-playing-cve-2014-0160">Role-playing CVE-2014-0160</h2>
+
+<p><a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0160">CVE-2014-0160</a> a.k.a. <a href="https://heartbleed.com/">Heartbleed</a>
+is a read heap overflow in OpenSSL 1.0.1 (\(\leq\) 1.0.1f) that leaks potentially private data over the wire.
+It’s a straightforward logic bug in the implementation of <a href="https://tools.ietf.org/html/rfc6520">RFC 6520, a small optional (D)TLS extension</a>
+that lets clients or servers ask for a ping.
+<a href="https://www.theregister.co.uk/2014/04/09/heartbleed_explained/">The Register</a> has a concise visualisation of a bad packet.  We must send correctly sized packets that happen to ask for more pingback data than was sent to OpenSSL.</p>
+
+<p><a href="https://www.theregister.co.uk/2014/04/09/heartbleed_explained/">
+<img class="center" src="/images/2020-03-11-how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/the_register_heartbleed_diagram.png" />
+</a></p>
+
+<p>State of the art fuzzers like <a href="http://lcamtuf.coredump.cx/afl/">AFL</a> or <a href="https://github.com/google/honggfuzz">Honggfuzz</a> find that bug in seconds when given an entry point that passes bytes to the connection handler,
+like data that had just come over the wire.
+When provided with a corpus of valid messages, they’re even faster.</p>
+
+<p>It’s a really impressive showing of brute force that these programs to come up with almost valid packets so quickly,
+and traditional property-based testing frameworks are really not up to that level of magic.
+However, I don’t find the black box setting that interesting.
+It’s probably different for security testing,
+since not leaking invalid data is apparently seen as a feature one can slap on after the fact:
+there are so many things to test that it’s probably best to focus on what fuzzing can easily find, and, in any case,
+it doesn’t seem practical to manually boil that ocean one functionality at a time.</p>
+
+<p>From a software testing point of view however, 
+I would expect the people who send in a patch to implement something like the Heartbeat extension
+to also have a decent idea how to send bytes that exercise their new code.
+Of course, a sufficiently diligent coder would have found the heap overflow during testing,
+or simply not have introduced that bug.
+That’s not a useful scenario to explore; 
+I’m interested in something that does find Heartbleed, and also looks like a repeatable process.
+The question becomes “Within this repeatable process, can branch coverage feedback help Hypothesis find Heartbeat?”</p>
+
+<p>Here’s what I settled on: let’s only assume the new feature code also comes
+with a packet generator to exercise that code.  In Hypothesis, it might look like the following.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_with_grammar.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">GrammarTester</span><span class="p">(</span><span class="n">sanitizers</span><span class="o">.</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</span><span class="line">        <span class="c1"># Avoid reporting initialisers as leaks.</span>
+</span><span class="line">        <span class="k">with</span> <span class="n">sanitizers</span><span class="o">.</span><span class="n">leaky_region</span><span class="p">():</span>
+</span><span class="line">            <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">LLVMFuzzerTestOneInput</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;&quot;</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">teardown</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">LLVMFuzzerTestOneInput</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">))</span> <span class="o">==</span> <span class="mi">0</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@initialize</span><span class="p">(</span>
+</span><span class="line">        <span class="n">tls_ver</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">sampled_from</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]),</span>
+</span><span class="line">        <span class="n">payload</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">binary</span><span class="p">(),</span>
+</span><span class="line">        <span class="n">padding</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">binary</span><span class="p">(</span><span class="n">min_size</span><span class="o">=</span><span class="mi">16</span><span class="p">),</span>
+</span><span class="line">    <span class="p">)</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">add_heartbeat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tls_ver</span><span class="p">,</span> <span class="n">payload</span><span class="p">,</span> <span class="n">padding</span><span class="p">):</span>
+</span><span class="line">        <span class="n">hb_payload</span> <span class="o">=</span> <span class="nb">bytes</span><span class="p">([</span><span class="mh">0x01</span><span class="p">])</span> <span class="o">+</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s2">&quot;&gt;H&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">payload</span><span class="p">))</span> <span class="o">+</span> <span class="n">payload</span> <span class="o">+</span> <span class="n">padding</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">+=</span> <span class="nb">bytes</span><span class="p">([</span><span class="mh">0x18</span><span class="p">,</span> <span class="mh">0x03</span><span class="p">,</span> <span class="n">tls_ver</span><span class="p">])</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">+=</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s2">&quot;&gt;H&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">hb_payload</span><span class="p">))</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">+=</span> <span class="n">hb_payload</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We have a single rule to initialize the test buffer with a valid heartbeat packet, 
+and we send the whole buffer to a standard fuzzer entry point at the end.
+In practice, I would also ask for some actual assertions that the system under test handles the packets correctly,
+but that’s not important when it comes to Heartbleed:
+we just need to run with ASan and look for heap overflows, which are essentially never OK.</p>
+
+<p>Being able to provide a happy-path-only “test” like the above should be less than table stakes in a healthy project.
+Let’s simulate a bug-finding process that 
+looks for crashes after adding three generic buffer mutating primitives:
+one that replaces a single byte in the message buffer,
+another one that removes some bytes from the end of the buffer,
+and a last one that appends some bytes to the buffer.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_with_grammar.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">GrammarTester</span><span class="p">(</span><span class="n">sanitizers</span><span class="o">.</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="o">...</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">value</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mi">255</span><span class="p">))</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">replace_byte</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+</span><span class="line">        <span class="n">index</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">))</span>
+</span><span class="line">        <span class="n">prefix</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="n">index</span><span class="p">]</span>
+</span><span class="line">        <span class="n">suffix</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">[</span><span class="n">index</span> <span class="o">+</span> <span class="mi">1</span> <span class="p">:]</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">=</span> <span class="n">prefix</span> <span class="o">+</span> <span class="nb">bytes</span><span class="p">([</span><span class="n">value</span><span class="p">])</span> <span class="o">+</span> <span class="n">suffix</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">data</span><span class="p">())</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">strip_suffix</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+</span><span class="line">        <span class="n">count</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">)))</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="o">-</span><span class="n">count</span><span class="p">]</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">suffix</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">binary</span><span class="p">(</span><span class="n">min_size</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">add_suffix</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">suffix</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">+=</span> <span class="n">suffix</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Given the initial generator rules and these three mutators,
+Hypothesis will assemble sequences of calls to create and mutate buffers before sending them to OpenSSL at the end of the “test.”</p>
+
+<p>The first time I ran this, Hypothesis found the bug in a second or two</p>
+
+<pre><code>==12810==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x62900012b748 at pc 0x7fb70d372f4e bp 0x7ffe55e56a30 sp 0x7ffe55e561e0
+READ of size 30728 at 0x62900012b748 thread T0
+
+0x62900012b748 is located 0 bytes to the right of 17736-byte region [0x629000127200,0x62900012b748)
+allocated by thread T0 here:
+    #0 0x7fb70d3e3628 in malloc (/usr/lib/x86_64-linux-gnu/libasan.so.5+0x107628)
+    #1 0x7fb7058ee939  (fuzzer-test-suite/openssl-1.0.1f-fsanitize.so+0x19a939)
+    #2 0x7fb7058caa08  (fuzzer-test-suite/openssl-1.0.1f-fsanitize.so+0x176a08)
+    #3 0x7fb7058caf41  (fuzzer-test-suite/openssl-1.0.1f-fsanitize.so+0x176f41)
+    #4 0x7fb7058a658d  (fuzzer-test-suite/openssl-1.0.1f-fsanitize.so+0x15258d)
+    #5 0x7fb705865a12  (fuzzer-test-suite/openssl-1.0.1f-fsanitize.so+0x111a12)
+    #6 0x7fb708326deb in ffi_call_unix64 (/home/pkhuong/follicle/follicle/lib/Python3.7/site-packages/.libs_cffi_backend/libffi-806b1a9d.so.6.0.4+0x6deb)
+    #7 0x7fb7081b4f0f  (&lt;unknown module&gt;)
+</code></pre>
+
+<p>and then spent the 30 seconds trying to minimise the failure.
+Unfortunately, it seems that ASan tries to be smart and avoids reporting duplicate errors, so minimisation does not work for memory errors.
+It also doesn’t matter that much if we find a minimal test case: a core dump and a reproducer is usually good enough.</p>
+
+<p>You can find the complete code for <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-test_with_grammar-py">GrammarTester</a>,
+along with the <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-sanitizers-py">ASan wrapper</a>,
+and <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-llvm_one_input-py">CFFI glue</a> in <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb">this gist</a>.</p>
+
+<p>For the rest of this post, we’ll make ASan crash on the first error, and count the number of test cases generated (i.e., the number of calls into the OpenSSL fuzzing entry point)
+until ASan made OpenSSL crash.</p>
+
+<h2 id="how-can-we-do-better-with-hardware-tracing">How can we do better with hardware tracing?</h2>
+
+<p>Intel chips have offered <a href="https://github.com/torvalds/linux/blob/master/tools/perf/Documentation/intel-bts.txt">BTS, a branch trace store</a>, since Nehalem (2008-9), if not earlier.
+BTS is slower than <a href="https://software.intel.com/en-us/blogs/2013/09/18/processor-tracing">PT, its full blown hardware tracing successor</a>,
+and only traces branches, but it does so in a dead simple format.
+I wrapped Linux perf’s interface for BTS in a <a href="https://gist.github.com/pkhuong/1ce34e33c6df4b9be3bc9beb22415a47">small library</a>;
+let’s see if we can somehow feed that trace to Hypothesis and consistently find Heartbeat faster.</p>
+
+<p>But first, how do fuzzers use coverage information?</p>
+
+<p>A lot of the impressive stuff that fuzzers find stems from their ability to infer the constants that were compared with the fuzzing input by the system under test.
+That’s not really that important when we assume a more white box testing setting,
+where the same person or group responsible for writing the code is also tasked with testing it, or at least specifying how to do so.</p>
+
+<p>Apart from guessing what valid inputs look like,
+fuzzers also use branch coverage information to diversify their inputs.
+In the initial search phase, none of the inputs cause a crash, and fuzzers can only mutate existing, equally non-crashy, inputs or create new ones from scratch.
+The goal is to maintain a small population that can trigger all the behaviours (branches) we’ve observed so far,
+and search locally around each member of that population.
+Pruning to keep the population small is beneficial for two reasons: first, it’s faster to iterate over a smaller population, and second,
+it avoids redundantly exploring the neighbourhood of nearly identical inputs.</p>
+
+<p>Of course, this isn’t ideal.
+We’d prefer to keep one input per program state,
+but we don’t know what the distinct program states are.
+Instead, we only know what branches we took on the way to wherever we ended up.
+It’s as if we were trying to generate directions to every landmark in a city,
+but the only feedback we received was the set of streets we walked on while following the directions.
+That’s far from perfect, but, with enough brute force, it might just be good enough.</p>
+
+<p>We can emulate this diversification and local exploration logic with multi-dimensional <a href="http://proper.softlab.ntua.gr/Publications.html">Targeted example generation</a>,
+for which <a href="https://hypothesis.readthedocs.io/en/latest/details.html#targeted-example-generation">Hypothesis has experimental support</a>.</p>
+
+<p>We’ll assign an arbitrary unique label to each origin/destination pair we observe via BTS,
+and assign a score of 1.0 to every such label (regardless of how many times we observed each pair).
+Whenever Hypothesis compares two score vectors, a missing value is treated as \(-\infty\), so, everything else being equal, covering a branch is better than not covering it.
+After that, we’ll rely on the fact that multidimensional discrete optimisation is
+also all about maintaining a small but diverse population:
+Hypothesis regularly prunes redundant examples (examples that exercises a subset of
+the branches triggered by another example),
+and generates new examples by mutating members of the population.
+With our scoring scheme, the multidimensional search will split its efforts between families of examples that trigger different sets of branches,
+and will also stop looking around examples that trigger a strict subset of another example’s branches.</p>
+
+<p>Here’s the plan to give BTS feedback to Hypothesis and diversify its initial search for failing examples.
+I’ll use my <a href="https://gist.github.com/pkhuong/1ce34e33c6df4b9be3bc9beb22415a47">libbts</a> to wrap perf syscalls into something usable,
+and wrap that in Python to more easily <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-bts-py">gather origin/destination pairs</a>.
+Even though I enable BTS tracing only around FFI calls,
+there will be some noise from libffi, as well as dummy transitions for interrupts or context switches; <code>bts.py</code> attempts to only consider interesting branches
+by <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-bts-py-L105">remembering the set of executable mappings present at startup</a>,
+before loading the library under test,
+and dropping jumps to or from addresses that were mapped at startup
+(presumably, that’s from the test harness), or invalid zero or negative addresses
+(which I’m pretty sure denote interrupts and syscalls).</p>
+
+<p>We’ll then wrap the Python functions that call into OpenSSL to record the set of branches executed during that call,
+and convert that set to a multidimensional score at the end of the test, in the <code>teardown</code> method.</p>
+
+<p>The only difference is in the <code>__init__</code> method, which must also reset BTS state,
+and in the <code>teardown</code> method, where we score the example if it failed to crash.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_with_grammar_bts.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">GrammarBtsTester</span><span class="p">(</span><span class="n">sanitizers</span><span class="o">.</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</span><span class="line">        <span class="n">bts</span><span class="o">.</span><span class="n">reset</span><span class="p">()</span>
+</span><span class="line">        <span class="k">with</span> <span class="n">sanitizers</span><span class="o">.</span><span class="n">leaky_region</span><span class="p">():</span>
+</span><span class="line">            <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">LLVMFuzzerTestOneInput</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span>
+</span><span class="line">        <span class="n">bts</span><span class="o">.</span><span class="n">update_useless_edges</span><span class="p">()</span>
+</span><span class="line">        <span class="n">bts</span><span class="o">.</span><span class="n">reset</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;&quot;</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">teardown</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">LLVMFuzzerTestOneInput</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">))</span> <span class="o">==</span> <span class="mi">0</span>
+</span><span class="line">        <span class="c1"># bts.report() returns a set of control flow edge ids.</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">bts</span><span class="o">.</span><span class="n">report</span><span class="p">():</span>
+</span><span class="line">            <span class="n">target</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">))</span>
+</span><span class="line">        <span class="n">bts</span><span class="o">.</span><span class="n">teardown</span><span class="p">()</span>
+</span><span class="line">
+</span><span class="line">    <span class="o">...</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Let’s instrument the <code>teardown</code> methods to print “CHECK” and flush before every call to the fuzzing entry point,
+and make sure <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-run-tests-sh">ASan crashes when it finds an issue</a>.
+We’ll run the test files, grep for “CHECK”, and, assuming we don’t trigger into any runtime limit,
+find out how many examples Hypothesis had to generate before causing a crash.</p>
+
+<p>I ran this 12000 times for both <code>test_with_grammar.py</code> and <code>test_with_grammar_bts.py</code>.
+Let’s take a look at the empirical distribution functions for the number of calls until a crash, for <code>test_with_grammar.py</code> (<code>grammar</code>)
+and <code>test_with_grammar_bts.py</code> (<code>bts</code>).</p>
+
+<!-- ggplot(data, aes(x=Calls, colour=Impl)) + stat_ecdf() + scale_color_discrete(name="Implementation") + scale_x_log10() + ylab("Cumulative fraction") + xlab("Calls to OpenSSL until crash") -->
+<p><img class="center" src="/images/2020-03-11-how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/ecdf.png" /></p>
+
+<p>There’s a cross-over around 100 calls:
+as long as we have enough time for least 100 calls to OpenSSL,
+we’re more likely to find Heartbleed with coverage feedback than by rapidly searching blindly.
+With fewer than 100 calls, it seems likely that branch coverage only guides the search
+towards clearly invalid inputs that trigger early exit conditions.
+Crucially, the curves are smooth and tap out before our limit of 10000 examples per execution,
+so we’re probably not measuring a side-effect of the experimental setup.</p>
+
+<p>In theory, the distribution function for the uninstrumented <code>grammar</code> search should look a lot like a geometric distribution,
+but I don’t want to assume too much of the <code>bts</code> implementation.  Let’s confirm our gut feeling in <code>R</code> with a simple non-parametric test,
+the <a href="https://en.wikipedia.org/wiki/Mann%E2%80%93Whitney_U_test">Wilcoxon rank sum test</a>, an unpaired analogue to the sign test:</p>
+
+<pre><code>&gt; wilcox.test(data$Calls[data$Impl == 'bts'], data$Calls[data$Impl == 'grammar'], 'less')
+
+        Wilcoxon rank sum test with continuity correction
+
+data:  data$Calls[data$Impl == "bts"] and data$Calls[data$Impl == "grammar"]
+W = 68514000, p-value = 4.156e-11
+alternative hypothesis: true location shift is less than 0
+</code></pre>
+
+<p>We’re reasonably certain that the number of calls for a random run of <code>bts</code> is more
+frequently less than the number of calls for an independently chosen random run of <code>grammar</code>
+than the opposite.  Since the tracing overhead is negligible,
+this means branch feedback saves us time more often than not.
+For the 24 000 separate runs we observed,
+<code>bts</code> is only faster 52% of the time, 
+but that’s mostly because both distributions of calls to the system under test go pretty high.
+On average, vanilla Hypothesis, without coverage feedback, found the vulnerability after 535 calls to OpenSSL;
+with feedback, Hypothesis is 11.5% faster on average, and only needs 473 calls.</p>
+
+<h2 id="time-to-use-this-in-anger">Time to use this in anger</h2>
+
+<p>We have been using this testing approach (without branch coverage) at Backtrace for a couple months now,
+and it’s working well as a developer tool that offers rapid feedback, enough that we’re considering running these tests in a commit hook.
+Most of the work involved in making the approach useful was just plumbing, e.g., dealing with the way ASan reports errors,
+or making sure we don’t report leaks that happen in Python, outside the system under test.
+Once the commit hook is proven solid, we’ll probably want to look into running tests in the background for a long time.
+That’s a very different setting from pre-commit or commit -time runs, where every bug is sacred.
+If I let something run over the weekend, I must be able to rely on deduplication (i.e., minimisation is even more useful),
+and I will probably want to silence or otherwise triage some issues.
+That’s the sort of thing Backtrace already handles, so we are looking into sending Hypothesis reports directly to Backtrace,
+the same way we do for clang-analyzer reports and for crashes or leaks found by ASan in our end-to-end tests.</p>
+
+<p>The challenges are more research-y for coverage feedback. There’s no doubt a lot of mundane plumbing issues involved in making this feedback robust
+(see, e.g., the <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-bts-py-L172">logic in bts.py</a> to filter out interrupts and branches from the kernel, or branches from code that’s probably not in the system under test).
+However, there’s also a fundamental question that we unfortunately can’t answer by copying fuzzers.</p>
+
+<p>How should we score coverage over multiple calls?
+After all, the ability to test a stateful interface via a sequence of method calls and expections is what really sold me on Hypothesis.
+Fuzzers have it easy: they assume each call is atomic and independent of any other call to the system under test, even when they don’t fork for each execution.
+This seems like a key reason why simple coverage metrics work well in fuzzers,
+and I don’t know that we can trivially port ideas from fuzzing to stateful testing.</p>
+
+<p>For example, my first stab at this experiment found no statistically significant improvement from BTS feedback.  The only difference is that the assertion lived in a <code>check</code> rule,
+and not in the <code>teardown</code> method, which let Hypothesis trigger a call to OpenSSL at various points in the buffer mutation sequence… usually a good thing for test coverage.
+I’m pretty sure the problem is that a single example could collect “points” for covering branches in multiple unrelated calls to OpenSSL,
+while we would rather cover many branches in a single call.
+What does it mean for stateful testing, where we want to invoke different functions multiple times in a test?</p>
+
+<p>I have no idea; maybe we should come up with some synthetic stateful testing benchmarks that are expected to benefit from coverage information. However, the experiment in this post gives me hope that there exists some way to exploit coverage information in stateful testing.
+<a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb">The MIT-licensed support code in this gist</a>
+(along <a href="https://gist.github.com/pkhuong/1ce34e33c6df4b9be3bc9beb22415a47">with libbts</a>)
+should give you all a headstart to try more stuff and report your experiences.</p>
+
+<p><small>Thank you David, Ruchir, Samy, and Travis for your comments on an early draft.</small></p>
+
+<p><hr style="width: 50%" /></p>
+
+<h2 id="appendix-how-to-get-started-with-your-own-project">Appendix: How to get started with your own project</h2>
+
+<p>In a performance-oriented C library,
+the main obstable to testing with Hypothesis and CFFI will probably be
+that the headers are too complex for <a href="https://github.com/eliben/pycparser"><code>pycparser</code></a>.  I had to use a few tricks
+to make ours parse.</p>
+
+<p>First, I retro-actively imposed more discipline on what was really public and what
+implementation details should live in private headers:
+we want <a href="https://cffi.readthedocs.io/en/latest/">CFFI</a> to handle every public header, and only some private headers for more targeted testing.
+This separation is a good thing to maintain in general, and, if anything,
+having <a href="https://github.com/eliben/pycparser">pycparser</a> yell at us when we make our public interface depend on internals is a net benefit.</p>
+
+<p>I then had to reduce our reliance on the C preprocessor.  In some cases,
+that meant making types opaque and adding getters.
+In many more cases, I simply converted small <code>#define</code>d integer constants to
+anonymous enums <code>enum { CONSTANT_FOO = ... }</code>.</p>
+
+<p>Finally, especially when testing internal functionality, I had to remove
+<code>static inline</code> functions.
+That’s another case where pycparser forces us to maintain cleaner headers,
+and the fix is usually simple:
+declare <code>inline</code> (not static) functions in the header,
+<code>#include</code> a <code>.inl</code> file with the <code>inline</code> definition (we can easily drop directives in Python),
+and re-declare the function as <code>extern</code> in the main source file for that header.
+With this approach, the header can focus on documenting the interface,
+the compiler still has access to an inline definition,
+and we don’t waste instruction bytes on duplicate out-of-line definitions.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>u64_block.h </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cm">/**</span>
+</span><span class="line"><span class="cm"> * This file documents the external interface.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="kr">inline</span> <span class="kt">uint8_t</span> <span class="nf">crdb_u64_block_lt</span><span class="p">(</span><span class="k">const</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">k</span><span class="p">);</span>
+</span><span class="line">
+</span><span class="line"><span class="cp">#include</span> <span class="cpf">&quot;u64_block.inl&quot;  /* Stripped in Python. */</span><span class="cp"></span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>u64_block.inl </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cm">/**</span>
+</span><span class="line"><span class="cm"> * Describe implementation details here.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="kr">inline</span> <span class="kt">uint8_t</span>
+</span><span class="line"><span class="nf">crdb_u64_block_lt</span><span class="p">(</span><span class="k">const</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">block</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">k</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">    <span class="p">....</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>u64_block.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cp">#include</span> <span class="cpf">&quot;u64_block.h&quot;</span><span class="cp"></span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/* Provide the unique out-of-line definition. */</span>
+</span><span class="line"><span class="kt">uint8_t</span> <span class="nf">crdb_u64_block_lt</span><span class="p">(</span><span class="k">const</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">block</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">k</span><span class="p">);</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>That doesn’t always work, mostly because regular <code>inline</code> functions aren’t
+supposed to call <code>static inline</code> functions.  When I ran into that issue,
+I either tried to factor the more complex slow path out to an out-of-line definition,
+or, more rarely, resorted to CPP tricks (also hidden in a <code>.inl</code> file) to rewrite calls to
+<code>extern int foo(...)</code>
+with macros like <code>#define foo(...) static_inline_foo(__VA_ARGS__)</code>.</p>
+
+<p>All that work isn’t really testing overhead; they’re mostly things
+that library maintainers <em>should</em> do, but are easy to forget when
+when we only hear from C programmers.</p>
+
+<p>Once the headers were close enough to being accepted by CFFI,
+I closed the gap with string munging in Python.
+All the tests depend on the <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-crdb-py">same file that parses all the headers we care about in the correct order and loads the shared object</a>.
+Loading everything in the same order also enforces a reasonable dependency
+graph, another unintended benefit.
+Once everything is loaded, that file also <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-crdb-py-L83">post-processes the CFFI functions</a> to hook
+in ASan (and branch tracing), and strip away any namespacing
+prefix.</p>
+
+<p>The end result is a library that’s more easily used from managed
+languages like Python, and which we can now test it like any other
+Python module.</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes">
+  <ol>
+    <li id="fn:realtime">
+      <p>The graph shows time in terms of calls to the SUT, not real time. However, the additional overhead of gathering and considering coverage information is small enough that the feedback also improves wallclock and CPU time. <a href="#fnref:realtime" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:matchers">
+      <p>High level <a href="https://github.com/google/googletest">matchers like GMock’s</a> help, but they don’t always explain why a given matcher makes sense. <a href="#fnref:matchers" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:change-detector">
+      <p>There’s also a place for <a href="https://github.com/approvals/ApprovalTests.cpp/blob/master/doc/Overview.md">smart change detectors, especially when refactoring ill understood code</a>. <a href="#fnref:change-detector" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:unless-examples">
+      <p>I had to disable the exhaustive list of examples to benefit from minimisation. Maybe one day I’ll figure out how to make Hypothesis treat explicit examples more like an initial test corpus. <a href="#fnref:unless-examples" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:no-preconception">
+      <p>That reminds me of an AI Lab Koan. «In the days when Sussman was a novice, Minsky once came to him as he sat hacking at the PDP-6. “What are you doing?” asked Minsky. “I am training a randomly wired neural net to play Tic-tac-toe,” Sussman replied. “Why is the net wired randomly?” asked Minsky. Sussman replied, “I do not want it to have any preconceptions of how to play.” Minsky then shut his eyes. “Why do you close your eyes?” Sussman asked his teacher. “So that the room will be empty,” replied Minsky. At that moment, Sussman was enlightened.» <a href="#fnref:no-preconception" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:failure-in-ci">
+      <p>The database is a directory of files full of binary data.  The specific meaning of these bytes depends on the Hypothesis version and on the test code, so the database should probably not be checked in.  Important examples (e.g., for regression testing) should instead be made persistent with <code>@example</code> decorators.  Hypothesis does guarantee that tese files are always valid (i.e., any sequence of bytes in the database will result in an example that can be generated by the version of Hypothesis and of the test code that reads it), so we don’t have to invalidate the cache when we update the test harness. <a href="#fnref:failure-in-ci" class="reversefootnote">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Too much locality... for stores to forward]]></title>
@@ -1795,840 +3016,6 @@ feel free to steal that gist.</p>
   <ol>
     <li id="fn:pebay2016">
       <p>There’s also a <a href="https://www.osti.gov/biblio/1426900">2016 journal article by Pébay and others</a> with numerical experiments, but I failed to implement their simpler-looking scalar update… <a href="#fnref:pebay2016" class="reversefootnote">&#8617;</a></p>
-    </li>
-  </ol>
-</div>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[A couple of (probabilistic) worst-case bounds for Robin Hood linear probing]]></title>
-    <link href="https://www.pvk.ca/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/"/>
-    <updated>2019-09-29T15:44:08-04:00</updated>
-    <id>https://www.pvk.ca/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing</id>
-    <content type="html"><![CDATA[<p>I like to think of Robin Hood hash tables with linear probing as
-arrays sorted on uniformly distributed keys, with gaps.  That makes it
-clearer that we can use these tables to implement algorithms based on
-merging sorted streams in bulk, as well as ones that rely on fast
-point lookups.  A key question with randomised data structures is how
-badly we can expect them to perform.</p>
-
-<h2 id="a-bound-on-the-length-of-contiguous-runs-of-entries">A bound on the length of contiguous runs of entries</h2>
-
-<p>There’s a lot of work on the <em>expected</em> time complexity of operations
-on linear probing Robin Hood hash tables.  <a href="https://dblp.uni-trier.de/pers/hd/v/Viola:Alfredo">Alfredo Viola</a>,
-along with a
-<a href="http://algo.inria.fr/flajolet/Publications/FlPoVi98.pdf">few collaborators</a>,
-has <a href="https://cs.uwaterloo.ca/research/tr/1995/50/CS95-50.pdf">long</a>
-been exploring the <a href="http://www2.math.uu.se/~svante/papers/sj297-aofa.pdf">distribution of displacements</a> (i.e., search times)
-for random elements.  The <a href="https://www3.cs.stonybrook.edu/~bender/newpub/BenderHu07-TODS.pdf">packed memory array</a> angle has also been around
-for <a href="https://www.cs.cmu.edu/~jcreed/p251-willard.pdf">a while</a>.<sup id="fnref:waterloo"><a href="#fn:waterloo" class="footnote">1</a></sup></p>
-
-<p>I’m a bit wary of the “random element” aspect of the linear probing
-bounds: while I’m comfortable with an expectation over the hash
-function (i.e., over the uniformly distributed hash values), a program
-could repeatedly ask for the same key, and consistently experience
-worse-than-expected performance.  I’m more interested in bounding the
-worst-case displacement (the distance between the ideal location for
-an element, and where it is actually located) across all values in a
-randomly generated<sup id="fnref:memory-less"><a href="#fn:memory-less" class="footnote">2</a></sup> Robin Hood table, with high enough
-probability.  That probability doesn’t have to be extremely high:
-\(p = 0.9\) or even \(p = 0.5\) is good enough, as long as we can
-either rehash with an independent hash function, or the probability of
-failure drops exponentially enough as the displacement leeway grows.</p>
-
-<p>The people who study hashing with buckets, or hashing as load
-balancing, seem more interested in these probable worst-case bounds:
-as soon as one bucket overflows, it’s game over for that hash table!
-In that context, we wish to determine how much headroom we must
-reserve in each bucket, on top of the expected occupancy, in order to
-make sure failures are rare enough.  That’s a <a href="https://en.wikipedia.org/wiki/Balls_into_bins_problem">balls into bins problem</a>, where
-the \(m\) balls are entries in the hash table, and the \(n\) bins
-its hash buckets.</p>
-
-<p><a href="http://www.dblab.ntua.gr/~gtsat/collection/scheduling/Balls%20into%20Bins%20A%20Simple%20and%20Tight%20Anal.pdf">Raab and Steger’s Simple and Tight Analysis</a>
-of the “balls into bins” problem shows that the case where the average occupancy grows
-with \((\log m)\sp{k}\) and \(k &gt; 1\) has potential, when it comes
-to worst-case bounds that shrink quickly enough: we only need headroom
-that grows with \(\sqrt{\log\sp{k+1} m} = \log\sp{(k+1)/2} m\), 
-slightly more than the square root of the average occupancy.</p>
-
-<p>The only issue is that the balls-into-bins analysis is asymptotic,
-and, more importantly, doesn’t apply at all to linear probing!</p>
-
-<p>One could propose a form of packed memory array, where the sorted set
-is subdivided in chunks such that the expected load per chunk is in
-\(\Theta(\log\sp{k} m)\), and the size of each chunk
-multiplicatively larger (more than \(\log\sp{(k+1)/2}m\))…</p>
-
-<p>Can we instead derive similar bounds with regular linear probing?  It
-turns out that Raab and Steger’s bounds are indeed simple: they
-find the probability of overflow for one bucket, and derive a
-<a href="https://en.wikipedia.org/wiki/Boole%27s_inequality">union bound</a> for the probability of overflow for any bucket by
-multiplying the single-bucket failure probability by the number of
-buckets.  Moreover, the single-bucket case itself is a <a href="https://en.wikipedia.org/wiki/Binomial_distribution">Binomial</a> confidence interval.</p>
-
-<p>We can use the same approach for linear probing; I don’t expect a tight
-result, but it might be useful.</p>
-
-<p>Let’s say we want to determine how unlikely it is to observe a clump
-of \(\log\sp{k}n\) entries, where \(n\) is the capacity of the hash
-table.  We can bound the probability of observing such a clump
-starting at index 0 in the backing array, and multiply by the size of
-the array for our union bound (the clump could start anywhere in the array).</p>
-
-<p>Given density \(d = m / n\), where \(m\) is the number of
-entries and \(n\) is the size of the array that backs the hash
-table, the probability that any given element falls in a range of size
-\(\log\sp{k}n\) is \(p = d/n \log\sp{k}n\).  The number of entries
-in such a range follows a Binomial distribution \(B(dn, p)\), with
-expected value \(d \log\sp{k}n\).  We want to determine the maximum
-density \(d\) such that 
-\(\mathrm{Pr}[B(dn, p) &gt; \log\sp{k}n] &lt; \frac{\alpha}{dn}\), where
-\(\alpha\) is our overall failure rate. If rehashing is acceptable,
-we can let \(\alpha = 0.5\), and expect to find a
-suitably uniform hash function after half a rehash on average.</p>
-
-<p>We know we want \(k &gt; 1\) for the tail to shrink rapidly enough as
-\(n\) grows, but even \(\log\sp{2}n\) doesn’t shrink very rapidly.
-After some trial and error, I settled on a chunk size
-\(s(n) = 5 \log\sb{2}\sp{3/2} n\).  That’s not great for small or medium sized
-tables (e.g., \(s(1024) = 158.1\)), but grows slowly, and reflects
-extreme worst cases; in practice, we can expect the worst case for
-any table to be more reasonable.</p>
-
-<p>Assuming we have a quantile function for the Binomial distribution, we
-can find the occupancy of our chunk, at \(q = 1 - \frac{\alpha}{n}\). 
-The occupancy is a monotonic function of the density, so we can use,
-e.g., bisection search to find the maximum density such that the
-probability that we saturate our chunk is \(\frac{\alpha}{n}\),
-and thus the probability that any continuous run of entries has size
-at least \(s(n) =  5 \log\sb{2}\sp{3/2} n\) is less than \(\alpha\).</p>
-
-<p>For \(\alpha = 0.5\), the plot of densities looks like the following.</p>
-
-<p><img class="center" src="/images/2019-09-29-a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/alpha-half.png" /></p>
-
-<!-- sizer <- function(x) { 5 * (log(x, 2)^1.5) };
-     max_overflow <- function(sizer, density, n, p) { n <- ceiling(n); run <- floor(sizer(n)); num_starts = max(1, 1 + n - run); qbinom(1 - (p / num_starts), n, density * run / n) / run }
-     density <- sapply(n, function (n) uniroot(function (density) max_overflow(sizer, density, n, 0.5) - 1, c(0, 1))$root)
-     ggplot(data=data.frame(n, density), aes(x = n, y = density)) + geom_line()
-     -->
-
-<p>This curve roughly matches the shape of some
-<a href="https://www.pvk.ca/Blog/more_numerical_experiments_in_hashing.html">my older purely numerical experiments with Robin Hood hashing</a>.
-When the table is small (less than \(\approx 1000\)), \(\log n\) is
-a large fraction of \(n\), so the probability of finding a run of
-size \(s(n) = 5 \log\sb{2}\sp{3/2} n\) is low.  When the table is
-much larger, the asymptotic result kicks in, and the probabiliy slowly
-shrinks.  However, even around the worst case \(n \approx 4500\),
-we can exceed \(77\%\) density and only observe a run of length
-\(s(n)\) half the time.</p>
-
-<p>If we really don’t want to rehash, we can let \(\alpha = 10\sp{-10}\),
-which compresses the curve and shifts it down: the minimum value is
-now slightly above \(50\%\) density, and we can clearly see the
-growth in permissible density as the size of the table grows.</p>
-
-<!-- density <- sapply(n, function (n) uniroot(function (density) max_overflow(sizer, density, n, 1e-10) - 1, c(0, 1))$root)
-     ggplot(data=data.frame(n, density), aes(x = n, y = density)) + geom_line()
-     -->
-
-<p><img class="center" src="/images/2019-09-29-a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/alpha-marginal.png" /></p>
-
-<p>In practice, we can dynamically compute the worst-case displacement,
-which is always less than the longest run (i.e., less than \(s(n) = 5
-\log\sb{2}\sp{3/2} n\)).  However, having non-asymptotic bounds lets
-us write size-specialised code and know that its assumptions are
-likely to be satisfied in real life.</p>
-
-<h2 id="bounding-buffer-sizes-for-operations-on-sorted-hashed-streams">Bounding buffer sizes for operations on sorted hashed streams</h2>
-
-<p>I mentioned at the beginning of this post that we can also manipulate
-Robin Hood hash tables as sorted sets, where the sort keys are
-uniformly distributed hash values.</p>
-
-<p>Let’s say we wished to merge the immutable source table <code>S</code> into the
-larger destination table <code>D</code> in-place, without copying all of <code>D</code>.
-For example, from</p>
-
-<pre><code>S = [2, 3, 4]
-D = [1, 6, 7, 9, 10];
-</code></pre>
-
-<p>we want the merged result</p>
-
-<pre><code>D' = [1, 2, 3, 4, 6, 7, 9, 10].
-</code></pre>
-
-<p>The issue here is that, even with gaps, we might have to overwrite
-elements of <code>D</code>, and buffer them in some scratch space until we get to
-their final position.  In this case, all three elements of <code>S</code> must be
-inserted between the first and second elements of <code>D</code>, so we could
-need to buffer <code>D[1:4]</code>.</p>
-
-<p>How large of a merge buffer should we reasonably plan for?</p>
-
-<p>In general, we might have to buffer as many elements as there are in
-the smaller table of <code>S</code> and <code>D</code>.  However, we’re working with hash
-values, so we can expect them to be distributed uniformly.  That
-should give us some grip on the problem.</p>
-
-<p>We can do even better and only assume that both sorted sets were
-sampled from the same underlying distribution.  The key idea
-is that the rank of an element in <code>S</code> is equal to the
-value of <code>S</code>’s
-<a href="https://en.wikipedia.org/wiki/Empirical_distribution_function">empirical distribution function</a>
-for that element, multiplied by the size of <code>S</code> (similarly for
-<code>D</code>).</p>
-
-<p>The amount of buffering we might need is simply a measure of the
-worst-case difference between the two empirical DFs: the more <code>S</code> get
-ahead of <code>D</code>, the more we need to buffer values of <code>D</code> before
-overwriting them (if we’re very unlucky, we might need a buffer the
-same size as <code>S</code>).  That’s the
-two-sample <a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test#Kolmogorov%E2%80%93Smirnov_statistic">Kolmogorov-Smirnov statistic</a>, and we have 
-<a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test#Two-sample_Kolmogorov%E2%80%93Smirnov_test">simple bounds for that distance</a>.</p>
-
-<p>With probability \(1 - \alpha\), we’ll consume from <code>S</code> and <code>D</code>
-at the same rate \(\pm \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}}\).
-We can let \(\alpha = 10\sp{-10}\) and pre-allocate a buffer of size</p>
-
-<table>
-  <tbody>
-    <tr>
-      <td>\[</td>
-      <td>S</td>
-      <td>\sqrt{-\frac{(</td>
-      <td>S</td>
-      <td>+</td>
-      <td>D</td>
-      <td>) \ln \alpha}{2</td>
-      <td>S</td>
-      <td> </td>
-      <td>D</td>
-      <td>}} &lt; \sqrt{\frac{23.03</td>
-      <td>S</td>
-      <td>(</td>
-      <td>S</td>
-      <td>+</td>
-      <td>D</td>
-      <td>)}{2</td>
-      <td>D</td>
-      <td>}}.\]</td>
-    </tr>
-  </tbody>
-</table>
-
-<p>In the worst case, \(|S| = |D|\), and we can preallocate a buffer of
-size \(\sqrt{23.03 |D|} &lt; 4.8 \sqrt{|D|}\) and only need to grow
-the buffer every ten billion (\(\alpha\sp{-1}\)) merge.</p>
-
-<p>The same bound applies in a stream processing setting; I assume this
-is closer to what <a href="https://twitter.com/frankmcsherry">Frank</a> had in
-mind when he brought up this question.</p>
-
-<p>Let’s assume a “push” dataflow model, where we still work on sorted
-sets of uniformly distributed hash values (and the data tuples
-associated with them), but now in streams that generate values every
-tick.  The buffer size problem now sounds as follows.  We wish to
-implement a sorted merge operator for two input streams that generate
-one value every tick, and we can’t tell our sources to cease producing
-values; how much buffer space might we need in order to merge them
-correctly?</p>
-
-<p>Again, we can go back to the Kolmogorov-Smirnov statistic.  In this
-case however, we could buffer each stream independently, so we’re
-looking for critical values for the one-sided one-sample
-Kolmogorov-Smirnov test (how much one stream might get ahead of the
-hypothetical exactly uniform stream).  We have recent (<a href="https://projecteuclid.org/euclid.aop/1176990746">1990</a>)
-<a href="https://en.wikipedia.org/wiki/Dvoretzky%E2%80%93Kiefer%E2%80%93Wolfowitz_inequality">simple and tight bounds</a>
-for this case as well.</p>
-
-<p>The critical values for the one-sided case are stronger than the
-two-sided two-sample critical values we used earlier: given an
-overflow probability of \(1 - \alpha\), we need to buffer at most
-\(\sqrt{-\frac{n \ln \alpha}{2}},\) elements.  For 
-\(\alpha = 10\sp{-20}\) that’s less than \(4.8 \sqrt{n}\).<sup id="fnref:three-centuries"><a href="#fn:three-centuries" class="footnote">3</a></sup>
-This square root scaling is pretty good news in practice: shrinking
-\(n\) to \(\sqrt{n}\) tends to correspond to going down a rung or two in
-the storage hierarchy.  For example, \(10\sp{15}\) elements is
-clearly in the range of distributed storage; however, such a humongous
-stream calls for a buffer of fewer than \(1.5 \cdot 10\sp{8}\)
-elements, which, at a couple gigabytes, should fit in RAM on one large
-machine.  Similarly, \(10\sp{10}\) elements might fill the RAM on
-one machine, but the corresponding buffer of less than half a
-million elements could fit in L3 cache, while one million elements
-could fill the L3, and 4800 elements fit in L1 or L2.</p>
-
-<p>What I find neat about this (probabilistic) bound on the buffer size
-is its independence from the size of the other inputs to the merge
-operator.  We can have a shared \(\Theta(\sqrt{n})\)-size buffer in
-front of each stream, and do all our operations without worrying about
-getting stuck (unless we’re extremely unlucky, in which case we can
-grow the buffer a bit and resume or restart the computation).</p>
-
-<p>Probably of more theoretical interest is the fact that these bounds do
-not assume a uniform distribution, only that all the input streams are
-identically and independently sampled from the same underlying
-distribution. That’s the beauty of working in terms of the (inverse)
-distribution functions.</p>
-
-<h2 id="i-dont-think-theres-anything-deeper">I don’t think there’s anything deeper</h2>
-
-<p>That’s it. Two cute tricks that use well-understood statistical
-distributions in hashed data structure and algorithm design.  I doubt
-there’s anything to generalise from either bounding approach.</p>
-
-<p>However, I definitely believe they’re useful in practice. I like knowing
-that I can expect the maximum displacement for a table of \(n\)
-elements with Robin Hood linear probing to be less than \(5
-\log\sb{2}^{3/2} n\), because that lets me select an appropriate
-option for each table, as a function of that table’s maximum
-displacement, while knowing the range of displacements I might have to
-handle.  Having a strong bound on how much I might have to buffer for
-stream join operators feels even more useful: I can pre-allocate a
-single buffer per stream and not think about efficiently growing the
-buffer, or signaling that a consumer is falling behind.  The
-probability that I’ll need a larger buffer is so low that I just need
-to handle it, however inefficiently.  In a replicated system, where
-each node picks an independent hash function, I would even consider
-crashing when the buffer is too small!</p>
-<div class="footnotes">
-  <ol>
-    <li id="fn:waterloo">
-      <p>I swear the Waterloo theme isn’t some <a href="https://en.wikipedia.org/wiki/Canadian_content">CanCon</a> thing. <a href="#fnref:waterloo" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:memory-less">
-      <p>With consistent tie-breaking, the layout of entries in a Robin hood hash table is a function of the set of entries, independently of the sequence of add and remove operations. <a href="#fnref:memory-less" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:three-centuries">
-      <p>Assuming we consume ten streams per nanosecond, we expect to experience underbuffering once every 316 years. <a href="#fnref:three-centuries" class="reversefootnote">&#8617;</a></p>
-    </li>
-  </ol>
-</div>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Fractional set covering with experts]]></title>
-    <link href="https://www.pvk.ca/Blog/2019/04/23/fractional-set-covering-with-experts/"/>
-    <updated>2019-04-23T18:05:09-04:00</updated>
-    <id>https://www.pvk.ca/Blog/2019/04/23/fractional-set-covering-with-experts</id>
-    <content type="html"><![CDATA[<p>Last winter break, I played with one of the annual
-<a href="https://en.wikipedia.org/wiki/Vehicle_routing_problem">capacitated vehicle routing problem</a>
-(CVRP) “Santa Claus” contests.  Real world family stuff
-took precedence,  so, after the
-obvious <a href="http://webhotel4.ruc.dk/~keld/research/LKH-3/">LKH</a>
-with <a href="http://www.math.uwaterloo.ca/tsp/concorde.html">Concorde</a>
-polishing for individual tours, I only had enough time for
-one diversification moonshot.  I decided to treat the
-high level problem of assembling prefabricated routes as
-a <a href="https://en.wikipedia.org/wiki/Set_cover_problem">set covering problem</a>:
-I would solve the linear programming (LP) relaxation for the
-min-cost set cover, and use randomised rounding to feed new starting
-points to LKH.  Add a lot of luck, and that might
-just strike the right balance between solution quality and diversity.</p>
-
-<p>Unsurprisingly, luck failed to show up, but I had ulterior motives:
-I’m much more interested in exploring first order methods for
-relaxations of combinatorial problems than in solving CVRPs.  The
-routes I had accumulated after a couple days turned into a
-<a href="https://archive.org/details/santa-cvrp-set-cover-instance">set covering LP with 1.1M decision variables, 10K constraints, and 20M nonzeros</a>.
-That’s maybe denser than most combinatorial LPs (the aspect ratio
-is definitely atypical), but 0.2% non-zeros is in the right ballpark.</p>
-
-<p>As soon as I had that fractional set cover instance, I tried to solve
-it with a simplex solver.  Like any good Googler, I used <a href="https://developers.google.com/optimization/lp/glop">Glop</a>… and stared at a blank terminal for more than one hour.</p>
-
-<p>Having observed that lack of progress, I implemented the toy I really
-wanted to try out: first order online “learning with experts”
-(specifically, <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a>) applied to
-LP <em>optimisation</em>.  I let this <a href="https://gist.github.com/pkhuong/c508849180c6cf612f7335933a88ffa6">not-particularly-optimised serial CL code</a>
-run on my 1.6 GHz laptop for 21 hours, at which point the first
-order method had found a 4.5% infeasible solution (i.e., all the
-constraints were satisfied with \(\ldots \geq 0.955\) instead of
-\(\ldots \geq 1\)).  I left Glop running long after the contest was
-over, and finally stopped it with no solution after more than 40 <em>days</em>
-on my 2.9 GHz E5.</p>
-
-<p>Given the shape of the constraint matrix, I would have loved to try an
-interior point method, but all my licenses had expired, and I didn’t
-want to risk OOMing my workstation.  <a href="https://twitter.com/e_d_andersen">Erling Andersen</a>
-was later kind enough to test Mosek’s interior point solver on it.
-The runtime was much more reasonable: 
-<a href="https://twitter.com/e_d_andersen/status/1120579664806842368">10 minutes on 1 core, and 4 on 12 cores</a>, with the sublinear speed-up mostly caused by the serial
-crossover to a simplex basis.</p>
-
-<p>At 21 hours for a naïve implementation, the “learning with experts”
-first order method isn’t practical yet, but also not obviously
-uninteresting, so I’ll write it up here.</p>
-
-<p>Using online learning algorithms for the “experts problem” (e.g.,
-<a href="https://cseweb.ucsd.edu/~yfreund/papers/adaboost.pdf">Freund and Schapire’s Hedge algorithm</a>)
-to solve linear programming <em>feasibility</em> is now a classic result;
-<a href="https://jeremykun.com/2017/02/27/the-reasonable-effectiveness-of-the-multiplicative-weights-update-algorithm/">Jeremy Kun has a good explanation on his blog</a>.  What’s
-new here is:</p>
-
-<ol>
-  <li>Directly solving the optimisation problem.</li>
-  <li>Confirming that the parameter-free nature of <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a> helps.</li>
-</ol>
-
-<p>The first item is particularly important to me because it’s a simple
-modification to the LP feasibility meta-algorithm, and might make the
-difference between a tool that’s only suitable for theoretical
-analysis and a practical approach.</p>
-
-<p>I’ll start by reviewing the experts problem, and how LP feasibility is
-usually reduced to the former problem.  After that, I’ll
-cast the reduction as a <a href="https://smartech.gatech.edu/bitstream/handle/1853/24230/karwan_mark_h_197612_phd_154133.pdf">surrogate relaxation</a>
-method, rather than a <a href="https://en.wikipedia.org/wiki/Lagrangian_relaxation">Lagrangian relaxation</a>;
-optimisation should flow naturally from that
-point of view.  Finally, I’ll guess why I had more success
-with <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a> this time than with 
-<a href="https://www.satyenkale.com/papers/mw-survey.pdf">Multiplicative Weight Update</a>
-eight years ago.<sup id="fnref:wall"><a href="#fn:wall" class="footnote">1</a></sup></p>
-
-<h2 id="the-experts-problem-and-lp-feasibility">The experts problem and LP feasibility</h2>
-
-<p>I first heard about the experts problem while researching
-dynamic sorted set data structures:
-<a href="https://dspace.mit.edu/handle/1721.1/10639">Igal Galperin’s PhD dissertation</a>
-describes <a href="http://user.it.uu.se/~arnea/abs/partb.html">scapegoat trees</a>, but is really about online learning with
-experts.
-<a href="https://www.satyenkale.com/papers/mw-survey.pdf">Arora, Hazan, and Kale’s 2012 survey of multiplicative weight update methods</a>.
-is probably a better introduction to the topic ;)</p>
-
-<p>The experts problem comes in many variations.  The simplest form
-sounds like the following.  Assume you’re playing a binary prediction
-game over a predetermined number of turns, and have access to a fixed
-finite set of experts at each turn.  At the beginning of every turn,
-each expert offers their binary prediction (e.g., yes it will rain
-today, or it will not rain today).  You then have to make a prediction
-yourself, with no additional input.  The actual result (e.g., it
-didn’t rain today) is revealed at the end of the turn.  In general,
-you can’t expect to be right more often than the best expert at the
-end of the game.  Is there a strategy that bounds the “regret,” how
-many more wrong prediction you’ll make compared to the expert(s) with
-the highest number of correct predictions, and in what circumstances?</p>
-
-<p>Amazingly enough, even with an omniscient adversary that has access to
-your strategy and determines both the experts’ predictions and the
-actual result at the end of each turn, a stream of random bits (hidden
-from the adversary) suffice to bound our expected regret in 
-\(\mathcal{O}(\sqrt{T}\,\lg n)\), where \(T\) is the number of 
-turns and \(n\) the number of experts.</p>
-
-<p>I long had trouble with that claim: it just seems too good of a magic
-trick to be true.  The key realisation for me was that we’re only
-comparing against invidivual experts.  If each expert is a move in a
-<a href="https://www.encyclopediaofmath.org/index.php/Matrix_game">matrix game</a>,
-that’s the same as claiming you’ll never do much worse than any pure
-strategy.  One example of a pure strategy is always playing rock in 
-Rock-Paper-Scissors; pure strategies are really bad!  The trick is
-actually in making that regret bound useful.</p>
-
-<p>We need a more continuous version of the experts problem for LP
-feasibility.  We’re still playing a turn-based game, but, this time,
-instead of outputting a prediction, we get to “play” a mixture of the
-experts (with non-negative weights that sum to 1).  At the beginning
-of each turn, we describe what weight we’d like to give to each
-experts (e.g., 60% rock, 40% paper, 0% scissors).  The cost
-(equivalently, payoff) for each expert is then revealed (e.g.,
-\(\mathrm{rock} = -0.5\), \(\mathrm{paper} = 0.5\), 
-\(\mathrm{scissors} = 0\)), and we incur the weighted average
-from our play (e.g., \(60\% \cdot -0.5 + 40\% \cdot 0.5 = -0.1\))
-before playing the next round.<sup id="fnref:equivalent"><a href="#fn:equivalent" class="footnote">2</a></sup>  The goal is to minimise
-our worst-case regret, the additive difference between the total cost
-incurred by our mixtures of experts and that of the a posteriori best single
-expert.  In this case as well, online learning
-algorithms guarantee regret in \(\mathcal{O}(\sqrt{T} \, \lg n)\)</p>
-
-<p>This line of research is interesting because simple algorithms achieve
-that bound, with explicit constant factors on the order of 1,<sup id="fnref:which-log"><a href="#fn:which-log" class="footnote">3</a></sup>
-and <a href="http://drops.dagstuhl.de/opus/volltexte/2017/7499/pdf/LIPIcs-ICALP-2017-48.pdf">those bounds are known to be non-asymptotically tight for a large class of algorithms</a>.
-Like dense linear algebra or fast Fourier transforms, where algorithms
-are often compared by counting individual floating point operations,
-online learning has matured into such tight bounds that worst-case
-regret is routinely presented without Landau notation.  Advances improve
-constant factors in the worst case, or adapt to easier inputs in order
-to achieve “better than worst case” performance.</p>
-
-<p>The <a href="https://jeremykun.com/2017/02/27/the-reasonable-effectiveness-of-the-multiplicative-weights-update-algorithm/">reduction below</a>
-lets us take any learning algorithm with an additive regret bound,
-and convert it to an algorithm with a corresponding worst-case
-iteration complexity bound for \(\varepsilon\)-approximate LP feasibility.
-An algorithm that promises low worst-case regret in \(\mathcal{O}(\sqrt{T})\)
-gives us an algorithm that needs at most \(\mathcal{O}(1/\varepsilon\sp{2})\)
-iterations to return a solution that almost satisfies every constraint in the
-linear program, where each constraint is violated by \(\varepsilon\) or less (e.g.,
-\(x \leq 1\) is actually \(x \leq 1 + \varepsilon\)).</p>
-
-<p>We first split the linear program in two components, a simple domain
-(e.g., the non-negative orthant or the \([0, 1]\sp{d}\) box) and the
-actual linear constraints.  We then map each of the latter constraints
-to an expert, and use an arbitrary algorithm that solves our
-continuous version of the experts problem as a black box.  At each
-turn, the black box will output a set of non-negative weights for the
-constraints (experts).  We will average the constraints using these
-weights, and attempt to find a solution in the intersection of our
-simple domain and the weighted average of the linear constraints.  We
-can do so in the “experts problem” setting by consider each linear
-constraint’s violation as a <em>payoff</em>, or, equivalently, satisfaction
-as a loss.</p>
-
-<p>Let’s use Stigler’s <a href="https://neos-guide.org/content/diet-problem">Diet Problem with three foods and two constraints</a>
-as a small example, and further simplify it by disregarding the
-minimum value for calories, and the maximum value for vitamin A.  Our
-simple domain here is at least the non-negative orthant: we can’t
-ingest negative food.  We’ll make things more interesting by also
-making sure we don’t eat more than 10 servings of any food per day.</p>
-
-<p>The first constraint says we mustn’t get too many calories</p>
-
-<p>\[72 x\sb{\mathrm{corn}} + 121 x\sb{\mathrm{milk}} + 65 x\sb{\mathrm{bread}} \leq 2250,\]</p>
-
-<p>and the second constraint (tweaked to improve this example) ensures
-we ge enough vitamin A</p>
-
-<p>\[107 x\sb{\mathrm{corn}} + 400 x\sb{\mathrm{milk}} \geq 5000,\]</p>
-
-<p>or, equivalently,</p>
-
-<p>\[-107 x\sb{\mathrm{corn}} - 400 x\sb{\mathrm{milk}} \leq -5000,\]</p>
-
-<p>Given weights \([3/4, 1/4]\), the weighted average of the two constraints is</p>
-
-<p>\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]</p>
-
-<p>where the coefficients for each variable and for the right-hand side
-were averaged independently.</p>
-
-<p>The subproblem asks us to find a feasible point in the intersection
-of these two constraints:
-\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
-
-<p>Classically, we claim that this is just Lagrangian relaxation, and
-find a solution to</p>
-
-<p>\[\min 27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}}\]
-subject to
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
-
-<p>In the next section, I’ll explain why I think this analogy is wrong
-and worse than useless.  For now, we can easily find the minimum one
-variable at a time, and find the solution 
-\(x\sb{\mathrm{corn}} = 0\), \(x\sb{\mathrm{milk}} = 10\),
-\(x\sb{\mathrm{bread}} = 0\), with objective value \(-92.5\) (which
-is \(530\) less than \(437.5\)).</p>
-
-<p>In general, three things can happen at this point.  We could discover
-that the subproblem is infeasible.  In that case, the original
-non-relaxed linear program itself is infeasible: any solution to the
-original LP satisfies all of its constraints, and thus would also
-satisfy any weighted average of the same constraints.  We could also
-be extremely lucky and find that our optimal solution to the relaxation is
-(\(\varepsilon\)-)feasible for the original linear program; we can stop
-with a solution.  More commonly, we have a solution that’s feasible for the
-relaxation, but not for the original linear program.</p>
-
-<p>Since that solution satisfies the weighted average constraint and
-payoffs track constraint violation, the black box’s payoff for this
-turn (and for every other turn) is non-positive.  In the current case,
-the first constraint (on calories) is satisfied by \(1040\), while
-the second (on vitamin A) is violated by \(1000\).  On weighted
-average, the constraints are satisfied by \(\frac{1}{4}(3 \cdot
-1040 - 1000) = 530.\) Equivalently, they’re violated by \(-530\) on
-average.</p>
-
-<p>We’ll add that solution to an accumulator vector that will come in
-handy later.</p>
-
-<p>The next step is the key to the reduction: we’ll derive payoffs
-(negative costs) for the black box from the solution to the last
-relaxation.  Each constraint (expert) has a payoff equal to its level
-of violation in the relaxation’s solution.  If a constraint is
-strictly satisfied, the payoff is negative; for example, the constraint
-on calories is satisfied by \(1040\), so its payoff this turn is
-\(-1040\).  The constraint on vitamin A is violated by \(1000\),
-so its payoff this turn is \(1000\).  Next turn, we expect the
-black box to decrease the weight of the constraint on calories,
-and to increase the weight of the one on vitamin A.</p>
-
-<p>After \(T\) turns, the total payoff for each constraint is equal to
-the sum of violations by all solutions in the accumulator.  Once we
-divide both sides by \(T\), we find that the divided payoff for each
-constraint is equal to its violation by the average of the solutions
-in the accumulator.  For example, if we have two solutions, one that
-violates the calories constraint by \(500\) and another that
-satisfies it by \(1000\) (violates it by \(-1000\)), the total
-payoff for the calories constraint is \(-500\), and the average
-of the two solutions does strictly satisfy the linear constraint by
-\(\frac{500}{2} = 250\)!</p>
-
-<p>We also know that we only generated feasible solutions to the relaxed
-subproblem (otherwise, we’d have stopped and marked the original LP as
-infeasible), so the black box’s total payoff is \(0\) or negative.</p>
-
-<p>Finally, we assumed that the black box algorithm guarantees an additive
-regret in \(\mathcal{O}(\sqrt{T}\, \lg n)\), so the black box’s payoff
-of (at most) \(0\) means that any constraint’s payoff is at most
-\(\mathcal{O}(\sqrt{T}\, \lg n)\).  After dividing by \(T\), we obtain
-a bound on the violation by the arithmetic mean of all solutions in
-the accumulator: for all constraint, that violation is in 
-\(\mathcal{O}\left(\frac{\lg n}{\sqrt{T}}\right)\).  In other words, the number
-of iteration \(T\) must scale with
-\(\mathcal{O}\left(\frac{\lg n}{\varepsilon\sp{2}}\right)\), 
-which isn’t bad when \(n\) is in the millions but
-\(\varepsilon \approx 0.01\).</p>
-
-<p>Theoreticians find this reduction interesting because there are
-concrete implementations of the black box, e.g., the
-<a href="https://www.satyenkale.com/papers/mw-survey.pdf">multiplicative weight update (MWU) method</a>
-with non-asymptotic bounds.  For many problems, this makes it
-possible to derive the exact number of iterations necessary
-to find an \(\varepsilon-\)feasible fractional solution, given
-\(\varepsilon\) and the instance’s size (but not the instance
-itself).</p>
-
-<p>That’s why algorithms like MWU are theoretically useful tools for
-fractional approximations, when we already have subgradient methods
-that only need \(\mathcal{O}\left(\frac{1}{\varepsilon}\right)\) iterations:
-state-of-the-art algorithms for learning with experts explicit
-non-asymptotic regret bounds that yield, for many problems, iteration
-bounds that only depend on the instance’s size, but not its data.
-While the iteration count when solving LP feasibility with MWU scales
-with \(\frac{1}{\varepsilon\sp{2}}\), it is merely proportional to
-\(\lg n\), the log of the the number of linear constraints.  That’s
-attractive, compared to subgradient methods for which the iteration
-count scales with \(\frac{1}{\varepsilon}\), but also scales
-linearly with respect to instance-dependent values like the distance
-between the initial dual solution and the optimum, or the Lipschitz
-constant of the Lagrangian dual function; these values are hard to
-bound, and are often proportional to the square root of the number
-of constraints.  Given the choice between
-\(\mathcal{O}\left(\frac{\lg n}{\varepsilon\sp{2}}\right)\) 
-iterations with explicit constants, and a looser
-\(\mathcal{O}\left(\frac{\sqrt{n}}{\varepsilon}\right)\), it’s 
-obvious why MWU and online learning are powerful additions to 
-the theory toolbox.</p>
-
-<p>Theoreticians are otherwise not concerned with efficiency, so the
-usual answer to someone asking about optimisation is to tell them they
-can always reduce linear optimisation to feasibility with a binary
-search on the objective value.  I once made the mistake of
-implementing that binary search last strategy.  Unsurprisingly, it
-wasn’t useful.  I also tried another theoretical reduction, where I
-looked for a pair of primal and dual -feasible solutions that happened
-to have the same objective value.  That also failed, in a more
-interesting manner: since the two solution had to have almost the same
-value, the universe spited me by sending back solutions that were
-primal and dual infeasible in the worst possible way.  In the end, the
-second reduction generated fractional solutions that were neither
-feasible nor superoptimal, which really isn’t helpful.</p>
-
-<h2 id="direct-linear-optimisation-with-experts">Direct linear optimisation with experts</h2>
-
-<p>The reduction above works for any “simple” domain, as long as it’s
-convex and we can solve the subproblems, i.e., find a point in the
-intersection of the simple domain and a single linear constraint or
-determine that the intersection is empty.</p>
-
-<p>The set of (super)optimal points in some initial simple domain is
-still convex, so we could restrict our search to the search of the
-domain that is superoptimal for the linear program we wish to
-optimise, and directly reduce optimisation to the feasibility problem
-solved in the last section, without binary search.</p>
-
-<p>That sounds silly at first: how can we find solutions that are
-superoptimal when we don’t even know the optimal value?</p>
-
-<p>Remember that the subproblems are always relaxations of the original
-linear program.  We can port the objective function from the original
-LP over to the subproblems, and optimise the relaxations.  Any
-solution that’s optimal for a realxation must have an optimal or
-superoptimal value for the original LP.</p>
-
-<p>Rather than treating the black box online solver as a generator of 
-<a href="https://en.wikipedia.org/wiki/Duality_\(optimization\)#The_strong_Lagrangian_principle:_Lagrange_duality">Lagrangian dual</a>
-vectors, we’re using its weights as solutions to the
-<a href="https://smartech.gatech.edu/bitstream/handle/1853/24230/karwan_mark_h_197612_phd_154133.pdf"><em>surrogate</em> relaxation dual</a>.
-The latter interpretation isn’t just more powerful by handling
-objective functions.  It also makes more sense: the weights generated
-by algorithms for the experts problem are probabilities, i.e., they’re
-non-negative and sum to \(1\).  That’s also what’s expected for surrogate
-dual vectors, but definitely not the case for Lagrangian dual vectors,
-even when restricted to \(\leq\) constraints.</p>
-
-<p>We can do even better!</p>
-
-<p>Unlike Lagrangian dual solvers, which only converge when fed
-(approximate) subgradients and thus make us (nearly) optimal solutions
-to the relaxed subproblems, our reduction to the experts problem only
-needs feasible solutions to the subproblems.  That’s all we need to
-guarantee an \(\varepsilon-\)feasible solution to the initial problem
-in a bounded number of iterations.  We also know exactly how that
-\(\varepsilon-\)feasible solution is generated: it’s the arithmetic
-mean of the solutions for relaxed subproblems.</p>
-
-<p>This lets us decouple finding lower bounds from generating feasible
-solutions that will, on average, \(\varepsilon-\)satisfy the
-original LP.  In practice, the search for an \(\varepsilon-\)feasible
-solution that is also superoptimal will tend to improve the lower
-bound.  However, nothing forces us to evaluate lower bounds
-synchronously, or to only use the experts problem solver to improve
-our bounds.</p>
-
-<p>We can find a new bound from any vector of non-negative constraint
-weights: they always yield a valid surrogate relaxation.  We can solve
-that relaxation, and update our best bound when it’s improved.  The
-Diet subproblem earlier had</p>
-
-<p>\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
-
-<p>Adding the original objective function back yields the linear program</p>
-
-<p>\[\min 0.18 x\sb{\mathrm{corn}} + 0.23 x\sb{\mathrm{milk}} + 0.05 x\sb{\mathrm{bread}}\]
-subject to
-\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10,\]</p>
-
-<p>which has a trivial optimal solution at \([0, 0, 0]\).</p>
-
-<p>When we generate a feasible solution for the same subproblem, we can
-use any valid bound on the objective value to find the most feasible
-solution that is also assuredly (super)optimal.  For example, if some
-oracle has given us a lower bound of \(2\) for the original Diet
-problem, we can solve for</p>
-
-<p>\[\min 27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}}\]
-subject to
-\[0.18 x\sb{\mathrm{corn}} + 0.23 x\sb{\mathrm{milk}} + 0.05 x\sb{\mathrm{bread}}\leq 2\]
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
-
-<p>We can relax the objective value constraint further, since we know
-that the final \(\varepsilon-\)feasible solution is a simple
-arithmetic mean.  Given the same best bound of \(2\), and, e.g., a
-current average of \(3\) solutions with a value of \(1.9\), a new
-solution with an objective value of \(2.3\) (more than our best
-bound, so not necessarily optimal!) would yield a new average solution
-with a value of \(2\), which is still (super)optimal.  This means
-we can solve the more relaxed subproblem</p>
-
-<p>\[\min 27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}}\]
-subject to
-\[0.18 x\sb{\mathrm{corn}} + 0.23 x\sb{\mathrm{milk}} + 0.05 x\sb{\mathrm{bread}}\leq 2.3\]
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
-
-<p>Given a bound on the objective value, we swapped the constraint and
-the objective; the goal is to maximise feasibility, while generating a
-solution that’s “good enough” to guarantee that the average solution
-is still (super)optimal.</p>
-
-<p>For box-constrained linear programs where the box is the convex
-domain, subproblems are bounded linear knapsacks, so we can simply
-stop the greedy algorithm as soon as the objective value constraint is
-satisfied, or when the knapsack constraint becomes active (we found a
-better bound).</p>
-
-<p>This last tweak doesn’t just accelerate convergence to
-\(\varepsilon-\)feasible solutions.  More importantly for me, it
-pretty much guarantees that out \(\varepsilon-\)feasible solution
-matches the best known lower bound, even if that bound was provided by
-an outside oracle.  <a href="http://www.inrialpes.fr/bipop/people/malick/Docs/05-frangioni.pdf">Bundle methods</a>
-and the <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.217.8194&amp;rep=rep1&amp;type=pdf">Volume algorithm</a>
-can also mix solutions to relaxed subproblems in order to generate
-\(\varepsilon-\)feasible solutions, but the result lacks the last
-guarantee: their fractional solutions are even more superoptimal
-than the best bound, and that can make bounding and variable fixing
-difficult.</p>
-
-<h2 id="the-secret-sauce-adahedge">The secret sauce: AdaHedge</h2>
-
-<p>Before last Christmas’s CVRP set covering LP, I had always used the 
-<a href="https://www.satyenkale.com/papers/mw-survey.pdf">multiplicative weight update (MWU) algorithm</a>
-as my black box online learning algorithm:  it wasn’t great, but I
-couldn’t find anything better. The two main downsides for me
-were that I had to know a “width” parameter ahead of time, as well
-as the number of iterations I wanted to run.</p>
-
-<p>The width is essentially the range of the payoffs; in our case, the
-potential level of violation or satisfaction of each constraints by
-any solution to the relaxed subproblems.  The dependence isn’t
-surprising: folklore in Lagrangian relaxation also says that’s a big
-factor there.  The problem is that the most extreme violations and
-satisfactions are initialisation parameters for the MWU algorithm,
-and the iteration count for a given \(\varepsilon\) is quadratic
-in the width (\(\mathrm{max}\sb{violation} \cdot \mathrm{max}\sb{satisfaction}\)).</p>
-
-<p>What’s even worse is that the MWU is explicitly tuned for a specific
-iteration count.  If I estimate that, give my worst-case width estimate,
-one million iterations will be necessary to achieve \(\varepsilon-\)feasibility,
-MWU tuned for 1M iterations will need 1M iterations, even if the actual
-width is narrower.</p>
-
-<p><a href="https://arxiv.org/abs/1301.0534">de Rooij and others published AdaHedge in 2013</a>,
-an algorithm that addresses both these issues by smoothly estimating
-its parameter over time, without using the doubling trick.<sup id="fnref:doubling"><a href="#fn:doubling" class="footnote">4</a></sup>
-AdaHedge’s loss (convergence rate to an \(\varepsilon-\)solution)
-still depends on the relaxation’s width.  However, it depends on the
-maximum width actually observed during the solution process, and not
-on any explicit worst-case bound.  It’s also not explicily tuned for a
-specific iteration count, and simply keeps improving at a rate that
-roughly matches MWU.  If the instance happens to be easy, we will find
-an \(\varepsilon-\)feasible solution more quickly.  In the worst
-case, the iteration count is never much worse than that of an
-optimally tuned MWU.</p>
-
-<p>These <a href="https://gist.github.com/pkhuong/c508849180c6cf612f7335933a88ffa6">400 lines of Common Lisp</a>
-implement AdaHedge and use it to optimise the set covering LP.  AdaHedge acts
-as the online black box solver for the surrogate dual problem, the relaxed
-set covering LP is a linear knapsack, and each subproblem attempts
-to improve the lower bound before maximising feasibility.</p>
-
-<p>When I ran the code, I had no idea how long it would take to find a
-feasible enough solution: covering constraints can never be violated
-by more than \(1\), but some points could be covered by hundreds of
-tours, so the worst case satisfaction width is high. I had to rely on
-the way AdaHedge adapts to the actual hardness of the problem.  In the
-end, \(34492\) iterations sufficed to find a solution that was \(4.5\%\)
-infeasible.<sup id="fnref:wrong-log"><a href="#fn:wrong-log" class="footnote">5</a></sup>  This corresponds to a worst case with a width
-of less than \(2\), which is probably not what happened.  It seems
-more likely that the surrogate dual isn’t actually an omniscient
-adversary, and AdaHedge was able to exploit some of that “easiness.”</p>
-
-<p>The iterations themselves are also reasonable: one sparse matrix /
-dense vector multiplication to convert surrogate dual weights to an
-average constraint, one solve of the relaxed LP, and another sparse
-matrix / dense vector multiplication to compute violations for each
-constraint.  The relaxed LP is a fractional \([0, 1]\) knapsack, so
-the bottleneck is sorting double floats.  Each iteration took 1.8
-seconds on my old laptop; I’m guessing that could easily be 10-20
-times faster with vectorisation and parallelisation.</p>
-
-<p>In another post, I’ll show how using the same surrogate dual optimisation
-algorithm to mimick <a href="https://link.springer.com/article/10.1007/BF02592954">Lagrangian decomposition</a>
-<a href="https://perso.ensta-paristech.fr/~diam/ro/online/Monique.Guignard-top11201.pdf">instead of Lagrangian relaxation</a>
-guarantees an iteration count in \(\mathcal{O}\left(\frac{\lg \#\mathrm{nonzero}}{\varepsilon\sp{2}}\right)\) independently of luck or the specific linear constraints.</p>
-<div class="footnotes">
-  <ol>
-    <li id="fn:wall">
-      <p>Yes, I have been banging my head against that wall for a while. <a href="#fnref:wall" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:equivalent">
-      <p>This is equivalent to minimising expected loss with random bits, but cleans up the reduction. <a href="#fnref:equivalent" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:which-log">
-      <p>When was the last time you had to worry whether that log was natural or base-2? <a href="#fnref:which-log" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:doubling">
-      <p>The doubling trick essentially says to start with an estimate for some parameters (e.g., width), then adjust it to at least double the expected iteration count when the parameter’s actual value exceeds the estimate. The sum telescopes and we only pay a constant multiplicative overhead for the dynamic update. <a href="#fnref:doubling" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:wrong-log">
-      <p>I think I computed the \(\log\) of the number of decision variables instead of the number of constraints, so maybe this could have gone a bit better. <a href="#fnref:wrong-log" class="reversefootnote">&#8617;</a></p>
     </li>
   </ol>
 </div>

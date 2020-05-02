@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2013/04/13/starting-to-hack-on-sbcl/">Starting to hack on SBCL</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2013/06/23/bitsets-match-regular-expressions/">Bitsets match regular expressions, compactly</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-April
+June
   
-13th, 
+23rd, 
 2013
 
 
 
 
         
-         | <a href="/Blog/2013/04/13/starting-to-hack-on-sbcl/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2013/04/13/starting-to-hack-on-sbcl/"
+         | <a href="/Blog/2013/06/23/bitsets-match-regular-expressions/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2013/06/23/bitsets-match-regular-expressions/"
 	      >Comments</a>
         
         
@@ -116,244 +116,370 @@ April
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>SBCL was accepted as a mentoring organisation for Google’s Summer of
-Code 2013 (our list of project suggestions is
-<a href="http://www.sbcl.org/gsoc2013/ideas">here</a>).  This will be our first
-time, so that’s really great news.  I’m also extremely surprised by
-the number of people who’ve expressed interest in working with us.  I
-was going to reply to a bunch of emails individually, but I figure I
-should also centralise some of the stuff here.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>This post describes how graph and automata theory can help compile a
+regular expression like “ab(cd|e)*fg” into the following
+asymptotically (linear-time) and practically (around 8
+cycles/character on my E5-4617) efficient machine code.  The technique
+is easily amenable to SSE or AVX-level vectorisation, and doesn’t rely
+on complicated bit slicing tricks nor on scanning multiple streams in
+parallel.</p>
 
-<p>EDIT: There’s a section with a bunch of general references.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>matcher inner loop </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">;     8F70: L1:   4839D9           CMP RCX, RBX  ; look for end of string
+</span><span class="line">;     8F73:       7D6C             JNL L5
+</span><span class="line">;     8F75:       488BC1           MOV RAX, RCX
+</span><span class="line">;     8F78:       48D1F8           SAR RAX, 1
+</span><span class="line">;     8F7B:       410FB6440001     MOVZX EAX, BYTE PTR [R8+RAX+1] ; read character
+</span><span class="line">;     8F81:       48D1E2           SHL RDX, 1
+</span><span class="line">;     8F84:       488B35F5FEFFFF   MOV RSI, [RIP-267]         ; #(0 0 0 0
+</span><span class="line">                                                              ;   ...)
+</span><span class="line">;     8F8B:       0FB6440601       MOVZX EAX, BYTE PTR [RSI+RAX+1] ; load mask from LUT
+</span><span class="line">;     8F90:       48D1E0           SHL RAX, 1    ; only data-dependent part of
+</span><span class="line">;     8F93:       4821C2           AND RDX, RAX  ;  transition
+</span><span class="line">;     8F96:       F6C258           TEST DL, 88   ; if any of states 2,3,5 are active
+</span><span class="line">;     8F99:       BE00000000       MOV ESI, 0    ;  [fixnums are tagged with a low 0 bit]
+</span><span class="line">;     8F9E:       41BB58000000     MOV R11D, 88  ; all of them are
+</span><span class="line">;     8FA4:       490F45F3         CMOVNE RSI, R11
+</span><span class="line">;     8FA8:       4809F2           OR RDX, RSI   ; now active
+</span><span class="line">;     8FAB:       4885D2           TEST RDX, RDX ; if no state is active
+</span><span class="line">;     8FAE:       751C             JNE L3
+</span><span class="line">;     8FB0:       488BD1           MOV RDX, RCX  ; return... :'( 
+</span><span class="line">;     8FB3:       BF17001020       MOV EDI, 537919511 ; we're working on
+</span><span class="line">;     8FB8: L2:   488D5D10         LEA RBX, [RBP+16]  ; moving such code block
+</span><span class="line">;     8FBC:       B904000000       MOV ECX, 4         ; out of inner loops.
+</span><span class="line">;     8FC1:       BE17001020       MOV ESI, 537919511
+</span><span class="line">;     8FC6:       F9               STC
+</span><span class="line">;     8FC7:       488BE5           MOV RSP, RBP
+</span><span class="line">;     8FCA:       5D               POP RBP
+</span><span class="line">;     8FCB:       C3               RET
+</span><span class="line">;     8FCC: L3:   4883C102         ADD RCX, 2
+</span><span class="line">;     8FD0: L4:   480FBAE208       BT RDX, 8     ; if we're not at the accept state
+</span><span class="line">;     8FD5:       7399             JNB L1        ; loop back</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>EDIT 2: Added a note on genesis when playing with core formats.</p>
+<h2 id="bitap-algorithms">Bitap algorithms</h2>
 
-<h2 id="getting-started">Getting started</h2>
+<p>The
+<a href="http://en.wikipedia.org/wiki/Bitap_algorithm">canonical bitap algorithm</a>
+matches literal strings, e.g. “abad”.  Like other bitap algorithms, it
+exploits the fact that, given a bitset representation of states, it’s
+easy to implement transfer functions of the form “if state \( i \) was
+previously active and we just consumed character \( c \), state \(
+i+1 \) is now active”.  It suffices to shift the bitset
+representation of the set of active states by 1, and to mask out
+transitions that are forbidden by the character that was just
+consumed.</p>
 
-<h3 id="setting-up-the-basic-tools">Setting up the basic tools</h3>
+<p>For example, when matching the literal string “abad”, a state is
+associated with each position in the pattern.  0 is the initial state,
+1 is the state when we’ve matched the first ‘a’, 2 after we’ve also
+matched ‘b’, 3 after the second ‘a’, and 4 after ‘d’, the final
+character, has been matched.  Transposing this information gives us
+the information we really need: ‘a’ allows a transition from 0 to 1
+and from 2 to 3, ‘b’ a transition from 1 to 2, and ‘d’ from 3 to 4.</p>
 
-<p>The first step is probably to install git, and clone our repo
-(<a href="https://github.com/sbcl/sbcl">the github mirror</a> works well, and
-lets you fork to your own github account for easy publication).  Then,
-building from source and installing SBCL (a local installation to
-$HOME works fine) is obviously useful experience, and will be useful
-to explore the source.  Reading INSTALL should be enough to get
-started on Linux or OS X and x86[-64].  Other platforms may need more
-work, and might not be the best choice if you’re not interested in
-improving the port itself (although I’m told FreeBSD and Solaris work
-very well on x86[-64]).  To build SBCL from source, you’ll need an
-SBCL binary (bootstrapping from other CLs should work, but support
-regularly bitrots away), and the usual C development tools
-(e.g. build-essential on debian).  A fancy build (<code>./make.sh --fancy</code>)
-is probably the best choice for development.</p>
+<p>A trivial state machine is probably clearer.</p>
 
-<p>You’ll also want to run the test suite often; better try it out now
-(<code>cd tests; sh run-tests.sh</code>) to make sure you can get it working.
-The test suite will barf if there’s non-ASCII characters in the
-environment.  <a href="https://github.com/robbyrussell/oh-my-zsh">Oh my Zsh</a>’s
-git customisation systematically trips me up, for example (I currently
-kludge it and start a bash from ~ and then run the tests).</p>
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/abad.png" /></p>
 
-<p>Once SBCL HEAD is working and installed, it’s probably best to install
-emacs and SLIME.  <a href="http://www.quicklisp.org/beta/">Quicklisp</a>’s
-quicklisp-slime-helper can take care of installing SLIME.  It is
-possible to work on SBCL without SLIME.  However, SLIME has a lot of
-useful extensions, if only to explore the code base.  If you’re not
-(and don’t wish to become) comfortable with emacs, it’s probably best
-to nevertheless use emacs and SLIME for the REPL, debugger, inspector,
-etc. and write code in your favourite editor.  Later on, it’ll be
-useful to figure out how to make SLIME connect to a freshly-built
-SBCL.</p>
+<p>The initial state is in grey, the accept state is a double circle, and
+transitions are labelled with the character they accept.</p>
 
-<h3 id="exploring-the-source">Exploring the source</h3>
+<p>Finding the substring “abad” in a long string thus reduces to a bunch
+of bitwise operations.  At each step, we OR bit 0 in the set of
+states: we’re always looking for the beginning of a new match.  Then,
+we consume a character.  If it’s ‘a’, the mask is 0b01010; if it’s
+‘b’, mask is 0b00100; if it’s ‘d’, mask is 0b10000; otherwise, its
+mask is 0.  Then, we shift the set of state left by 1 bit, and AND
+with mask.  The effect is that bit 1 is set iff mask has bit 1 set
+(and that only happens if the character is ‘a’), and bit 0 was
+previously set (… which is always the case), bit 2 is set iff mask has
+bit 2 set (i.e. we consumed a ‘b’) and bit 1 was previously set, etc.</p>
 
-<p>I often see newcomers try to read the source like a book, and, once
-they realise there’s a lot of code, try to figure out a good order to
-read the source.  I don’t think that’s the best approach.  SBCL is
-pretty huge, and I doubt anyone ever simultaneously holds the complete
-system in their head.
-<a href="http://www.cs.cmu.edu/~ram/pub/lfp.ps">RAM’s “The Python Compiler for CMU Common Lisp”</a>
-is still useful as an overview, and
-<a href="http://www.sbcl.org/sbcl-internals/">SBCL’s internals manual</a> is a
-good supplement.  Once you get close to bootstrapping logic,
-<a href="http://www.doc.gold.ac.uk/~mas01cr/papers/s32008/sbcl.pdf">Christophe Rhodes’s “SBCL: a Sanely-Bootstrappable Common Lisp”</a>
-helps understand the exclamation marks.  Past that, I believe it’s
-preferable to start out small, learn just enough to get the current
-task done, and accept that some things just work, without asking how
-(for now).</p>
+<p>We declare victory whenever state 4 is reached, after a simple bit
+test.</p>
 
-<p>In that spirit, I’d say M-. (Alt period, Command period on some OS X
-emacsen) is the best way to explore most of SBCL’s source.  SBCL’s
-build process preserves a lot of source location information, and
-M-. queries that information to jump to the definitions for any given
-symbol (M-, will pop back up to the previous location).  For example,
-if you type “(truncate” at the REPL and hit M-. (with the point on or
-just after “truncate”), you’ll find the out of line definition for
-truncate in (mostly) regular Common Lisp, optimisation rules regarding
-truncate, and VOPs, assembly language templates, for truncate called
-with a few sets of argument and return types.  The out of line
-definition isn’t that interesting.  The transforms, however, are.
-(VOPs aren’t useful if one isn’t comfortable with the platform’s
-assembly language, and mostly self-explanatory otherwise.)</p>
+<p>It’s pretty clear that this idea can be extended to wildcards or even
+character classes: multiple characters can have the same bit set to 1
+in their mask.  Large alphabets are also straightforward to handle:
+the mapping from character to mask can be any associative dictionary,
+e.g. a perfect hash table (wildcards and inverted character classes
+then work by modifying the default mask value).  This works not only
+with strings, but with any sequence of objects, as long as we can
+easily map objects to attributes, and attributes to masks.  Some
+thinking shows it’s even possible to handle the repetition operator
+“+”: it’s simply a conditional transition from state \( i \) to
+state \( i \).</p>
 
-<p>The one to “convert integer division to multiplication” is a very good
-example.  One could M-. on <code>deftransform</code>, and go down a very long
-chain of definitions.  Instead, I think it’s only essential to see
-that the form defines a new rule, like a compiler macro, such that
-compile-time values (lvars) that represent its two arguments are bound
-to x and y, and the rule only triggers if its first argument is known
-to be an unsigned word, and its second a constant unsigned word.  If
-that’s satisfied, the transformation still only triggers if the speed
-optimisation quality is higher than both compilation speed and space
-(code size).</p>
+<p>What I find amazing is that the technique extends naturally to
+arbitrary regular expressions (or nondeterministic finite automata).</p>
 
-<p>Then, the constant value for y is extracted and bound to y, and a
-conservative bound on the maximum value that x can take at runtime is
-computed.  If truncate by y should be handled elsewhere, the transform
-gives up.  Otherwise, it returns a form that will be wrapped in
-<code>(lambda (x y) ...)</code> and spliced in the call, instead of truncate.</p>
+<h2 id="shift-and-mask-for-regular-expressions">Shift and mask for regular expressions</h2>
 
-<p>To extend SBCL’s support for division by constants, it’s not necessary
-to understand more of SBCL’s compiler than the above.  There’s no need
-to try and understand <em>how</em> deftransform works, only that it defines a
-rule to simplify calls to truncate.  Similarly for lvar-value and
-lvar-type: the former extracts the value for constant lvars, and the
-latter the static type derived for that lvar (value at a program
-point).  With time, knowledge will slowly accrete.  However it’s
-possible, if not best, to start hacking without understanding the
-whole system.  This approach will lead to a bit of cargo culting, but
-mentors and people on IRC will help make sure it doesn’t do any harm,
-and can explain more stuff if it’s interesting or à propos.</p>
+<p>Simulating an NFA by advancing a set of states in lockstep is an old
+technique.  Russ Cox has written a
+<a href="http://swtch.com/~rsc/regexp/">nice review of classic techniques to parse or recognize regular languages</a>.
+The NFA simulation was first described by
+<a href="http://www.fing.edu.uy/inco/cursos/intropln/material/p419-thompson.pdf">Thomson in 1977</a>,
+but it’s regularly being rediscovered as taking the Brzozowski
+derivative of regular expressions ;)</p>
 
-<h3 id="finding-where-the-compiler-lives">Finding where the compiler lives</h3>
+<p><a href="http://neil.fraser.name/software/diff_match_patch/bitap.ps">Fast Text Searching With Errors</a>
+by Sun Wu and Udi Manber is a treasure trove of clever ideas to
+compile pattern matching, a symbolic task, into simple bitwise
+operations.  For regular expressions, the key insight is that the set
+of states can be represented with a bitset such that the transition
+table for the NFA’s states can be factored into a simple data-dependent
+part followed by \( \epsilon \)-transitions that are the same,
+regardless of the character consumed.  Even better: the NFA’s state
+can be numbered so that each character transition is from state \( i
+\) to \( i+1 \), and such a numbering falls naturally from the
+obvious way to translate regular expression ASTs into NFAs.</p>
 
-<p>Working on the compiler itself is a bit more work.  I think the best
-approach is to go in <code>src/compiler/main.lisp</code> and look for
-<code>compile-component</code>.  <code>ir1-phases</code> loops on a component and performs
-high-level optimisations until fixpoint (or we get tired of waiting),
-while <code>%compile-component</code> handles the conversion to IR2 and then to
-machine code.  The compilation pipeline hasn’t really changed since
-the Python paper was written, and the subphases each have their own
-function (and file).  M-. on stuff that sounds interesting is probably
-the best approach at the IR2 level.</p>
+<p>For the initial example “ab(cd|e)*fg”, the AST looks like a node to
+match ‘a’, succeeded by a node to match ‘b’, then a repetition node
+into either “cd”, “e” or \( \epsilon \), and the repetition node is
+succeeded by “fg” (and, finally, accept).  Again, a drawing is much
+clearer!</p>
 
-<h3 id="runtime-stuff">Runtime stuff</h3>
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/naive-regexp.png" /></p>
 
-<p>The C and assembly runtime lives in <code>src/runtime/</code>.  There’s a lot of
-stuff that’s symlinked or generated during the build, so it’s probably
-best to look at it after a successful build.  Sadly, we don’t track
-source locations there, but {c,e,whatever}tags works; so does grep.</p>
+<p>Circles correspond to character-matching states, the square to a
+repetition node, the diamond to a choice node, and the pointy boxes to
+dummy states.  The final accept state is, again, a double circle.
+\( \epsilon \)-transitions are marked in blue, and regular
+transitions are labelled with the character they consume.</p>
 
-<p>GC stuff is in the obvious suspects (gc-common, gencgc, gc, etc.), but
-may end up affecting core loading/saving (core, coreparse, save).
-Depending on what in the core loading code is affected, code in
-genesis (the initial bootstrap that reads fasl files from the cross
-compiler and builds the initial core file) might also have to be
-modified (mostly in <code>src/compiler/generic/genesis.lisp</code>).  That’s…
-more work.  Like the project suggestions list says, when we change
-things in the runtime, it sometimes ends up affecting a lot of other
-components.</p>
+<p>The nodes are numbered according to a straight depth-first ordering in
+which children are traversed before the successor.  As promised,
+character transitions are all from \( i \) to \( i+1 \), e.g. 0 to
+1, 1 to 2, 6 to 7, … This is a simple consequence of the fact that
+character-matching nodes have no children and a single successor.</p>
 
-<p>GDB tends to be less than useful, because of the many tricks SBCL
-plays on itself.  It’s usually hard to beat pen, paper, and printf.
-At least, rebuilding the C runtime is quick: if the feature
-<code>:sb-after-xc-core</code> is enabled (which already happens for <code>--fancy</code>
-builds), <code>slam.sh</code> should be able to rebuild only the C runtime, and
-then continue the bootstrap with the rest of SBCL from the previous
-build.  That mostly leaves PCL to build, so the whole thing should
-takes less than a minute on a decent machine.</p>
+<p>This numbering is criminally wasteful.  States 3, 6 and 10 serves no
+purpose, except forwarding \( \epsilon \) transitions to other
+states.  The size of the state machine matters because bitwise
+operations become less efficient when values larger than a machine
+word must be manipulated.  Using fewer states means that larger
+regular expressions will be executed more quickly.</p>
 
-<h2 id="some-references">Some references</h2>
+<p>Eliminating them and sliding the numbers back yields the something
+equivalent to the more reasonable 11-state machine shown in Wu and
+Manber (Figure 3 on page 10).  Simply not assigning numbers to states
+that don’t match characters and don’t follow character states suffices
+to obtain such decent numberings.</p>
 
-<p>I was replying to an email when I realised that some general compiler
-references would be useful, in addition to project- and SBCL- specific
-tips.</p>
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/ok-regexp.png" /></p>
 
-<p>Christian Queinnec’s
-<a href="http://pagesperso-systeme.lip6.fr/Christian.Queinnec/WWW/LiSP.html">Lisp in Small Pieces</a>
-gives a good overview of issues regarding compiling Lisp-like
-languages.  Andrew Appel’s
-<a href="http://www.cs.princeton.edu/~appel/modern/ml/">Modern Compiler Implementation in ML</a>
-is more, well, modern (I hear the versions in C and Java have the same
-text, but the code isn’t as nice… and ML is a very nice language for
-writing compilers).  I also remember liking Appel’s
-<a href="http://www.amazon.ca/Compiling-Continuations-Andrew-W-Appel/dp/052103311X">Compiling with Continuations</a>,
-but I don’t know if it’s particularly useful for CL or the projects we
-suggest.</p>
+<p>Some more thinking shows we can do better, and shave three more states.
+State 2 could directly match against character ‘e’, instead of only
+forwarding into state 3; what is currently state 4 could match against
+character ‘c’, instead of only forwarding into state 8, then 2 and
+then 5 (which itself matches against ‘c’); and similarly for state 7
+into state 8.  The result wastes not a single state: each state is
+used to match against a character, except for the accept state.
+Interestingly, the \( \epsilon \) transitions are also more regular:
+they form a complete graph between states 2, 3 and 5.</p>
 
-<p>For more complicated stuff, I believe Stephen Muchnick’s
-<a href="http://www.amazon.com/Advanced-Compiler-Design-Implementation-Muchnick/dp/1558603204">Advanced Compiler Design and Implementation</a>
-would have been really nice to have, instead of slogging through code
-and dozens of papers.  Allen &amp; Kennedy’s
-<a href="http://www.amazon.ca/Optimizing-Compilers-Modern-Architectures-Dependence-based/dp/1558602860">Optimizing Compilers for Modern Architectures: A Dependence-based Approach</a>
-is another really good read, but I’m not sure how useful it would be
-when working on SBCL: we still have a lot of work to do before
-reaching for the really sophisticated stuff (and what sophistication
-there is is fairly non-standard).</p>
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/compressed-regexp.png" /></p>
 
-<p>I believe the Rabbit and Orbit compilers have influenced the design of
-CMUCL and SBCL.  The
-<a href="http://library.readscheme.org/page1.html">Lambda papers</a> provide some
-historical perspective, and the RABBIT and ORBIT theses are linked
-<a href="http://library.readscheme.org/page8.html">here</a>.</p>
+<p>It’s possible to use fewer states than the naïve translation, and it’s
+useful to do so.  How can a program find compact numberings?</p>
 
-<p>What little magic remains in SBCL and CMUCL is the type derivation
-(constraint propagation) pass, and how it’s used to exploit a
-repository of source-to-source transformations (deftransforms).  The
-rest is bog-standard tech from the 70s or 80s.  When trying to
-understand SBCL’s type derivation pass at a very high level, I
-remember finding Henry Baker’s
-<a href="http://home.pipeline.com/~hbaker1/TInference.html">The Nimble Type Inferencer for Common Lisp-84</a>
-very useful, even though it describes a scheme that doesn’t quite work
-for Common Lisp (it’s very hard to propagate information backward
-while respecting the final standard).  Kaplan and Ullman’s
-<a href="http://pdf.aminer.org/000/546/423/a_general_scheme_for_the_automatic_inference_of_variable_types.pdf">A Scheme for the Automatic Inference of Variable Types</a>
-was also helpful.</p>
+<h2 id="compact-bitap-automata">Compact bitap automata</h2>
 
-<h2 id="getting-help">Getting help</h2>
+<p>The natural impulse for functional programmers (particularly
+functional compiler writers ;) is probably to start matching patterns
+to iteratively reduce the graph.  If they’ve had bad experience with
+slow fixpoint computations, there might also be some attempts at
+recognising patterns before even emitting them.</p>
 
-<p>Over the years, I’ve seen a couple of people come in with great
-ambition, and give up after some time, seemingly without having made
-any progress.  I believe a large part of the problem is that they
-tried to understand all of SBCL instead of just learning the bare
-minimum to get hacking, and that their goal was too big.  I already
-wrote that SBCL is probably best approached bit by bit, with some
-guidance from people who’ve been there before, and I hope the projects
-we suggest can all lead to visible progress quickly, after a couple
-days or two weeks of work at most.</p>
+<p>This certainly describes my first couple stabs; they were either
+mediocre or wrong (sometimes both), and certainly not easy to reason
+about.  It took me a while to heed age-old advice about crossing the
+street and compacting state machines.</p>
 
-<p>Still, before investing my time, I like to see the other person also
-give some of theirs to SBCL.  This is why, as I wrote on the mailing
-list last week, I’m much more inclined to help someone who’s already
-built SBCL on their own and has submitted a patch that’s been
-committed or is being improved on the mailing list.  I absolutely do
-not care what the patch is; it can be new code, a bugfix for a highly
-unlikely corner case, better documentation, or spelling and grammar
-corrections in comments.  The bugs
-<a href="https://bugs.launchpad.net/sbcl/+bugs?field.tag=easy">tagged as easy in our bugtracker</a>
-may provide some inspiration.  However trivial a patch might seem,
-it’s still a sign that someone is willing to put the work in to
-concretely make SBCL better, and I like that… it’s also a minimal test
-to make sure the person is able to work with our toolchain.  (This
-isn’t SBCL policy for GSoC.  It’s simply how I feel about these
-things.)</p>
+<p><a href="http://www.brighton-hove.gov.uk/content/parking-and-travel/travel-transport-and-road-safety/child-pedestrian-training"><img class="center" src="http://www.brighton-hove.gov.uk/sites/brighton-hove.gov.uk/files/roadsafetymeerkatposter.jpg" /></a></p>
 
-<p>Again, I’m amazed by the number of people who wish to hack on SBCL
-this summer (as part of Google’s Summer of Code or otherwise).
-Because of that, I think it’s important to note that this is our first
-year, and so we’ll likely not have more than two or three spots.
-However, I always like seeing more contributors, and I hope anyone
-who’d like to contribute will always be guided, GSoC or not.</p>
+<p>Really, what we’re trying to do when compacting the state machine is
+to determine equivalence classes of states: sets of states that can be
+tracked as an atomic unit.  With rewrite rules, we start by assuming
+that all the states are distinct, and gradually merge them.  In other
+words, we’re computing a fixed point starting from the initial
+hypothesis that nothing is equivalent.</p>
 
-<p>Finally, I’ll note that Google’s Summer of Code program was only a
-good excuse to write up our
-<a href="http://www.sbcl.org/gsoc2013/ideas/">list of projects</a>: they’re
-simply suggestions to incite programmers to see what they can do that
-is useful for SBCL and, most importantly, is interesting for them.
-Anyone should feel welcome to work on any of these projects, even if
-they’re not eligible or chosen for GSoC.  They’re also only
-suggestions; if someone has their own idea, we can likely help them
-out just the same.</p>
+<p>Problem is,
+<a href="/Blog/2012/02/19/fixed-points-and-strike-mandates/">we should be doing the opposite</a>!
+If we assume that all the states can be tracked as a single unit, and
+break equivalence classes up in as we’re proven wrong, we’ll get
+maximal equivalence classes (and thus as few classes as possible).</p>
+
+<p>To achieve this, I start with the naïvely numbered state machine.
+I’ll refer to the start state and character states as “interesting
+sources”, and to the accept state and character states as “interesting
+destinations”.  Ideally, we’d be able to eliminate everything but
+interesting destinations: the start state can be preprocessed away by
+instead working with all the interesting destinations transitively
+reachable from the start state via \( \epsilon \) transitions
+(including itself if applicable).</p>
+
+<p>The idea is that two states are equivalent iff they are always active
+after the same set of interesting sources.  For example, after the
+start state 0, only state 1 is active (assuming that the character
+matches).  After state 1, however, all of 2, 3, 4, 6, 7, 10 and 11 are
+active.  We have the same set after states 4 and 8.  Finally, only one
+state is alive after each of 11 and 12.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/naive-regexp.png" /></p>
+
+<p>Intersecting the equivalence relations thus defined give a few trivial
+equivalence classes (0, 1, 5, 8, 9, 12, 13), and one huge equivalence
+class comprised of {2,3,4,6,7,10,11} made of all the states that are
+active exactly after 1, 5 and 9.  For simplicity’s sake, I’ll refer to
+that equivalence class as K.  After contraction, we find this smaller
+state graph.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon-regexp.png" /></p>
+
+<p>We can renumber this reasonably to obey the restriction on character
+edges: K is split into three nodes (one for each outgoing
+character-consuming edge) numbered 2, 4 and 7.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon2-regexp.png" /></p>
+
+<p>We could do even better if 5 and 9 (3 and 6 above) in the earlier
+contracted graph were also in equivalence class K: they only exist to
+forward back into K!  I suggest to achieve that with a simple
+post-processing pass.</p>
+
+<p>Equivalence classes are found by find determining after which
+interesting node each state is live.  States that are live after
+exactly the same sets of interesting nodes define an equivalence
+class.  I’ll denote this map from state to transitive interesting
+predecessors \( pred(state) \).</p>
+
+<p>We can coarsen the relationship a bit, to obtain \(
+pred\sp{\prime}(state) \).  For interesting destinations, \(
+pred\sp{\prime} = pred \).  For other nodes,
+\(pred\sp{\prime}(state) = \cap\sb{s\in reachable(state)}pred(s)\), where
+\(reachable(state)\) is the set of interesting destinations reachable via
+\( \epsilon \) transitions from \(state\).  This widening makes
+sense because \(state\) isn’t interesting (we never want to know
+whether it is active, only whether its reachable set is), so it
+doesn’t matter if \(state\) is active when it shouldn’t, as long as
+its destinations would all be active anyway.</p>
+
+<p>This is how we get the final set of equivalence classes.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon3-regexp.png" /></p>
+
+<p>We’re left with a directed multigraph, and we’d like to label nodes
+such that each outgoing edge goes from its own label \( i \) to \(
+i+1 \).  We wish to do so while using the fewest number of labels.
+I’m pretty sure we can reduce something NP-Hard like the minimum path
+cover problem to this problem, but we can still attempt a simple
+heuristic.</p>
+
+<p>If there were an Eulerian directed path in the multigraph, that path
+would give a minimal set of labels: simply label the origin of each
+arc with its rank in the path.  An easy way to generate an Eulerian
+circuit, if there is one, is to simply keep following any unvisited
+outgoing arc.  If we’re stuck in a dead end, restart from any vertex
+that has been visited and still has unvisited outgoing arcs.</p>
+
+<p>There’s a fair amount of underspecification there.  Whenever many
+equivalence classes could be chosen, I choose the one that corresponds
+to the lexicographically minimal (sorted) set of regexp states (with
+respect to their depth-first numbering).  This has the effect of
+mostly following the depth-first traversal, which isn’t <em>that</em> bad.
+There’s also no guarantee that there exists an Eulerian path.  If
+we’re completely stuck, I start another Eulerian path, again starting
+from the lexicographically minimal equivalence class with an unvisited
+outgoing edge.</p>
+
+<p>Finally, once the equivalence states are labelled, both character and
+\( \epsilon \) transitions are re-expressed in terms of these
+labels.  The result is a nice 8-state machine.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/compressed-regexp.png" /></p>
+
+<h2 id="but-thats-just-theory">But that’s just theory</h2>
+
+<p>This only covers the abstract stuff. There’s a
+<a href="https://github.com/pkhuong/bitap-regexp">CL code dump</a> on github.
+You’re probably looking for <code>compile-regexp3.lisp</code> and
+<code>scalar-bitap.lisp</code>; the rest are failed experiments.</p>
+
+<p>Once a small labeling is found, generating a matcher is really
+straightforward.  The data-dependent masks are just a dictionary
+lookup (probably in a vector or in a perfect hash table), a shift and
+a mask.</p>
+
+<p>Traditionally, epsilon transitions have been implemented with a few
+table lookups.  For example, the input state can be cut up in bytes;
+each byte maps to a word in a different lookup table, and all the
+bytes are ORed together.  The tables can be pretty huge (<code>n-states/8</code>
+lookup tables of 256 state values each), and the process can be slow
+for large states (bitsets).  This makes it even more important to
+reduce the size of the state machine.</p>
+
+<p>When runtime compilation is easy, it seems to make sense to instead
+generate a small number of test and conditional moves… even more so if
+SIMD is used to handle larger state sets.  A couple branch-free
+instructions to avoid some uncorrelated accesses to LUTs looks like a
+reasonable tradeoff, and, if SIMD is involved, the lookups would
+probably cause some slow cross-pipeline ping-ponging.</p>
+
+<p>There’s another interesting low-level trick.  It’s possible to handle
+large state sets without multi-word shifts: simply insert padding
+states (linked via \( \epsilon \) transitions) to avoid character
+transitions that straddle word boundaries.</p>
+
+<p>There’s a lot more depth to this bitap for regexp matching thing.  For
+example, bitap regular expressions can be adapted to fuzzy matchings
+(up to a maximum edit distance), by counting the edit distance in
+unary and working with one bitset for each edit distance value.  More
+important in practice, the approach described so far only handles
+recognising a regular language; parsing into capture groups and
+selecting the correct match is a complex issue about which <a href="http://swtch.com/~rsc/regexp/">Russ Cox has a lot to say</a>.</p>
+
+<p>What I find interesting is that running the NFA backward from accept
+states gives us a forward oracle: we can then tell whether a certain
+state at a given location in the string will eventually reach an
+accept state.  Guiding an otherwise deterministic parsing process with
+such a regular language oracle clearly suffices to implement capture
+groups (all non-deterministic choices become deterministic), but it
+also looks like it would be possible to parse useful non-regular
+languages without backtracking or overly onerous memoisation.</p>
 </div>
   
   

@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2015/04/26/pointer-less-scapegoat-trees/">Pointer-less Scapegoat Trees</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2015/11/29/retrospective-on-binary-search-and-on-compression-slash-compilation/">Retrospective on binary search and comp{ress,ilat}ion</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-April
+Nov
   
-26th, 
+29th, 
 2015
 
 
 
 
         
-         | <a href="/Blog/2015/04/26/pointer-less-scapegoat-trees/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2015/04/26/pointer-less-scapegoat-trees/"
+         | <a href="/Blog/2015/11/29/retrospective-on-binary-search-and-on-compression-slash-compilation/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2015/11/29/retrospective-on-binary-search-and-on-compression-slash-compilation/"
 	      >Comments</a>
         
         
@@ -116,236 +116,204 @@ April
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I’m trying something new this week: gathering a small group after
-<a href="http://www.appnexus.com">work</a> for 90 minutes of short talks and
-discussions.  We’ll also have one longer slot because not everything
-fits in a postcard, but my main goal is really to create opportunities
-for everyone to infect us with their excitement for and interest in an
-idea or a question.  I successfully encouraged a couple people to
-present, although many seemed intimidated by the notion… perhaps because we
-have grown to expect well researched and rehearsed performances.
-However, I believe that simple presentations of preliminary work are
-worthwhile, and probably more likely to spark fresh conversations than
-the usual polished fare: it’s healthy to expose our doubts,
-trials, and errors, and there’s certainly value in reminding ourselves
-that everyone else is in that same boat.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>I never know whether to prefer closure or fresh questions, in
+research.  I got a little of both lately.  First, closure on searching
+in permutations of sorted arrays, and second, more avenues on the
+compilation as compression angle.</p>
 
-<p>Here’s what I quickly (so quickly that my phone failed to focus
-correctly) put together on embedding search trees in sorted
-arrays.  You’ll note that the “slides” are very low tech; hopefully,
-more people will contribute their own style to the potluck next time
-(:</p>
+<h2 id="array-layouts-for-comparison-based-searching">Array Layouts for Comparison-Based Searching</h2>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat01.jpg" /></p>
+<p>In July 2012, I started really looking into searching in static sorted
+sets, and found the literature disturbingly useless.  I reviewed a lot
+of code, and it turned out that most binary searches out there are not
+only unsafe for overflow, but also happen to be badly
+micro-optimised for small arrays with simple comparators.  That lead
+to <a href="http://pvk.ca/Blog/2012/07/03/binary-search-star-eliminates-star-branch-mispredictions/">Binary Search <em>eliminates</em> Branch Mispredictions</a>,
+a reaction to popular assertions that binary search has bad constant
+factors (compared to linear search or a breadth first layout) on modern
+microarchitecture, mostly due to branch mispredictions.  That post has code
+for really riced up searches on fixed array sizes,
+so here’s the size generic inner loop I currently use.</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat02.jpg" /></p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">const</span> <span class="kt">uint32_t</span> <span class="n">x</span> <span class="o">=</span> <span class="p">...;</span>
+</span><span class="line"><span class="k">const</span> <span class="kt">uint32_t</span> <span class="o">*</span><span class="n">base</span> <span class="o">=</span> <span class="p">...;</span>
+</span><span class="line"><span class="kt">size_t</span> <span class="n">n</span> <span class="o">=</span> <span class="p">...;</span>
+</span><span class="line"><span class="kt">size_t</span> <span class="n">half</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"><span class="k">while</span> <span class="p">((</span><span class="n">half</span> <span class="o">=</span> <span class="n">n</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">    <span class="k">const</span> <span class="kt">uint32_t</span> <span class="o">*</span><span class="n">mid</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">base</span><span class="p">[</span><span class="n">half</span><span class="p">];</span>
+</span><span class="line">    <span class="n">base</span> <span class="o">=</span> <span class="p">(</span><span class="o">*</span><span class="n">mid</span> <span class="o">&lt;</span> <span class="n">x</span><span class="p">)</span> <span class="o">?</span> <span class="nl">mid</span> <span class="p">:</span> <span class="n">base</span><span class="p">;</span>
+</span><span class="line">    <span class="n">n</span> <span class="o">-=</span> <span class="n">half</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>I didn’t really think about implementing search trees until 3-4 years
-ago.  I met an online collaborator in Paris who, after a couple G&amp;T,
-brought up the topic of “desert island” data structures: if you were
-stuck with a computer and a system programming guide on a desert
-island, how would you rebuild a standard library from scratch?
-Most data structures and algorithms that we use every day are fairly
-easy to remember, especially if we don’t care about proofs of
-performance: basic dynamic memory allocation, hash tables, sorting,
-not-so-bignum arithmetic, etc. are all straightforward.  He even had a
-mergeable priority queue, with
-<a href="http://en.wikipedia.org/wiki/Skew_heap">skew heaps</a>.  However, 
-we both got stuck on balanced search trees: why would anyone want to
-remember rotation rules?  (Tries were rejected on what I argue are
-purely theoretical grounds ;)</p>
+<p>The snippet above implements a binary search, instead of <a href="http://pvk.ca/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/">dividing by three to avoid aliasing issues</a>.  That issue only shows up with array sizes that are
+(near) powers of two.  I know of two situations where that happens a lot:</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat03.jpg" /></p>
+<ol>
+  <li>bad benchmarks;</li>
+  <li>data structures built around powers of two (e.g., <a href="http://repository.cmu.edu/cgi/viewcontent.cgi?article=3453&amp;context=compsci">Saxe &amp; Bentley dynamisation</a>).</li>
+</ol>
 
-<p>I
-<a href="http://www.pvk.ca/Blog/2012/07/03/binary-search-star-eliminates-star-branch-mispredictions/">love searching</a>
-in <a href="http://www.pvk.ca/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/">sorted arrays</a>, so I kept looking for a way
-to build simpler search trees on top of that.  That lead me to
-<a href="http://repository.cmu.edu/cgi/viewcontent.cgi?article=3453&amp;context=compsci">Bentley and Saxe’s (PDF)</a> dynamisation trick.  The gist of it is
-that there’s a family of methods to build dynamic sets on top of
-static versions.  For sorted arrays, one extreme is an unsorted list
-with fast inserts and slow reads, and the other exactly <em>one</em> sorted
-array, with slow inserts and fast lookups.  The most interesting
-design point lies in the middle, with \( \log n \) sorted arrays,
-yielding \( \mathcal{O}(\lg n) \) time inserts and
-\( \mathcal{O}(\lg\sp{2}n) \) lookups; we can see that design in
-write-optimised databases.  The problem is that my workloads tend to
-be <em>read</em> heavy.</p>
+<p>The fix for the first case is to do proper benchmarking on a wide
+range of input sizes.  Ternary or offset binary search are only really
+useful in the second case.  There’s actually a third case: when I’m
+about to repeatedly search in the same array, I dispatch to unrolled
+ternary searches, with one routine for each power of two.  I can
+reduce any size to a power of two with one initial iteration on an
+off-center “midpoint.”  Ternary search has a high overhead for small
+arrays, unless we can precompute offsets by unrolling the whole thing.</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat04.jpg" /></p>
+<p>My work on binary search taught me how to implement binary search not
+stupidly–unlike real implementations–and that most experiments on
+searching in array permutations seem broken in their very design (they
+focus on full binary trees).</p>
 
-<p>Some time later, I revisited a <a href="http://www.cs.au.dk/~gerth/papers/soda02.pdf">paper by Brodal, Fagerberg, and Jacob (PDF)</a>.  They
-do a lot of clever things to get interesting performance bounds, but
-I’m really not convinced it’s all worth the complexity<sup id="fnref:1"><a href="#fn:1" class="footnote">1</a></sup>… especially in
-the context of our desert island challenge.  I did find one trick very
-interesting: they preserve logarithmic time lookups when binary
-searching arrays with missing values by recasting these arrays as
-implicit binary trees and guaranteeing that “NULLs” never have valid
-entries as descendants.  That’s a lot simpler than other arguments
-based on guaranteeing a minimum density.  It’s so much simpler that we
-can easily make it work with a branch-free binary search:  we only
-need to treat NULLs as \( \pm \infty \) (depending on whether we
-want a predecessor or a successor).</p>
+<p>I don’t think I ever make that explicit, but the reason I even started
+looking into binary search is that I wanted to have a fast
+implementation of searching in a van Emde Boas layout!  However,
+none of the benchmarks (or analyses) I found were convincing, and
+I kind of lost steam as I improved sorted arrays: sortedness tends
+to be useful for operations other than predecessor/successor search.</p>
 
-<p>While lookups are logarithmic time, inserts are
-\(\mathcal{O}(\lg\sp{2} n) \) time.  Still no satisfying
-answer to the desert island challenge.</p>
+<p>Some time in May this year, I found <a href="http://cglab.ca/~morin/misc/arraylayout-v2/">Pat Morin’s fresh effort</a> on the
+exact question I had abandoned over the years: how do popular
+permutations work in terms of raw CPU time?  The code was open,
+and even good by research standards!  Pat had written the annoying
+part (building the permutations), generated a bunch of tests I could
+use to check correctness, and avoided obvious microbenchmarking
+pitfalls.  He also found a <a href="https://github.com/patmorin/arraylayout/blob/master/src/eytzinger_array.h#L137">really nice way to find the return value for BFS searches</a> from the location where the search ends with fast
+bit operations (<code>j = (i + 1) &gt;&gt; __builtin_ffs(~(i + 1));</code>, which he
+explains in the paper).</p>
 
-<p>I went back to my real research in optimisation, and somehow
-stumbled on
-<a href="http://dspace.mit.edu/handle/1721.1/10639">Igal Galperin’s PhD thesis</a>
-on both on-line optimisation/learning and… simpler balanced binary search trees!</p>
+<p>I took that opportunity to improve constant factors for all the
+implementations, and to really try and explain in detail the
+performance of each layout with respect to each other, as well as how they
+respond to the size of the array.  That sparked a very interesting
+back and forth with Pat from May until September (!).  Pat eventually took
+the time to turn our informal exchange into a <a href="http://arxiv.org/abs/1509.05053">coherent paper</a>.  More than 3 years after I
+started spending time on the question of array layouts for implicit
+search trees, I found the research I was looking for… all it took was
+a bit of collaboration (:</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat05.jpg" /></p>
+<p>Bonus: the results were unexpected! Neither usual suspects (B-tree or
+van Emde Boas) came out on top, even for very large arrays.  I was
+also surprised to see the breadth-first layout perform much better
+than straight binary search: none of the usual explanations made sense
+to me.  It turns out that the improved performance (when people weren’t
+testing on round, power of two, array sizes) was probably an
+unintended consequence of bad code!  Breadth-first is fast,
+faster than layouts with better cache efficiency, because it prefetches well
+enough to hide latency even when it extracts only one bit of
+information from each cache line; its performance has nothing to do with
+cachability.  Our code prefetches explicitly, but slower branchy
+implementations in the wild get implicit prefetching, thanks to
+speculative execution.</p>
 
-<p><a href="http://www.akira.ruc.dk/~keld/teaching/algoritmedesign_f03/Artikler/03/Galperin93.pdf">Scapegoat trees (PDF)</a>
-rebalance by guaranteeing a bound \( \alpha &gt; 0 \) on the
-relative difference between the optimal depth
-(\( \lceil\lg n\rceil \)) for a set of \(n\) values and the height (maximal depth) of
-the balanced tree (at most \( (1+\alpha)\lceil\lg n\rceil \)).  The
-only property that a scapegoat tree has (in addition to those of
-binary search trees) is this bound on the height of the 
-tree, as a function of its size.  Whenever a new node would be
-inserted at a level too deep for the size of the tree, we go up
-its ancestors to find a subtree that is small enough to accomodate
-the newcomer and rebuild it from scratch.  I will try to provide an
-intuition of how they work, but the paper is a much better source.</p>
+<p>Conclusion: if you need to do a lot of comparison-based searches in &gt;
+L2-sized arrays, use a breadth-first order and prefetch.  If you need
+sorted arrays, consider sticking some prefetches in a decent binary
+search loop.  If only I’d known that in 2012!</p>
 
-<p>For a tree of \(n = 14\) elements, we could have \(\alpha =
-0.25\), for a maximum depth of \(1.25 \lceil\lg 14\rceil = 5\).
-Let’s say we attempt to insert a new value, but the tree is structured such
-that the value would be the child of a leaf that’s already at depth \(5\);
-we’d violate the (im)balance bound.  Instead, we go up until we find
-an ancestor \(A\) at depth, e.g., \(3\) with \(4\) descendants.  The
-ancestor is shallow enough that it has space for \(5 - 3 = 2\)
-levels of descendants, for a total height of \(2 + 1 = 3\) for the
-subtree.  A full binary tree of height \(3\) has 
-\(2\sp{3} - 1 = 7\) nodes, and we thus have enough space for
-\(A\), its \(4\) descendants, and the new node!  These 6 values
-are rebuilt in a near-perfect binary tree: every level must be
-fully populated, except for the last one.</p>
+<h2 id="compressilation">Comp{ress,ilat}ion</h2>
 
-<p>The criteria to find the scapegoat subtree are a bit
-annoying to remember–especially given that we don’t want to
-constantly rebuild the whole tree–but definitely simpler than rotation
-rules.  I feel like that finally solves the desert island balanced
-search tree challenge… but we still have gapped sorted arrays to
-address.</p>
+<p>A couple months ago, I found <a href="http://www.dcc.uchile.cl/~gnavarro/ps/dcc10.1.pdf">LZ77-like Compression with Fast Random Access</a> by Kreft and Navarro.  They
+describe a Lempel-Ziv approach that is similar to LZ77, but
+better suited to decompressing arbitrary substrings.  The hard part about
+<a href="http://pvk.ca/Blog/2014/03/30/refactoring-with-lz77-compilation-is-compression/">applying LZ77 compression to (byte)code</a>
+is that parses may reuse any substring that happens to appear
+earlier in the original text.  That’s why I had to use Jez’s algorithm
+to convert the LZ77 parse into a (one word) grammar.</p>
 
-<p>What’s interesting about scapegoat trees is that rebalancing is always
-localised to a subtree.  Rotating without explicit pointers is hard
-(not impossible, amazingly enough), but scapegoat trees just
-reconstruct the whole subtree, i.e., a contiguous section of the
-sorted array.  That’s easy: slide non-empty values to the right, and
-redistribute recursively.  But, again, finding the scapegoat subtree
-is annoying.</p>
+<p>LZ-End fixes that.</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat06.jpg" /></p>
-<center><small>The \\(\alpha\lg (n)\\) above should read \\((1 + \alpha)\lg n\\), and \\(\lg\lg n + \mathrm{Exp}\cdot\lg n\\) should be \\((\lg\lg n) (1 + \mathrm{Exp})\\).</small></center>
+<p>Kreft and Navarro improve random access decompression by restricting
+the format of “backreferences” in the LZ parse.  The parse decomposes
+the original string into a sequence of phrases; concatenating the
+phrases yields the string back, and phrases have a compact
+representation.  In LZ77, phrases are compressed because they refer
+back to substrings in prior phrases.  LZ-End adds another constraint:
+the backreferences cannot end in the middle of phrases.</p>
 
-<p>That made me think: what if I randomised scapegoat selection?  Rather than
-counting elements in subtrees, I could approximate that
-probabilistically by sampling from an exponential distribution… which
-we can easily approximate with the geometric for \(p = 0.5\) by
-counting leading zeros in bitstrings.</p>
+<p>For example, LZ77 might have a backreference like</p>
 
-<p>I’m still not totally convinced that it works, but I vaguely remember
-successfully testing an implementation and sketching a proof that we
-can find the scapegoat subtree by going up according to a scaled
-geometric to preserve amortised logarithmic time inserts.  The
-probability function decreases quickly enough that we preserve
-logarithmic time inserts on average, yet slowly enough that we can
-expect to redistribute a region before it runs out of space.</p>
+<pre><code>[abc][def][ghi]
+   ---------
+</code></pre>
 
-<p>The argument is convoluted, but the general idea is based
-on the observation that, in a tree of maximum height \(m\), a
-subtree at depth \(k\) can contain at most
-\(n\sp\prime = 2\sp{m - k + 1} - 1\) elements (including the
-subtree’s root).</p>
+<p>to represent “cdefg.”  LZ-End would be forced to end the new phrase at “f”</p>
 
-<p>We only violate the imbalance bound in a subtree if
-we attempt to insert more than \(n\sp\prime\) elements in it.
-Rebalancing works by designating the shallowest subtree that’s not yet
-full as the scapegoat.  We could simplify the selection of the
-scapegoat tree by counting the number of inserts in each subtree, but
-that’d waste a lot of space.  Instead, we count probabilistically and
-ensure that there’s a high probability (that’s why we always go up by
-at least \(\lg \lg n\) levels) that each subtree will be
-rebalanced at least once before it hits its insertion count limit.
-The memoryless property of the geometric distribution means that
-this works even after a rebalance.  If we eventually fail to find
-space, it’s time to completely rebuild the subtree; this case happens
-rarely enough (\(p \approx \frac{\lg n}{n}\)) that the amortised
-time for insertions is still logarithmic.</p>
+<pre><code>[abc][def][ghi]
+   -------
+</code></pre>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat07.jpg" /></p>
-<center><small>Again \\(2\sp{\alpha \lg n}\\) should be \\(2\sp{(1 + \alpha)\lg n}\\).</small></center>
+<p>and only represent “cdef.”  The paper shows that this additional
+restriction has a marginal impact on compression rate, and uses the
+structure to speed up operations on compressed data.  (The formal
+definition also forbids the cute/annoying self-reference-as-loop idiom
+of LZ77, without losing too much compression power!)</p>
 
-<p>We can do the same thing when embedding scapegoat trees in implicit
-trees.  The problem is that a multiplicative overhead in depth results
-in an exponential space blowup.  The upside is that the overhead is
-tunable: we can use less space at the expense of slowing down
-inserts.</p>
+<p>We can apply the same idea to compress code.  Each phrase is now a
+subroutine with a <code>return</code> at the end.  A backreference is a series
+of calls to subroutines; the first call might begin in the middle, but
+matches always end on <code>return</code>, exactly like normal code does!  A
+phrase might begin in the middle of a phrase that itself consists of
+calls.  That’s still implementable: the referrer can see through the
+indirection and call in the middle of the callee’s callee (etc.), and
+then go back to the callee for a suitably aligned submatch.</p>
 
-<p>In fact, if we let \( \alpha \rightarrow 0 \), we find Brodal et
-al’s scheme (I don’t know why they didn’t just cite Galperin and
-Rivest on scapegoat trees)!  The difference is that we are now pretty
-sure that we can easily let a random number generator guide our
-redistribution.</p>
+<p>That last step looks like it causes a space blowup, and I can’t bound it (yet).</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat09.jpg" /></p>
+<p>But that’s OK, because I was only looking into compressing traces as a
+last resort.  I’m much more interested in expression trees, but
+couldn’t find a way to canonicalize sets (e.g., arguments to integer
+<code>+</code>) and sequences (e.g., floating point <code>*</code>) so that similar
+collections have similar subtrees… until I read Hammer et al’s work
+on <a href="http://arxiv.org/abs/1503.07792">Nominal Adapton</a>, which solves a
+similar problem in a different context.</p>
 
-<p>I only covered insertions and lookups so far.  It turns out that
-deletions in scapegoat trees are easy: replace the deleted node with
-one of its leaves.  Deletions should also eventually trigger
-a full rebalance to guarantee logarithmic time lookups.</p>
+<p>They want a tree representation for lists and tries (sets/maps) such
+that a small change in the list/trie causes a small change in the
+tree that mostly preserves identical subtrees.  They also want the
+representation to be a deterministic function of the list/trie.  That
+way, they can efficiently reuse computations after incremental changes
+to inputs.</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat10.jpg" /></p>
+<p>That’s exactly my sequence/set problem!  I want a tree-based
+representation for sequences (lists) and sets (tries) such that
+similar sequences and sets have mostly identical subtrees for which I
+can reuse pre-generated code.</p>
 
-<p>Classical implicit representations for sorted sets make us choose
-between appallingly slow (linear time) inserts and slow lookups.
-With stochastic scapegoat trees embedded in implicit binary trees, we
-get logarithmic time lookups, and we have a continuum of choices
-between wasting an exponential amount of space and slow
-\( \mathcal{O}(\lg\sp{2} n) \) inserts.  In order to get there, we
-had to break one rule: we allowed ourselves \(\mathcal{O}(n)\)
-additional space, rather than \(\mathcal{o}(n)\), but it’s all
-<em>empty</em> space.</p>
+<p>Nominal Adapton uses a hash-based construction described by Pugh and
+Teitelbaum in 1989 (Incremental computation via function caching) to
+represent lists, and extends the idea for tries.  I can “just” use the
+same trick to canonicalise lists and sets into binary trees, and
+(probabilistically) get common subexpressions for free, even across
+expressions trees!  It’s not perfect, but it should scale pretty well.</p>
 
-<p>What other rule or assumption can we challenge (while staying true to
-the spirit of searching in arrays)?</p>
+<p>That’s what I’m currently exploring when it comes to using compression
+to reduce cache footprint while doing aggressive specialisation.
+Instead of finding redundancy in linearised bytecode after the fact,
+induce identical subtrees for similar expressions, and directly reuse
+code fragments for subexpressions.</p>
 
-<p>I’ve been thinking about interpolation lately: what if we had a
-monotone (not necessarily injective) function to map from the set’s
-domain to machine integers?  That’d let us bucket values or
-interpolate to skip the first iterations of the search.  If we can
-also assume that the keys are uniformly distributed once mapped to
-integers, we can use a linear Robin Hood hash table: with a linear
-(but small) space overhead, we get constant time expected inserts and
-lookups, and what seems to be \( O(\lg \lg n) \) worst case<sup id="fnref:2"><a href="#fn:2" class="footnote">2</a></sup>
-lookups with high probability.</p>
+<h2 id="more-to-come">More to come</h2>
 
-<p>Something else is bothering me.  We embed in full binary trees, and
-thus binary search over arrays of size \(2\sp{n} - 1\)… and we know
-that’s a
-<a href="http://www.pvk.ca/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/">bad idea</a>.
-We could switch to ternary trees, but that means inserts and deletes
-must round to the next power of three.  Regular div-by-mul and
-scaling back up by the divisor always works; is there a simpler way to round
-to a power of three or to find the remainder by such a number?</p>
-
-<p>I don’t know!  Can anyone offer insights or suggest new paths to explore?</p>
-
-<div class="footnotes">
-  <ol>
-    <li id="fn:1">
-      <p>I think jumping the van Emde Boa[s] is a thing, but they at least went for the minor version, the van Emde Boas layout ;) <a href="#fnref:1" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:2">
-      <p>The maximal distance between the interpolation point and the actual location appears to scale logarithmically with the number of elements.  We perform a binary search over a logarithmic-size range, treating empty entries as \(\infty\). <a href="#fnref:2" class="reversefootnote">&#8617;</a></p>
-    </li>
-  </ol>
-</div>
+<p>I thought I’d post a snippet on the effect of alignment and virtual
+memory tricks on TLBs, but couldn’t find time for that.  Perhaps later
+this week.  In the meantime, I have to prepare a short talk on the
+software transactional memory system we built at AppNexus.  Swing by
+<a href="http://meetup.com/TechTalks-AppNexus-NYC/">23rd Street on December 15</a> if you’re in New York!</p>
 </div>
   
   

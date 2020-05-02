@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/05/11/integer-division-step-0-no-remainder/">Integer division, step 0: no remainder</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/">Doodle: hybridising SBCL's GENCGC with mark and sweep</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-May
+Sept
   
-11th, 
+13th, 
 2014
 
 
 
 
         
-         | <a href="/Blog/2014/05/11/integer-division-step-0-no-remainder/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/05/11/integer-division-step-0-no-remainder/"
+         | <a href="/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/"
 	      >Comments</a>
         
         
@@ -116,256 +116,201 @@ May
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>Exciting times in SBCL-land!  Not only will Google Summer of Code
-support two students to work on SBCL (one will improve our support for
-correct Unicode manipulation, and the other our strength reduction for
-integer division), but we also sprouted a
-<a href="http://sourceforge.net/p/sbcl/sbcl/ci/b793e2b291ee55ec43399d0367f59d6a56b27433/tree/NEWS?diff=2971347c95b8910019f43a0ba6de7b2e36997c85">new Linux/ARM port</a>!
-As
-<a href="http://christophe.rhodes.io/notes/blog/posts/2014/just_like_old_times/">Christophe</a>
-points out, this a nice coincidence: (most?) ARM chips lack hardware
-integer division units.  I find the integer division project even more
-interesting because I believe we can cover all three standard division
-operators (floor, truncate, and ceiling) with an unified code
-generator.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><em>Meta-note: this is more of a journal entry than the usual post
+here.  I’ll experiment with the format and see if I like publishing
+such literal and figurative doodles.</em></p>
 
-<p>I first looked into integer division by constants four years ago, and
-I was immediately struck by the ad hoc treatment of the
-transformation: I have yet to find a paper that summarises and relates
-algorithms that are currently in use.  Worse, the pseudocode tends to
-assume fixed-width integer, which drowns the interesting logic in
-bignum-management noise.  Back when I had free time, I uploaded
-<a href="http://discontinuity.info/~pkhuong/fast-truncate-4.pdf">an early draft</a>
-of what may become a more enlightening introduction to the topic.  My
-goal was to unite all the simplification algorithms I’d seen and
-to generalise them to SBCL’s needs: our optimisers benefit from
-precise integer range derivation, and codegen ought to deal with
-tagged fixnums.  The draft should take shape as the GSoC
-project progresses.</p>
+<p>Garbage collection is in the air.  My friend
+<a href="http://pointersgonewild.wordpress.com/2014/09/09/ds-garbage-collector-problem/">Maxime</a>
+is having issues with D’s garbage collector, and Martin Cracauer has a
+large patch to improve SBCL’s handling of conservative references.  I
+started reviewing that patch today, and, after some discussion with
+Alastair Bridgewater, I feel like adding a mark-and-sweep component to
+SBCL’s GC might be easier than what the patch does, while achieving
+its goal of reducing the impact of conservative references.  That lead
+to the whiteboarding episode below and a plan to replace the garbage
+collecting half of SBCL’s generational GC.  But first, a summary of
+the current implementation.</p>
 
-<p>There is one widespread – but very specialised – integer division
-algorithm that does not fit in the draft: multiplication by modular
-inverses.  I’m guessing it’s common because it’s the first thing that
-comes to mind when we say division-by-multiplication.  The
-transformation is also so specialised that I find it’s usually
-mentioned in contexts where it wouldn’t work.  Still, it’s a nice
-application of algebra and the coefficients are simple enough to
-generate at runtime (even in C or assembly language), so here goes.</p>
+<p><img src="/images/2014-09-13-doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/gc_notes.png" /></p>
 
-<h1 id="multiplicative-inverses-for-integer-division">Multiplicative inverses for integer division</h1>
+<h1 id="the-present-and-how-we-got-here">The present, and how we got here</h1>
 
-<p>Let \(a\) and \(m\) be naturals.  The multiplicative inverse of
-\(a\) modulo \(m\) is a natural \(b\) such that 
-\(a \times b \equiv 1 \mod m\).  Machine arithmetic is naturally modular 
-(e.g., mod \(m = 2\sp{32}\)).  This seems perfect!</p>
-
-<p>There are a couple issues here:</p>
+<p>CMUCL started out with a Cheney-style two-space collector.  Two-space
+collectors free up space for more allocations by copying objects that
+might still be useful (that are reachable from “roots,” e.g.,
+variables on the stack) from the old space to the new space.  Cheney’s
+algorithm elegantly simplifies this task by storing bookkeeping
+information in the data itself.  When we copy an object to the new
+space (because it is reachable), we want to make sure that all other
+references to that object are also replaced with references to the
+copy.  Cheney’s solution to that desideratum is obvious: overwrite the
+old object with a broken heart (forwarding pointer), a marker that</p>
 
 <ol>
-  <li>we have to find the modular inverse;</li>
-  <li>the modular inverse only exists if \(\mathop{gcd}(a, m) = 1\);</li>
-  <li>multiplicative inversion and integer division only coincide when
-the remainder is zero.</li>
+  <li>the object has already been copied to the new space;</li>
+  <li>the copy lives at address <code>x</code>.</li>
 </ol>
 
-<p>For a concrete example of the third issue, consider
-\(11\), the multiplicative inverse of \(3 \mod 16\): \(3\times 11
-= 33 \equiv 1 \mod 16\) and \(6 \times 11 = 66 \equiv 2 \mod 16\).
-However, \(4 \times 11 = 44 \equiv 12 \mod 16\), and \(12\) is
-nowhere close to \(4 \div 3\).</p>
+<p>This adds a constraint that heap-allocated objects can never be
+smaller than a broken heart, but they’re usually one or two words (two
+in SBCL’s case) so the constraint is rarely binding.</p>
 
-<p>This post addresses the first two points.  There is no workaround
-for the last one.</p>
+<p>When the garbage collector traverses the roots (the stack, for
+example) and finds a pointer, the code only has to dereference that
+pointer to determine if the objects it points to has been moved.  If
+so, the GC replaces the root pointer with a pointer to the copy in the
+new space.  Otherwise, the GC copies the object to the new space,
+repoints to that copy, and overwrites the old object with a broken heart.</p>
 
-<p>We can generate a modular inverse with the
-<a href="http://en.wikipedia.org/wiki/Extended_Euclidean_algorithm">extended Euclidean algorithm</a>.
-Wikipedia shows the iterative version, which I can never remember, so I’ll
-instead construct the simple recursive one.</p>
+<p>We also need to traverse objects recursively: when we find that an
+object is live and copy it to the new space, we must also make sure
+that anything that objects points to is also preserved, and that any
+pointer in that object is updated with pointers to copies in the new
+space.</p>
 
-<p>We already assume that
-\[\mathop{gcd}(a, b) = 1 \]
-and we wish to find \(x, y\) such that
-\[ax + by = 1.\]
-<a href="http://en.wikipedia.org/wiki/B%C3%A9zout%27s_identity">Bézout’s identity</a>
-guarantees that such coefficients exist.</p>
+<p>That’s a graph traversal, and the obvious implementation
+maintains a workset of objects to visit which, in the worst case,
+could include all the objects in old space.  The good news is we don’t have
+to worry about objects re-entering that workset: we always
+overwrite objects (in old space) with a broken heart when we visit
+them for the first time.</p>
 
-<p>Things are simpler if we assume that \(a &lt; b\) (they can only be
-equal if \(a = b = 1\), and that case is both annoying and
-uninteresting).</p>
+<p>Cheney proposed a clever trick to implement this workset.  Whenever an
+object enters the workset, it has just been copied to the new space;
+as long as we allocate in the new space by incrementing an allocation
+pointer, the new space itself can serve as the workset!  In addition
+to the allocation pointer, we now need a “to-scan” pointer.  Any
+object in the new space that’s below the to-scan pointer has already
+been scanned for pointers and fixed to point in the new space; any object
+between the to-scan pointer and the allocation pointer must be scanned
+for pointers to the old space.  We pop an element from the workset by
+looking at the next object (in terms of address) after the to-scan
+pointer and incrementing that pointer by the object’s size.  When the
+to-scan and the allocation pointers meet, the workset is empty
+and GC terminates.</p>
 
-<p>If \(a = 1\), \(a + b0 = 1\).</p>
+<p>Some SBCL platforms still use this two-space collector, but it doesn’t
+scale very well to large heaps (throughput is usually fine, but we
+waste a lot of space and GC pauses can be long).  The generational
+conservative garbage collector (GENCGC, GENGC on
+precise/non-conservative platforms) is a hack on top of that Cheney GC.</p>
 
-<p>Otherwise, let \(q = \lfloor b/a\rfloor\) and \(r = b - qa\).
-\[\mathop{gcd}(a, r) = \mathop{gcd}(a, b) = 1,\]
-and, given
-\[ax’ + ry’ = 1,\]
-we can revert our change to find
-\[ax’ + (b - qa)y’ = a(x’ - qy’) + by’ = 1.\]</p>
+<p>The GC is “generational” because most passes only collect garbage from
+a small fraction of the heap, and “conservative” because we have to
+deal with values that may or may not be pointers (e.g., we don’t always
+know if the value in a register is a Lisp reference or just a machine
+integer) by considering some objects as live (not up for collection)
+while pinning them at their current address.</p>
 
-<p>We’re working in modular arithmetic, so we can sprinkle <code>mod m</code>
-without changing the result.  In C, this will naturally happen for
-unsigned integers, via overflows.  In CL, we can still force modular
-reduction, just to convince ourselves that we don’t need bignums.</p>
+<p>The runtime uses mprotect to record writes to the heap, except for the
+nursery (newly allocated objects) where we expect most writes to land.
+The heap is partitioned in pages, and the first write to a page after
+a GC triggers a protection fault; the signal handler marks that page
+as mutated and changes the protection to allow writes.</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun inverse (a m)
-</span><span class="line">  (labels ((egcd (a b)
-</span><span class="line">             (cond ((= 1 a)
-</span><span class="line">                    (values 1 0))
-</span><span class="line">                   ((&gt; a b)
-</span><span class="line">                    (multiple-value-bind (y x)
-</span><span class="line">                        (egcd b a)
-</span><span class="line">                      (values x y)))
-</span><span class="line">                   (t
-</span><span class="line">                    (multiple-value-bind (q r)
-</span><span class="line">                        (truncate b a)
-</span><span class="line">                      (multiple-value-bind (y x)
-</span><span class="line">                          (egcd r a)
-</span><span class="line">                        (values (mod (- x (* y q)) m)
-</span><span class="line">                                y)))))))
-</span><span class="line">    (let* ((x (egcd a m))
-</span><span class="line">           (i (if (&lt; x 0) (+ x m) x)))
-</span><span class="line">      ;; i better be a's inverse...
-</span><span class="line">      (assert (= 1 (mod (* a i) m)))
-</span><span class="line">      i)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>When a GC is triggered, we usually want to collect only the nursery,
+i.e., only objects that were allocated after the previous GC pass.
+GEN(C)GC adapts Cheney to this use case by building the set of all
+pages that might have been mutated to point somewhere in the nursery
+(thanks to the mprotect write barrier) and scanning them for roots,
+like the stack in Cheney GC.  The default GENGC configuration has 7
+generations and we extend this scheme by flagging pages with pointers
+to younger generations (newer objects), without noting what these
+generations might be.</p>
 
-<p>And a quick sanity check:</p>
+<p>Pinned objects are also handled by abusing the root set: pages that
+contain at least one pinned object don’t undergo garbage collection
+and are directly scanned for pointers, like the stack in Cheney GC.</p>
 
-<pre><code>CL-USER&gt; (loop for m from 2 upto (ash 1 10)
-               do (loop for i from 1 below m
-                        when (= 1 (gcd i m))
-                        do (inverse i m)))
-NIL ; no assertion failure
-</code></pre>
+<p>Instead of having two heaps, an old space and a new space, we now have
+a lot of pages, and each page belongs to a generation.  When we want
+to collect a given generation, pages in that generation form the old
+space, and pages allocated during GC the new space.  This means that
+we lose the simplicity of Cheney’s new-space-is-the-workset trick: the
+new space isn’t contiguous, so a single to-scan pointer doesn’t cut it
+anymore!  GENGC works around that by scanning the page table, but it’s
+not pretty and I really don’t know if Cheney is a good fit anymore.</p>
 
-<p>The second issue is that the multiplicative inverse only exists if our
-divisor and our modulo (e.g., \(2\sp{32}\)) are coprime.  The good
-news is that \(\mathop{gcd}(a, 2\sp{w})\) can only be a power of
-two.  We only have to factor our divisor \(a = 2\sp{s} v\), and find
-\(i\), the multiplicative inverse of \(v\).  Division by \(a\)
-is then a right shift by \(s\) and a multiplication by \(i\).</p>
+<h1 id="martin-cracauers-patch">Martin Cracauer’s patch</h1>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun trailing-zeros (x)
-</span><span class="line">  "Return the largest integer s such that 2^s | x"
-</span><span class="line">  (assert (plusp x))
-</span><span class="line">  (1- (integer-length (logxor x (1- x)))))
-</span><span class="line">
-</span><span class="line">(defun divisor (d m)
-</span><span class="line">  (let* ((zeros (trailing-zeros d))
-</span><span class="line">         (inverse (inverse (ash d (- zeros)) m)))
-</span><span class="line">    (lambda (x)
-</span><span class="line">      (mod (* (ash x (- zeros)) inverse) m))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>GENCGC’s approach to pinned objects is stupid.  If a page has no
+reference except for one conservative pointer, the whole page is
+considered live and scanned for references.</p>
 
-<p>And now, a final round of tests:</p>
+<p>Martin’s solution is to allocate additional temporary metadata only
+for pinned pages and track the pinned status of individual objects.
+When the GC encounters a pointer to a page with pinned objects, it
+checks if it’s a pointer to a pinned object.  If so, the pointee is
+left in place.  Otherwise, it’s copied normally.</p>
 
-<pre><code>CL-USER&gt; (defun test-divisor (d m)
-           (let ((divisor (divisor d m)))
-             (loop for i upfrom 0
-                   for j from 0 by d below m
-                   do (assert (= (funcall divisor j) i)))))
-TEST-DIVISOR
-CL-USER&gt; (loop for width from 1 upto 20
-               for mod = (ash 1 width)
-               do (loop for x from 1 below mod
-                        do (test-divisor x mod)))
-NIL
-</code></pre>
+<p>The patch has code to mark objects as live (pinned) and to overwrite
+objects once they have been copied.  Basically, it is half of a
+mark-and-sweep garbage collector.  The main difference is that the set
+of pinned objects doesn’t grow (being pinned isn’t a contagious
+property), so we don’t need a worklist for pinned objects.  However, I
+already noted that I’m not convinced the worklist hack in GENGC is a
+good idea.</p>
 
-<p>A simple transformation from integer division to shift and
-multiplication… that works only in very specific conditions.</p>
+<h1 id="a-hybrid-collector">A hybrid collector!</h1>
 
-<h1 id="what-are-modular-inverses-good-for-then">What are modular inverses good for, then?</h1>
+<p>Instead of marking pages as containing pinned objects, I feel it may
+be simpler to collect some pages by copying, and others by marking.
+Any pinned page would have the “mark” GC policy, while pages that
+likely contain few live objects (e.g., the nursery and pages with a
+lot of unused memory) would be collected by copying.  This too would
+avoid the issue with considering whole <em>pages</em> as live when pinned,
+and I think that having the choice of copying or marking at a page
+granularity will be simpler than toggling at the level of individual
+object.</p>
 
-<p>I’ve only seen this transformation used for pointer subtractions in
-C-like languages: machines count in chars and programs in
-whatever the pointers point to.  Pointer arithmetic is only
-defined within the same array, so the compiler can assume that the
-distance between the two pointers is a multiple of the object size.</p>
+<p>Each “mark” page now has two (bit)sets, one for live objects and
+another for live objects that have already been scanned.  We can
+maintain a worklist at the page granularity with an embedded linked
+list: whenever a “mark” page gains a new live object and it’s not
+already in the worklist, that page is enqueued for scanning.</p>
 
-<p>The following program is deep in undefined behaviour, for
-example.</p>
+<p>Instead of emulating Cheney’s trick by looking for newly allocated
+pages in our page table, we can add pages in new space to the worklist
+whenever they become full.</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>foo.c </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#include &lt;stdio.h&gt;</span>
-</span><span class="line">
-</span><span class="line"><span class="k">struct</span> <span class="n">foo</span> <span class="p">{</span>
-</span><span class="line">	<span class="kt">char</span> <span class="n">buffer</span><span class="p">[</span><span class="mi">7</span><span class="p">];</span>
-</span><span class="line"><span class="p">};</span>
-</span><span class="line">
-</span><span class="line"><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
-</span><span class="line"><span class="p">{</span>
-</span><span class="line">	<span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="n">x</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="p">)</span><span class="mi">0</span><span class="p">;</span>
-</span><span class="line">	<span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="n">y</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">foo</span> <span class="o">*</span><span class="p">)</span><span class="mi">9</span><span class="p">;</span>
-</span><span class="line">
-</span><span class="line">	<span class="n">printf</span><span class="p">(</span><span class="s">&quot;%zd %i</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">,</span> <span class="n">y</span> <span class="o">-</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="o">&lt;</span> <span class="n">x</span><span class="p">);</span>
-</span><span class="line">	<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
-</span><span class="line"><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>Finally, at the end of the pass, we traverse all “mark” pages and
+clear dead objects.</p>
 
-<pre><code>pkhuong:tmp pkhuong $ clang foo.c &amp;&amp; ./a.out
--2635249153387078801 0
-</code></pre>
+<p>That’s pretty simple (arguably simpler than the current
+implementation!), and shouldn’t involve too many changes to the rest
+of the code.  Mostly, I’d have to adapt the weak pointer machinery to
+stop assuming that it can use forwarding pointers to determine when
+objects have been marked as live.</p>
 
-<p>What I find interesting is that, if we pay attention to the
-correctness analysis, it’s clear that general div-by-mul
-transformations benefit from known common factors between the divisor
-and the dividend.  In the extreme case, when the dividend is always a
-multiple of the divisor, we can convert the division to a single
-double-wide multiplication, without any shift or additional multi-word
-arithmetic.  On architectures with fast multipliers or ones that let
-us compute the high half of product without the low part, the general
-case (coupled with a tight analysis) may be marginally quicker than
-this specialised transformation.  Yet, both GCC and clang convert
-pointer subtractions to shifts and multiplications by modular
-inverses.</p>
+<p>However, we might lose the ability to run medium GCs, to collect more
+than the nursery but less than the whole heap.  If we only want to GC
+the nursery, the mprotect write barrier gives us all the information
+we need to find references from the rest of the heap to the nursery.
+If we wish to collect the whole heap, we only have to consider stacks
+and some statically allocated space as roots.</p>
 
-<p>In the end multiplicative inverses seem mostly useful as a red
-herring, and as a minimal-complexity low hanging fruit.  The only
-reason I use them is that it’s easy to generate the coefficients in C,
-which is helpful when allocation sizes are determined at runtime.</p>
+<p>For medium GCs, e.g., collect only generations 1-4 out of 7, GENGC
+exploits the way that garbage collection (almost) always copies to
+easily track pages with pointers to younger generations.  It’s coarse,
+but usually acceptable thanks to the copying.  I don’t know that it
+would work as well if the default is to only copy the nursery.
+Moreover, if we have a hybrid GC, it probably makes sense to focus
+copying on pages that are mostly empty, regardless of their age.  If
+we do want medium GCs, we might have to track, for each page, the set
+of pages that point there.  This set can include false positives, so
+it’s probably easiest to clear it before major GCs, and otherwise only
+add to that set (removing pages that were emptied by a GC pass sounds
+reasonable).  I also expect that some pages will have many refererrers;
+I’m thinking we might use a distinguished value to mean “referred by
+every pages” and not consider them for medium GC.</p>
+
+<h1 id="whats-next">What’s next</h1>
+
+<p>Martin’s patch clearly addresses an important weakness in SBCL’s
+garbage collector.  If I can’t make good progress on the hybrid GC
+soon, I’ll make sure the patch is cleaned up for master, hopefully by
+Thanksgiving.</p>
 </div>
   
   

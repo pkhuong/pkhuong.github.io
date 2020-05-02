@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/05/24/fitting-polynomials-by-generating-linear-constraints/">Fitting polynomials by generating linear constraints</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/">Binary search is a pathological case for caches</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-May
+July
   
-24th, 
+30th, 
 2012
 
 
 
 
         
-         | <a href="/Blog/2012/05/24/fitting-polynomials-by-generating-linear-constraints/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2012/05/24/fitting-polynomials-by-generating-linear-constraints/"
+         | <a href="/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/"
 	      >Comments</a>
         
         
@@ -116,494 +116,830 @@ May
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><small>(There were some slight edits since the original publication.
-The only major change is that the time to solve each linear program
-probably grows cubically, not linearly, with the number of
-points.)</small></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>Programmers tend to like round numbers, i.e. powers of two. So do
+hardware designers. Sadly, this shared value doesn’t always work to
+our advantage. One
+<a href="http://yarchive.net/comp/cache_thrashing.html">common</a>
+<a href="http://www.realworldtech.com/forum/?threadid=54793&amp;curpostid=54839">issue</a>
+is that of cache line aliasing induced by alignment.</p>
 
-<p>This should be the first part in a series of post exploring the
-generation of efficient and precise polynomial approximations.  Yes,
-there is Lisp code hidden in the math (: See
-<a href="https://github.com/pkhuong/rational-simplex">rational-simplex</a> and
-<a href="https://github.com/pkhuong/rational-simplex/tree/master/demo/vanilla-fit">vanilla-fit</a>.</p>
+<p>Binary search suffers from a related ailment when executed on medium
+or large vectors of almost power-of-two size (in bytes), but it can be
+cured.  Once that is done, searching a sorted vector can be as fast
+as searches with a well-tuned hash table, for a few realistic access
+patterns.</p>
 
-<p>Here’s the context: we want to approximate some non-trivial function,
-like \(\log\), \(\exp\) or \(\sin\) on a computer, in floating
-point arithmetic.  The textbook way to do this is to use a truncated
-Taylor series: evaluating polynomials is pretty quick on computers.
-<a href="http://lol.zoy.org/blog/2011/12/21/better-function-approximations">Sam Hocevar</a>’s
-post on the topic does a very good job of illustrating how
-wrong-headed the approach is in most cases.  We should instead try to
-find an approximation that minimises the maximal error over a range
-(e.g. \([-\pi,\pi]\) for \(\sin\)).  He even has
-<a href="http://lol.zoy.org/wiki/oss/lolremez">LolRemez</a> to automatically
-compute such approximations for given functions.  (While we’re kind of
-on the topic, the very neat
-<a href="http://www2.maths.ox.ac.uk/chebfun/">Chebfun</a> applies closely-related
-ideas to try and be to continuous functions what floating point
-numbers are to reals.)</p>
+<p>The task is interesting to me because I regularly work with static, or
+almost static, sets: sets for which there’s a majority of lookups,
+while updates are either rare or batchable.  For such sets, the
+improved performance of explicit balanced search trees on insertions
+is rarely worth the slowdown on lookups, nor the additional space
+usage.  Replacing binary search with slightly off-center binary or
+quaternary (four-way) searches only adds a bit more code to provide
+even quicker, more consistent lookup times.</p>
 
-<p>The LolRemez docs point out two clever tricks to get more efficient
-approximations:
-<a href="http://lol.zoy.org/wiki/doc/maths/remez/tutorial-changing-variables">forcing odd or even polynomials</a>,
-and
-<a href="http://lol.zoy.org/wiki/doc/maths/remez/tutorial-fixing-parameters">fixing parameters to simple values</a>.
-Could we automate this process?</p>
+<h2 id="analyze-this">Analyze this</h2>
 
-<p>The goal of this series is to show that we can, by applying Operations
-Research (<a href="http://www.scienceofbetter.org/">“The Science of Better”</a>)
-to this micro-optimisation challenge.  OR is what I do during the day,
-as a PhD student, and I believe that there’s a lot of missed
-opportunities in nifty program optimisation or analysis.  (I also
-think that language design has a lot to offer to OR people who cope
-with modeling languages that have only changed incrementally since the
-seventies. :)</p>
+<p>The following jittered scatterplot reports the runtimes, on my dual
+2.8 GHz X5660, for binary searches to the first value in a single
+sorted vector of size 16 to 1G elements (32-bit <code>unsigned</code>s), and is
+overlaid with the median in green.  For each power-of-two size, the
+benchmark program was executed 10 times, with 100 000 binary searches
+per execution (and each search was timed individually, with <code>rdtscp</code>).
+Finally,
+<a href="http://en.wikipedia.org/wiki/Non-Uniform_Memory_Access">NUMA</a> effects
+were eliminated by forcing the processes to run and acquire memory
+from the same un-loaded node.  1 000 000 points are hard to handle, so
+the plot is only based on a .1% random sample (i.e. 1 000 points for
+each size).</p>
 
-<h2 id="problem-statement">Problem statement</h2>
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/bsearch-first-cycles.png" /></p>
 
-<p>For now, let’s try and solve the original problem: find, in a family
-of functions \(F\) (e.g. polynomials of degree 4), an approximation
-\(\tilde{f}\) of a function \(f\) over some bounded range
-\(B\subset R\) such that \(\tilde{f}\) minimises the maximal error
-over that range:</p>
+<p>Two things bother me here.  The performance degrades much more quickly
+when \(\lg(n)\geq 17\) (i.e. the size exceeds 512 KB), but, worse,
+it shows a lot of variation on larger vectors.  The variation seems
+more critical to me. Examining the data set reveals that the variation
+is purely inter-execution: each set of 100 000 repetitions shows
+nearly constant timings.</p>
 
-<div>
-$$\tilde{f} = \mathop{\arg\min}_{g \in F}\max_{x\in B} |g(x)-f(x)|.$$
-</div>
+<p>The degradation after \(\lg(n)=17\) is worrying because drops in
+performance when the input is 512 KB or larger looks a lot like a
+cache issue.  However, the workload is perfectly cachable: even on
+vectors of 1G values, binary search is always passed the same key and
+vector, and thus always reads from the same 30 locations.  This should
+have no trouble fitting in L1 cache, for the whole range of sizes
+considered here.</p>
 
-<p>\(B\) is a dense set, with infinitely, if not uncountably, many
-elements, so it’s far from obvious that we can solve this, even up to
-negligible errors.</p>
+<p><span class="pullquote-right" data-pullquote="If the definition of insanity is doing the same thing over and over again and expecting different results, contemporary computers are quite ill.">
+The variation is even stranger.  It happens between executions of
+identical binaries for a deterministic program, on the same machine
+and OS, but never in a single execution.  The variation makes no
+sense.  If the definition of insanity is doing the same thing over and over again and expecting different results, contemporary computers are quite ill.
+Worse, the variation would never have been uncovered by
+repetitions in a single process.  I was lucky to look at the
+results from multiple executions, otherwise I could easily have
+concluded that binary search for the same element in a vector of 1G
+32-bit elements almost always takes around 700 cycles, or almost
+always 1400ish cycles.
+</span></p>
 
-<h2 id="the-remez-algorithm">The Remez algorithm</h2>
+<p>What’s behind the speed bump and the extreme variations?</p>
 
-<p>The
-<a href="http://en.wikipedia.org/wiki/Remez_algorithm">Remez exchange algorithm</a>
-shows one way to solve the minimax approximation problem, from the realm
-of mathematical analysis.</p>
+<p>The next graph reports the number of cache misses at the first,
+second, third and translation lookaside buffer levels.  The average
+count per search over 100 000 repetitions were recorded in 10
+independent executions for each size.  The points correspond to
+medians of ten average counts, and the vertical lines span the minimum
+and maximum counts.</p>
 
-<p>Let’s pretend we do not know \(\tilde{f}\), but do know the points
-where its error from \(f\) is maximised.  In fact, if we are looking
-for polynomials of degree \(n\), we only need \(n+2\) such points.
-Let’s further impose that the errors alternate in sign: i.e., if the
-points are ordered (\(x_0 &lt; \ldots &lt; x_i &lt; \ldots &lt; x_{n+1}\)), then
-\(\tilde{f}(x_0) &lt; f(x_0)\), \(\tilde{f}(x_1) &gt; f(x_1)\), etc., or
-vice versa.  Nifty analysis results tell us that these points exist,
-and that they exhibit the same absolute error \(|\epsilon|\).  We
-can now find the coefficients \(a_0,a_1,\ldots,a_n\) of
-\(\tilde{f}\) by solving a small linear system:</p>
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/bsearch-first-cache-misses.png" /></p>
 
-<div>
-$$\sum_{j=0}^n a_j x_0^j = f(x_0) + \epsilon$$
-$$\sum_{j=0}^n a_j x_1^j = f(x_1) - \epsilon$$
-<p><center>etc. for each \\(x_i\\).</center></p>
-</div>
+<p>The miss counts between executions are pretty much constant for L3 and
+TLB, and reasonably consistent for L1.  L1 and TLB misses seem to
+cause the slowdown, even though the working sets are tiny.  L2 misses
+on \(\lg(n)\geq 24\) are all over the place, and seem to be behind
+the variability.</p>
 
-<p>There are \(n+2\) variables (the \(n+1\) coefficients \(a_j\)
-and \(\epsilon\)), and \(n+2\) constraints (one for each
-extremum), so it’s a straight linear solve.</p>
+<h3 id="yet-another-meaning-for-aliasing">Yet another meaning for aliasing</h3>
 
-<p>Of course, we don’t actually know these extremal error points
-\(x_i\).  The Remez algorithm works because we can initialise them
-with an educated guess, find the corresponding coefficients, construct
-a new approximation from these coefficients, and update (some) of the
-extremal points from the new approximation.  In theory this process
-converges (infinitely) toward the optimal coefficients.  In practice,
-numerical issues abound: solving a linear system is usually reasonably
-stable, but finding exact function extrema is quite another issue.
-The upside is that smart people like
-<a href="http://lol.zoy.org/wiki/oss/lolremez">Sam</a> and the
-<a href="http://www.boost.org/doc/libs/1_36_0/libs/math/doc/sf_and_dist/html/math_toolkit/toolkit/internals2/minimax.html">boost::math team</a>
-have already done the hard work for us.</p>
+<p>Something’s wrong with the caches.  We’ve found an issue with classic
+binary search – that splits the range at each iteration in the middle
+– on vectors of (nearly-)power-of-two size, in bytes.</p>
 
-<h2 id="a-linear-minimax-formulation">A linear minimax formulation</h2>
+<p><span class="pullquote-right" data-pullquote="nicely-aligned data will often map to the same cache lines.">
+Nearly all (cacheful) processors to this day map memory addresses to
+cache locations by taking the modulo with a power of two.  For
+example, with 1K cache lines of 64 bytes, <code>0xabcd = 43981</code> is mapped
+to \((43981\div 64)\mod 1024\).  This is as simple to understand as
+it is to implement: just select a short range of bits from the
+address.  It also has the side effect that nicely-aligned data will often map to the same cache lines.
+Two vectors of 64KB each, allocated at 0x10000 and 0x20000, have the
+unfortunate property that, for each index, the data at that index in
+both vectors will map to the same cache lines in a direct-mapped cache
+with 1024 lines of 64 bytes each. When only one cache line is allowed
+per location, iterating through both vectors in the same loop will
+ping-pong the data from both vectors between cache and memory, without
+ever benefiting from caching.  The addresses alias each other, and
+that’s bad.
+</span></p>
 
-<p>The minimax objective can be reformulated as an optimisation problem
-over reals (or rationals, really) with linear constraints and
-objective, a
-<a href="http://en.wikipedia.org/wiki/Linear_programming">linear program</a>:</p>
-<div> $$\min_{e\in\mathbb{R}, a\in\mathbb{R}^{n+1}} e$$
-subject to $$\sum_{i=0}^n a_ix^i \leq f(x) + e\qquad\forall x\in B$$
-$$\sum_{i=0}^n a_ix^i \geq f(x) - e\qquad\forall x\in B$$ </div>
+<p>There are workarounds, on both the hardware and software sides.</p>
 
-<p>In words, we’re trying to find an error value \(e\) and \(n+1\)
-coefficients, such that the error \(|\tilde{f}(x)-f(x)|\quad\forall x\in
-B\) is at most \(e\): \(-e \leq \tilde{f}(x)-f(x)\leq e\).  The
-goal is to minimise that error value \(e\).</p>
+<p>Current X86s tend to avoid fast, direct-mapped, caches even at the
+first level:
+<a href="http://duartes.org/gustavo/blog/post/intel-cpu-caches">set-associative caches</a>
+are designed to handle a small number of collisions (like fixed-size
+buckets in hash tables), from 2-4 in the fastest levels to 8, 16 or
+more for last level caches.  This ensures that a program can access
+two similarly-aligned vectors in lockstep, without having each access
+to one vector evicting cached data from the other.  It’s far from
+perfect: a 2-way associative cache enables a loop over two vectors to
+work fine, but, as soon as the loop iterates over three or more
+vectors, it suddenly becomes much slower. Arguably more robust
+solutions involving prime moduli, hash functions, or other clever
+address-to-cache-line mappings have been proposed since the 80’s
+(<a href="http://www.kharbutli.com/Papers/Kharbutli_HPCA_04.pdf">this [pdf]</a> is a
+recent one, with a nice set of references to older work), but I don’t
+think any has ever gained traction.</p>
 
-<p>We’re still left with the issue that \(B\) is very large: infinite,
-or even uncountable.  It doesn’t make sense to have two constraints
-for each \(x\in B\)!  Our goal is to find approximations in floating
-point arithmetic, which helps a bit: there’s actually a finite number
-of floating point (single, double or otherwise) values in any range.
-That number, albeit finite, still tends to be impractically large.
-We’ll have to be clever and find a good-enough subset of constraints.
-Note that, unlike the Remez algorithm, we can have as many constraints
-as we want; we never have to remove constraints, so the quality of the
-approximation can only improve.</p>
+<p>On the software end, smart memory allocators try to alleviate the
+problem by offsetting large allocations away from the beginning of
+pages.  Inserting a variable number of cache lines as padding
+(<em>before</em> allocated data) minimises the odds that vector traversals
+suffer from aliasing.  Sadly, that’s not yet the case for SBCL. In
+fact, as well as pretty much guaranteeing that large vectors will
+alias each other, SBCL’s allocator also makes cache-aware traversals
+hard to write: the allocator aligns the vector’s header (two words for
+a length and type descriptor) rather than its data.  That’s the kind
+of consideration that is too easily disregarded when designing a
+runtime system; getting it right after the fact probably isn’t hard,
+but may call for some unsavory hacks.</p>
 
-<p>This method is an interesting alternative to the Remez algorithm
-because it always converges, finitely, even with (or rather, due to)
-floating-point arithmetic.  It will also makes our future work on a
-branch-and-cut method marginally easier.</p>
+<h3 id="aliasing-in-binary-search">Aliasing in binary search</h3>
 
-<h2 id="rational-simplex-for-exact-solutions-to-linear-programs">Rational simplex for exact solutions to linear programs</h2>
+<p>Binary search doesn’t involve lockstep traversals over multiple
+vectors. However, when the vector to search into is of power-of-two
+length (or almost), the first few accesses are to similarly-aligned
+addresses (e.g. in a 64KB vector of 32-bit values, it could access
+indices 0x8000, 0x4000, 0x2000, 0x1000, etc.). Similar issues crop up
+when working with power-of-two-sized matrices, or when bit-reversing a
+vector.  We can easily convince ourselves that the access patterns
+will be similarly structured when binary searching vectors of size
+slightly (on the order of one or two cache lines) shorter or longer
+than powers of two.</p>
 
-<p>We’ve reformulated our problem as a finite linear program, assuming
-that we know for which point \(x\in B\) we should generate
-constraints.  How can we find solutions?</p>
+<p>On my X5660, the L1D cache has 512 lines of 64 bytes each, L2 4096
+lines, and L3 196608 lines (12 MB).  Crucially, the L1 and L2 caches are
+8-way set-associative, and the L3 16-way.  The
+<a href="http://en.wikipedia.org/wiki/Translation_lookaside_buffer">TLBs</a> are
+4-way associative, and the first level has 64 entries and the second
+512.</p>
 
-<p>LPs are usually solved with variants of the
-<a href="http://en.wikipedia.org/wiki/Simplex_algorithm">simplex algorithm</a>, a
-<em>combinatorial</em> algorithm.  This is the key part: while most of the
-algorithm is concerned with numerical computations (solving linear
-systems, etc.), these are fed to predicates that compare values, and
-the results of the comparisons drive each iteration of the algorithm.
-The key insight in the simplex algorithm is that there exists at least
-one optimal solution in which all but a small set of variables (the
-basis) are set to zero, and the value of the basic variables can then
-be deduced from the constraints.  Better: every suboptimal (but
-feasible) basis can be improved by only substituting one variable in
-the basis.  Thus, each iteration of the algorithm moves from one basis
-to a similar, but better, one, and numerical operations only determine
-whether a basis is feasible and is an improvement.  Very little
-information has to persist across iterations: only the set of basic
-variables.  This means that there is no inherent accumulation of
-round-off errors, and that we can borrow tricks from the computational
-geometry crowd.</p>
+<p><span class="pullquote-right" data-pullquote="so many reads are to locations that map to the same cache lines that a tiny working set exceeds the L1D&#8217;s wayness.">
+The number of L1 cache misses explodes on vectors of 512K elements and
+more.  The L1D is designed so that only contiguous ranges of
+\(64\times 512\div 8 = 4 \textrm{KB}\) (one normal page) can be cached without
+collisions.  For \(\lg(n)=19\), binary search needs 10 reads that all
+map to the same set of cache lines before reducing the candidate range
+below 4 KB.   Once the first level cache’s 8-way associativity has
+been exhausted, binary search on a vector of 512K 4-byte
+elements still has to read two more locations before hitting a different set
+(bucket) of cache lines.  This accounts for the L1 misses: 
+so many reads are to locations that map to the same cache lines that a tiny working set exceeds the L1D’s wayness.
+To make things worse,
+<a href="http://en.wikipedia.org/wiki/Cache_algorithms#Least_Recently_Used">LRU</a>-style
+replacement strategy are useless.  We have a similar issue on TLB
+misses (plus, filling the TLB on misses means additional data cache
+misses to walk the page table).
+</span></p>
 
-<p><a href="http://www.dii.uchile.cl/~daespino">Daniel Espinoza</a> implemented
-that, and much more, for his PhD thesis on exact linear and integer
-program solvers.
-<a href="http://www.dii.uchile.cl/~daespino/ESolver_doc/main.html">QSopt-Exact</a>
-is a GPL fork of a fairly sophisticated simplex and branch and cut
-program.  It exploits the fact that the simplex algorithm is
-combinatorial to switch precision on the fly, using hardware floats
-(single, double and long), software quad floats, multiprecision
-floats, and rational arithmetic.  Unfortunately, the full solver
-segfaults when reporting solution values on my linux/x86-64 machine.
-Still, the individual simplex solvers (with double floats, quad
-floats, multiprecision floats and rationals) work fine.  What I
-decided to do was to sidestep the issue and call the solvers in
-increasing order of precision, while saving the basis between calls.
-The double float implementation is executed first, and when it has
-converged (within epsilon), a more precise solver is called, starting
-from the basis on which the previous solver converged, etc.  The final
-rational solver is exact, but very slow.  Hopefully, previous solvers,
-while inexact, will have converged to very nearly-optimal bases,
-leaving only a couple iterations for the exact solver.</p>
+<p>In contrast, the L3 is large enough and has a high-enough
+associativity to accomodate the binary search.</p>
 
-<p><a href="https://github.com/pkhuong/rational-simplex">Rational-simplex</a> is a
-one-file CL system that wraps QSopt-Exact and offers a trivial
-modeling language.  We’ll use it a lot in the sequel.</p>
+<p><span class="pullquote-right" data-pullquote="Sometimes the OS hands us a range of physical pages that works well for our workloads, other times it doesn&#8217;t.">
+That leaves the wildly-varying miss counts for the second level cache.
+The L1D cache is able to fullfill some reads, which explains why L2
+misses only appear on larger searches.  The variation is surprising.
+What happens is that, on the X5660, caching depends on physical memory
+addresses, and those are fully under the OS’s control and hidden from
+userspace.  The exception is the L1D cache, in which the <em>sets</em> only
+cover 4 KB (one normal page).  It’s just small enough that the bits used
+to determine the set are always the same for both virtual and physical
+addresses, and the CPU can thus perform part of the lookup in parallel with
+address translation. This hidden variable explains the large
+discrepancies in L2 miss counts that is then reflected in
+runtimes. Sometimes the OS hands us a range of physical pages that works well for our workloads, other times it doesn’t.
+Not only is there nothing we can do about it, but we also can’t even
+know about it, except indirectly, or with unportable hacks.  Finally,
+the OS can’t change the mapping without copying data, so that happens
+very rarely, and memory allocators tend to minimise syscalls by keeping
+previously-allocated address space around.  In effect, an application
+that’s unlucky in its allotment of physical addresses can do little
+about it and can’t really tell except by logging bad performance.
+</span></p>
 
-<h2 id="solving-the-minimax-lp-with-rational-simplex">Solving the minimax LP with rational-simplex</h2>
+<h2 id="searching-for-a-solution">Searching for a solution</h2>
 
-<p><a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/linf-fit.lisp">linf-fit.lisp</a>
-implements a minimax linear fit in 60 LOC (plus a couple kLOC in QSopt
-:).</p>
+<p>Classic binary search on power-of-two sized vectors is a pathological
+case for small (i.e. fast) caches and TLBs, and its performance varies
+a lot based on physical address allocation, something over which we
+have no control.  The previous section only covered a trivial case,
+and real workloads will be even worse.  We could try to improve
+performance and consistency by introducing padding, either after each
+element or between chunks of elements, but I’d prefer a different
+solution that preserves the optimal density and simplicity of sorted
+vectors.</p>
 
-<p>Each
-<a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/linf-fit.lisp#L20">point</a>
-is defined by <code>loc</code>, the original value for <code>x</code>, a sequence of
-parameters (in this case, powers of <code>x</code> as we’re building
-polynomials), and the <code>value</code> to approximate, \(f(x)\).</p>
+<p><span class="pullquote-right" data-pullquote="The only remaining knob to improve the performance and consistency of binary search is the division factor.">
+There are many occurrences of two as a magic number in our test cases.
+On the hardware side, cache lines are power-of-two sizes, as are L1
+and L2 set (buckets) counts.  On the software side, each unsigned is
+4-bytes long, the vectors are of power-of-two lengths, and binary
+search divides the size of the candidate range by two.  There’s little
+we can do about hardware, and changing our interface to avoid round
+element sizes or counts isn’t always possible.  The only remaining knob to improve the performance and consistency of binary search is the division factor.
+</span></p>
 
-<p><a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/linf-fit.lisp#L41">solve-fit</a>
-takes a sequence of such points, and solves the corresponding LP with
-QSopt-Exact:</p>
+<p>The successor of two is three.  How can we divide a power-of-two size
+vector in three subranges? One way is to vary the size of the
+subdivided range, and keep track of it at runtime.  There’s a simpler
+workaround: it’s all right, if suboptimal, to search over a wider
+range than strictly necessary, as long as no out-of-bounds access is
+performed.  For example, a vector of length 8 can be split at indices
+\(\lceil 8/3\rceil = 3\) and \(8-3 = 5\); the next range will be either
+[0, 3), [3, 5) or [5, 8). The middle range is of length 2 rather than 3,
+but the search is still correct if it’s executed over [3, 6) instead of [3, 5).</p>
 
-<pre><code>(defun solve-fit (points)
-  (lp:with-model (:name "linf fit" :sense :minimize)
-    (let ((diff  (lp:var :name "diff" :obj 1))
-          (coefs (loop for i below *dimension* collect
-                       (lp:var :name (format nil "coef ~A" i)
-                               :lower nil))))
-      (map nil (lambda (point)
-                 (let ((lhs (linexpr-dot coefs
-                                         (point-parameters point)))
-                       (rhs (point-value point)))
-                   (lp:post&lt;= lhs (lp:+ rhs diff))
-                   (lp:post&gt;= lhs (lp:- rhs diff))))
-           points)
-      (multiple-value-bind (status obj values)
-          (lp:solve)
-        (assert (eql status :optimal))
-        (values obj (map 'simple-vector
-                         (lambda (var)
-                           (gethash var values 0))
-                         coefs))))))
-</code></pre>
+<p>Ternary search functions were generated for each vector size; when the last
+range was of length 2, a binary search step was executed instead.  The example
+below is for a vector of length 32K. It implements a lower bound search, 
+assuming that the key is greater than or equal to the first element in the 
+vector (otherwise, the first element is spuriously considered as the lower bound).</p>
 
-<p>With a fresh model in scope in which the goal is to minimise the
-objective function, a variable, <code>diff</code>, is created to represent the
-error term \(e\), and one variable for each coefficient in the
-polynomial (<code>coefs</code>) list; each coefficient is unbounded both from
-below and above.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>ternary search over 32768 elements </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">size_t</span> <span class="nf">t_15</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">     <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">base</span> <span class="o">=</span> <span class="n">vector</span><span class="p">;</span>
+</span><span class="line">     <span class="n">TERNARY</span><span class="p">(</span><span class="mi">10923u</span><span class="p">,</span> <span class="mi">21845u</span><span class="p">);</span>       <span class="cm">/*      32768 -&gt; 10923      */</span>
+</span><span class="line">     <span class="n">TERNARY</span><span class="p">(</span><span class="mi">3641u</span><span class="p">,</span> <span class="mi">7282u</span><span class="p">);</span>         <span class="cm">/*      10923 -&gt; 3641       */</span>
+</span><span class="line">     <span class="n">TERNARY</span><span class="p">(</span><span class="mi">1214u</span><span class="p">,</span> <span class="mi">2427u</span><span class="p">);</span>         <span class="cm">/*       3641 -&gt; 1214       */</span>
+</span><span class="line">     <span class="n">TERNARY</span><span class="p">(</span><span class="mi">405u</span><span class="p">,</span> <span class="mi">809u</span><span class="p">);</span>           <span class="cm">/*       1214 -&gt; 405        */</span>
+</span><span class="line">     <span class="n">TERNARY</span><span class="p">(</span><span class="mi">135u</span><span class="p">,</span> <span class="mi">270u</span><span class="p">);</span>           <span class="cm">/*        405 -&gt; 135        */</span>
+</span><span class="line">     <span class="n">TERNARY</span><span class="p">(</span><span class="mi">45u</span><span class="p">,</span> <span class="mi">90u</span><span class="p">);</span>             <span class="cm">/*        135 -&gt; 45         */</span>
+</span><span class="line">     <span class="n">TERNARY</span><span class="p">(</span><span class="mi">15u</span><span class="p">,</span> <span class="mi">30u</span><span class="p">);</span>             <span class="cm">/*         45 -&gt; 15         */</span>
+</span><span class="line">     <span class="n">TERNARY</span><span class="p">(</span><span class="mi">5u</span><span class="p">,</span> <span class="mi">10u</span><span class="p">);</span>              <span class="cm">/*         15 -&gt; 5          */</span>
+</span><span class="line">     <span class="n">TERNARY</span><span class="p">(</span><span class="mi">2u</span><span class="p">,</span> <span class="mi">3u</span><span class="p">);</span>               <span class="cm">/*          5 -&gt; 2          */</span>
+</span><span class="line">     <span class="n">BINARY</span><span class="p">(</span><span class="mi">1u</span><span class="p">);</span>                    <span class="cm">/*          2 -&gt; 1          */</span>
+</span><span class="line">     <span class="k">return</span> <span class="n">base</span><span class="o">-</span><span class="n">vector</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Then, for each point, the two corresponding constraints are added to
-the current model.</p>
+<p>Similar code was generated for binary searches.  We still have to define the expansion
+for each <code>TERNARY</code> or <code>BINARY</code> step.</p>
 
-<p>Finally, the model is solved, and a vector of optimal coefficients is
-extracted from the <code>values</code> hash table.</p>
+<p><code>BINARY</code> is easy: we simply reuse the logic from the previous post on binary search and
+branch mispredictions.</p>
 
-<p>We can easily use <code>solve-fit</code> to <em>exactly</em> solve minimax instances
-with a couple thousands of points in seconds:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>binary splitting step </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define BARRIER do { __asm__ volatile(&quot;&quot; ::: &quot;memory&quot;); } while (0)</span>
+</span><span class="line">
+</span><span class="line"><span class="cp">#define BINARY(I) do {                                          \</span>
+</span><span class="line"><span class="cp">                base = ((base)[I] &lt;= key)?base+I:base;          \</span>
+</span><span class="line"><span class="cp">                BARRIER;                                        \</span>
+</span><span class="line"><span class="cp">        } while (0)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<pre><code>CL-USER&gt; (let ((*dimension* 5) ; degree = 4
-               (*loc-value* (lambda (x)
-                              (rational (exp (float x 1d0))))))
-           ;; function to fit: EXP. Converting the argument to
-           ;; a double-float avoid the implicit conversion to
-           ;; single, and we translate the result into a rational
-           ;; to avoid round-off
-           (solve-fit (loop for x from -1 upto 1 by 1/2048
-                       ;; create a point for x in 
-                       ;; -1 ... -1/2048,0,1/2048, ... 1
-                            collect (make-point x))))
-dbl_solver: 0.510 sec 0.0 (optimal)      ; solve with doubles
-ldbl_solver: 0.260 sec 0.0 (optimal)     ;   with long doubles
-float128_solver: 0.160 sec 0.0 (optimal) ;   with 128 bit quads
-mpf_solver: 1.110 sec 0.0 (optimal)      ;   with multi-precision floats
-mpq_solver: 0.570 sec 0.0 (optimal)      ;   with rationals
-3192106304786396545997180544707814405/5839213465929014357942937289929760178176
-#(151103246476511404268507157826110201499879/151089648430913246511773502376932544610304
-  28253082057367857587607065964265169406677/28329309080796233720957531695674852114432
-  13800443618507633486386515045130833755/27665340899215071993122589546557472768
-  9582651302802548702442907342912775/54033868943779437486567557708120064
-  2329973989305264632365349185439/52767450140409606920476130574336)
-</code></pre>
+<p>The compiler barrier was the most straightforward way I found to
+prevent gcc from noticing potentially-redundant accesses and trying to
+optimise them away by inserting branches.</p>
 
-<p>Or, as more readable float values:</p>
+<p><code>TERNARY</code> present a choice: do we try to expose
+<a href="http://en.wikipedia.org/wiki/Memory-level_parallelism">memory-level parallelism (MLP)</a>
+and read from both locations in parallel before comparing them to the
+key, or do we instead avoid useless memory traffic and make the second
+load depend on the result of the first comparison?</p>
 
-<pre><code>CL-USER&gt; (values (float * 1d0) (map 'simple-vector (lambda (x)
-                                                     (float x 1d0))
-                                     (second /)))
-5.466671707434376d-4 ; (estimated) error bound
-#(1.0000899998493569d0 0.997309252293765d0 0.49883511895923116d0
-  0.177345274179293d0 0.04415551600665573d0) ; coefficients
-</code></pre>
+<p>The first implementation is simple.</p>
 
-<p>So, we have an approximation that’s very close to what
-<a href="http://lol.zoy.org/wiki/doc/maths/remez/tutorial-exponential">LolRemez</a>
-finds for \(\exp\) and degree 4.  However, we’re reporting a maximal
-error of 5.466672e-4, while LolRemez finds 5.466676e-4.  Who’s wrong?</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>ternary splitting step with concurrent loads </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define TERNARY(I, J) do {                                      \</span>
+</span><span class="line"><span class="cp">                unsigned * b1 = base+I, *b2 = base+J;           \</span>
+</span><span class="line"><span class="cp">                unsigned mid1 = *b1, mid2 = *b2;                \</span>
+</span><span class="line"><span class="cp">                BARRIER;                                        \</span>
+</span><span class="line"><span class="cp">                base = (mid1 &lt;= key)?b1:base;                   \</span>
+</span><span class="line"><span class="cp">                base = (mid2 &lt;= key)?b2:base;                   \</span>
+</span><span class="line"><span class="cp">        } while(0)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<h2 id="tightening-the-model">Tightening the model</h2>
+<p>The second is only a bit more convoluted:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>ternary splitting step without useless loads </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define TERNARY(I, J) do {                                      \</span>
+</span><span class="line"><span class="cp">                unsigned * b1 = base+I, *b2 = base+J;           \</span>
+</span><span class="line"><span class="cp">                b1 = (*b2 &lt;= key)?b2:b1;                        \</span>
+</span><span class="line"><span class="cp">                BARRIER;                                        \</span>
+</span><span class="line"><span class="cp">                base = (*b1 &lt;= key)?b1:base;                    \</span>
+</span><span class="line"><span class="cp">                BARRIER;                                        \</span>
+</span><span class="line"><span class="cp">        } while(0)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>As is usually the case, we’re (slightly) wrong! The complete LP
-formulation has constraints for each possible argument \(x\in B\).
-We only considered 4k equidistant such values in the example above.
-The model we solved is missing constraints: it is a
-<a href="http://en.wikipedia.org/wiki/Relaxation_%28approximation%29">relaxation</a>.
-We’re solving that relaxation exactly, so the objective value it
-reports is a lower bound on the real error, and on the real optimal
-error.  At least, we don’t have any design constraint, and the
-coefficients are usable directly.</p>
+<p>If the first comparison succeeds, the second will repeat the exact
+same operation, and store the pointer in <code>base</code>.</p>
 
-<p>We shall not settle for an approximate solution.  We must simply add
-constraints to the model to make it closer to the real problem.</p>
+<p>Finally, a quaternary search was also implemented: it enables
+memory-level parallelism by reading from three locations at each
+iteration to divide the range’s size by four.  As the code snippet
+below shows, the high-level access patterns are otherwise exactly the
+same as binary search, and a two-way division is invoked when the
+range is down to two elements.</p>
 
-<p>Obviously, adding constraints that are already satisfied by the
-optimal solution to the current relaxation won’t change anything.
-Adding constraints can only remove feasible solutions, and the current
-optimal solution remains feasible; since it was optimal before
-removing some candidates, it still is after.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>quaternary search over 32768 elements </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define QUATERNARY(I, J, K) do {                                        \</span>
+</span><span class="line"><span class="cp">                unsigned * b1 = base+I, *b2 = base+J, *b3 = base+K;     \</span>
+</span><span class="line"><span class="cp">                unsigned mid1 = *b1, mid2 = *b2, mid3 = *b3;            \</span>
+</span><span class="line"><span class="cp">                BARRIER;                                                \</span>
+</span><span class="line"><span class="cp">                base = (mid1 &lt;= key)?b1:base;                           \</span>
+</span><span class="line"><span class="cp">                base = (mid2 &lt;= key)?b2:base;                           \</span>
+</span><span class="line"><span class="cp">                base = (mid3 &lt;= key)?b3:base;                           \</span>
+</span><span class="line"><span class="cp">        } while(0)</span>
+</span><span class="line">
+</span><span class="line"><span class="kt">size_t</span> <span class="nf">q_15</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">     <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">base</span> <span class="o">=</span> <span class="n">vector</span><span class="p">;</span>
+</span><span class="line">     <span class="n">QUATERNARY</span><span class="p">(</span><span class="mi">8192u</span><span class="p">,</span> <span class="mi">16384u</span><span class="p">,</span> <span class="mi">24576u</span><span class="p">);</span> <span class="cm">/*      32768 -&gt; 8192       */</span>
+</span><span class="line">     <span class="n">QUATERNARY</span><span class="p">(</span><span class="mi">2048u</span><span class="p">,</span> <span class="mi">4096u</span><span class="p">,</span> <span class="mi">6144u</span><span class="p">);</span> <span class="cm">/*       8192 -&gt; 2048       */</span>
+</span><span class="line">     <span class="n">QUATERNARY</span><span class="p">(</span><span class="mi">512u</span><span class="p">,</span> <span class="mi">1024u</span><span class="p">,</span> <span class="mi">1536u</span><span class="p">);</span> <span class="cm">/*       2048 -&gt; 512        */</span>
+</span><span class="line">     <span class="n">QUATERNARY</span><span class="p">(</span><span class="mi">128u</span><span class="p">,</span> <span class="mi">256u</span><span class="p">,</span> <span class="mi">384u</span><span class="p">);</span>  <span class="cm">/*        512 -&gt; 128        */</span>
+</span><span class="line">     <span class="n">QUATERNARY</span><span class="p">(</span><span class="mi">32u</span><span class="p">,</span> <span class="mi">64u</span><span class="p">,</span> <span class="mi">96u</span><span class="p">);</span>     <span class="cm">/*        128 -&gt; 32         */</span>
+</span><span class="line">     <span class="n">QUATERNARY</span><span class="p">(</span><span class="mi">8u</span><span class="p">,</span> <span class="mi">16u</span><span class="p">,</span> <span class="mi">24u</span><span class="p">);</span>      <span class="cm">/*         32 -&gt; 8          */</span>
+</span><span class="line">     <span class="n">QUATERNARY</span><span class="p">(</span><span class="mi">2u</span><span class="p">,</span> <span class="mi">4u</span><span class="p">,</span> <span class="mi">6u</span><span class="p">);</span>        <span class="cm">/*          8 -&gt; 2          */</span>
+</span><span class="line">     <span class="n">BINARY</span><span class="p">(</span><span class="mi">1u</span><span class="p">);</span>                    <span class="cm">/*          2 -&gt; 1          */</span>
+</span><span class="line">     <span class="k">return</span> <span class="n">base</span><span class="o">-</span><span class="n">vector</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>So, we’re looking for constraints that are violated to add them to our
-current model.  In the optimisation lingo, we’re doing constraint (or
-row, or cut) generation.  In our problem, this means that we’re
-looking for points such that the error from the current approximation
-is greater than the estimate reported as our solution value.  We’ll
-take a cue from the Remez algorithm and look for extremal violation
-points.</p>
+<p>Comparing all four implementations (binary search, ternary search with
+parallel loads, ternary search with sequential loads, and quaternary
+search with parallel loads) helps us understand the respective impact
+of minimising aliasing issues and exploiting memory-level parallelism.</p>
 
-<p>Extrema of differentiable functions are found where the first
-derivative is zero.  Our approximation function is a polynomial and is
-trivially differentiated.  We’ll assume that the user provides the
-derivative of the function to approximate.  The (signed) error term is
-a difference of differentiable functions \(\tilde{f}-f\), and its
-first derivative is simply the difference of the derivatives.</p>
+<p>Theoretically, the serial ternary search is the second best
+implementation after binary search, which is optimal in terms of reads
+per reduction in candidate range size: it executes (expected count,
+for uniformly-distributed searches) 1.667 reads to divide the
+range by three, so \(1.6\overline{6}/\lg(3) \approx 1.05\) times as
+many comparisons as binary search, versus approximately 1.26 and 1.5
+times as many for parallel ternary and quadratic searches.  On the
+other hand, if we can expect independent reads to be executed in
+parallel, parallel ternary search will only perform \(1/\lg(3)
+\approx 0.63\) times as many batches of reads as binary search, and
+quaternary search half as many.</p>
 
-<p>Assuming that the derivative is continuous, we can use the
-<a href="http://en.wikipedia.org/wiki/Intermediate_value_theorem">intermediate value theorem</a>
-to find its roots: for each root, there is a (non-empty, open)
-neighbourhood such that the derivative is negative to the left of the
-root and positive to the right, or inversely.</p>
+<p>The next graph reports the performance of the methods when searching
+for the first element in sorted vectors, just to make sure we actually
+handle that case right.  One would hope that the ternary searches
+(‘st’ for the serial loads, and ‘ter’ for the concurrent loads)
+improve on the binary (‘bin’) or quaternary (‘quat’) searches (that
+both suffer from aliasing issues); this is the reason we’re interested
+in them.  We do observe a marked improvement in runtimes, and the second
+graph lets us believe it is indeed due to more successful caching
+(beware, the colours correspond to cache levels there, not search
+algorithms; there’s one facet for each search algorithm instead).
+Interestingly, \(\lg(n)=30\) is a bit faster than \(\lg(n)=29\)
+for the ternary searches; I can’t even hazard a guess as to what’s
+going on there.</p>
 
-<p>This is what
-<a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/find-extrema.lisp">find-extrema.lisp</a>
-implements.  In optimisation-speak, that’s our separation algorithm:
-we use it to find (maximally-) violated constraints that we ought to
-add to our relaxation.</p>
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/prelim-first-cycles.png" /></p>
 
-<p><a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/find-extrema.lisp#L71">find-root</a>
-takes a function, a lower bound, and an upper bound on the root, and
-first performs a
-<a href="http://en.wikipedia.org/wiki/Bisection_method">bisection search</a>
-until the range is down to 256 distinct double values.  Then, the 256
-values in the range are scanned linearly to find the minimal absolute
-value.  I first tried to use
-<a href="http://en.wikipedia.org/wiki/Newton's_method">Newton’s method</a>, but
-it doesn’t play very well with rationals: although convergence is
-quick, denominators grow even more quickly.  There are also potential
-issues with even slightly inexact derivatives.  This is why the final
-step is a linear search.  The method will work as long as we have
-correctly identified a tiny interval around the extremum; the interval
-can be explored exhaustively without involving the derivative.</p>
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/prelim-first-cache-misses.png" /></p>
 
-<p><a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/find-extrema.lisp#L90">%approximation-error-extrema</a>
-finds candidate ranges.  The sign of the derivative at each pair of
-consecutive points currently considered in the model is examined; when
-they differ, the range is passed to <code>find-root</code>.  If we find a new
-extremum, it is pushed on a list.  Once all the pairs have been
-examined, the maximal error is returned, along with the list of new
-extrema, and the maximal distance between new extrema and the
-corresponding bounds.  As the method converges, extrema should be
-enclosed more and more tightly by points already considered in our
-constraints.</p>
+<p><span class="pullquote-right" data-pullquote="Additional MLP when the accesses cause many more cache misses doesn&#8217;t help.">
+Additional MLP when the accesses cause many more cache misses doesn’t help. If
+anything, the performance of quaternary search is worse and
+less consistent than that of binary search.  However, it does accelerate
+ternary search, for which caches work fine.  The serial ternary search
+(‘st’) only improves on the binary or quaternary search for
+\(\lg(n)\geq 20\), where the classic search begin to really suffer
+from aliasing issues, but the ternary search with parallel loads
+(‘ter’) is always on par with the classic searches, or quicker.
+</span></p>
 
-<p>There are frequent calls to
-<a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/utility.lisp#L18">round-to-double</a>:
-this function is used to take an arbitrary real, convert it to the
-closest double value, and convert that value back in a rational.  The
-reason we do that is that we don’t want to generate constraints that
-correspond to values that cannot be represented as double floats: not
-only are they superfluous, but they also tend to have large
-denominators, and those really slow down the exact solver.</p>
+<p>The next set of graph compares the performance of the methods when
+searching for random (present) keys; the same seed was used in each
+execution and for each method to minimise differences.</p>
 
-<p>Finally, the two pieces are put together in
-<a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/driver.lisp">driver.lisp</a>.
-The constraints are initialised from 4096 equidistant points in the
-range over which we optimise.  Then, for each iteration, the
-relaxation is solved, new extrema are found and added to the
-relaxation, until convergence.  Convergence is easy to determine: when
-the error reported by the LP (the relaxation) over the constraint
-subset is the same as the actual error, we are done.</p>
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/prelim-random-cycles.png" /></p>
 
-<pre><code>CL-USER&gt; (time
-          (let ((*trace-output* (make-broadcast-stream)))
-            ;; muffle the simplex solver log
-            (find-approximation 4 -1 1
-                                (lambda (x)
-                                  (rational (exp (float x 1d0))))
-                                (lambda (x)
-                                  (rational (exp (float x 1d0)))))))
-          ;  predicted error  actual       difference           log distance of new points
-Iteration    1: 5.4666716e-4 5.466678e-4 [6.5808034e-10] (4 new extrema, delta 40.42 bit)
-Iteration    2: 5.4666746e-4 5.4666775e-4 [3.25096e-10] (4 new extrema, delta 41.15 bit)
-Iteration    3: 5.466676e-4 5.466677e-4 [9.041601e-11] (4 new extrema, delta 40.89 bit)
-Iteration    4: 5.4666764e-4 5.4666764e-4 [2.4131829e-11] (4 new extrema, delta 38.30 bit)
-Iteration    5: 5.4666764e-4 5.4666764e-4 [5.3669834e-12] (4 new extrema, delta 39.04 bit)
-Iteration    6: 5.4666764e-4 5.4666764e-4 [2.1303722e-12] (4 new extrema, delta 36.46 bit)
-Iteration    7: 5.4666764e-4 5.4666764e-4 [8.5113746e-13] (4 new extrema, delta 37.19 bit)
-Iteration    8: 5.4666764e-4 5.4666764e-4 [5.92861e-14] (4 new extrema, delta 36.93 bit)
-Iteration    9: 5.4666764e-4 5.4666764e-4 [8.7291163e-14] (4 new extrema, delta 34.34 bit)
-Iteration   10: 5.4666764e-4 5.4666764e-4 [2.7814624e-14] (4 new extrema, delta 35.08 bit)
-Iteration   11: 5.4666764e-4 5.4666764e-4 [1.22935355e-14] (4 new extrema, delta 33.82 bit)
-Iteration   12: 5.4666764e-4 5.4666764e-4 [6.363092e-15] (4 new extrema, delta 34.56 bit)
-Iteration   13: 5.4666764e-4 5.4666764e-4 [2.6976767e-15] (4 new extrema, delta 31.97 bit)
-Iteration   14: 5.4666764e-4 5.4666764e-4 [6.2273127e-16] (4 new extrema, delta 31.71 bit)
-Iteration   15: 5.4666764e-4 5.4666764e-4 [3.1716093e-16] (4 new extrema, delta 32.44 bit)
-Iteration   16: 5.4666764e-4 5.4666764e-4 [8.9307225e-17] (4 new extrema, delta 29.86 bit)
-Iteration   17: 5.4666764e-4 5.4666764e-4 [2.986885e-17] (4 new extrema, delta 29.60 bit)
-Iteration   18: 5.4666764e-4 5.4666764e-4 [8.047477e-17] (4 new extrema, delta 30.33 bit)
-Iteration   19: 5.4666764e-4 5.4666764e-4 [0.0e+0] (4 new extrema, delta 27.75 bit)
-Evaluation took:
-  153.919 seconds of real time    ; includes time spent in the LP solvers
-  43.669636 seconds of total run time (39.078488 user, 4.591148 system)
-  [ Run times consist of 2.248 seconds GC time, and 41.422 seconds non-GC time. ]
-  28.37% CPU
-  245,610,372,128 processor cycles
-  4,561,238,704 bytes consed
-  
-4046879766238553594956027226378928284211150354828640757733860080712233114910799/7402816194767429570294393430906636383377554724586974324818463099198772886301048832
-#(925435306122623901577988826638313570454904960173764226165130358296546098660735739/925352024345928696286799178863329547922194340573371790602307887399846610787631104
-  6557329860867414742326673804552068829044003331586895788335382835917/6575021589199030076761681434499916661609079970484769650357093605918
-  1639925832159462899796569909691517124754835951733786891469617405863/3287510794599515038380840717249958330804539985242384825178546802959
-  583024503858777554811473359621837746265838166280012537010086877260/3287510794599515038380840717249958330804539985242384825178546802959
-  145161740826348143502214435074903924097159484388538508594721873208/3287510794599515038380840717249958330804539985242384825178546802959)
-</code></pre>
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/prelim-random-cache-misses.png" /></p>
 
-<p>Note that we found new extrema in the last iteration.  However, the
-error for those extrema wasn’t actually larger than for the points we
-were already considering, so the solution was still feasible and
-optimal.</p>
+<p>On this less easily cached workload, we find the same general effect
+on performance.  Ternary search works better on larger vectors, and
+ternary search with parallel loads is faster even on small vectors,
+although the quaternary search seems to fare better here.
+Reassuringly, the ternary searches are also much more consistent, both
+in runtimes (narrower spreads in the runtime jittered plot), and in
+average cache misses, even with different physical memory allocation.
+The cache miss graph shows that, not surprisingly, the versions with
+parallel loads (<em>quat</em>ernary and <em>ter</em>nary searches) incur more misses
+than the comparable methods (<em>bin</em>ary and <em>s</em>erial <em>t</em>ernary), but
+that doesn’t prevent them from executing faster (see the runtime
+graph).</p>
 
-<p>The fractions will be more readable in floats:
-    CL-USER&gt; (values (float * 1d0) (map ‘simple-vector
-                                        (lambda (x) (float x 1d0))
-                                        (second /)))
-    5.466676005138464d-4
-    #(1.0000900001021278d0 0.9973092516744465d0 0.4988351170902357d0
-      0.177345274368841d0 0.044155517622880315d0)</p>
+<p>I draw two conclusions from these preliminary experiments: avoiding
+aliasing issues with slightly suboptimal subdivision (ternary
+searches) is a win, and so is exposing memory level parallelism, even
+when it results in more cache misses.</p>
 
-<p>Now, we have nearly exactly (up to a couple bits) the same values as
-<a href="http://lol.zoy.org/wiki/doc/maths/remez/tutorial-exponential">LolRemez’s example</a>.
-Each iteration takes less than 10 seconds to execute; we could easily
-initialise the relaxation with even more than 4096 points.  We should
-expect the impact on the solution time to be cubic: most of the
-simplex iterations take place in the floating point solvers, and the
-number of iterations is usually linear in the number of variables and
-constraints, but the constraint matrix is dense so the complexity of
-each iteration should grow almost quadratically.  What really slows
-down the rational solver isn’t the number of variables or constraints,
-but the size of the fractions.  On the other hand, we see that some of
-the points considered by our constraints differ by \(\approx 30\)
-bit in their double representation: we would need a very fine grid
-(and very many points) to hit that.</p>
+<h2 id="enough-with-the-preliminaries">Enough with the preliminaries</h2>
 
-<p>In addition to being more easily generalised than the Remez algorithm,
-the LP minimax has no convergence issue: we will always observe
-monotone progress in the quality of the approximation and, except for
-potential issues with the separation algorithm, we could use the
-approach on any function.  There is however (in theory, at least) a
-gaping hole in the program: however improbable, all the extrema could
-be sandwiched between two points for which the derivative has the same
-sign.  In that case, the program will finish (there are no constraint
-to adjoin), but report the issue.  A finer initial grid would be one
-workaround.  A better solution would be to use a more robust
-root-finding algorithm.</p>
+<p>The initial results let us exclude straight binary and quaternary
+search from consideration, as well as serial ternary search.  We’re
+also know we’re looking for variants that avoid aliasing and expose
+memory-level parallelism.</p>
 
-<h2 id="whats-next">What’s next?</h2>
+<p>Binary search is theoretically optimal (one bit of information to
+divide the range in two), so we could also try a very close
+approximation that avoids aliasing issues caused by exact division in
+halves. I implemented a binary search, with an offset-ed
+midpoint. Rather than guiding the recursion by the exact middle, the
+offset binary search reads from the \(31/63\)rd index (rounded
+up), and iterates on a subrange \(32/63\)rd as long.  This is only
+slightly suboptimal: each lookup results in a division by \(63/32\),
+so that the off-center search goes through approximately 2.3% more
+lookups than a classic binary search.  Comparing other methods with
+the offset binary search should be equivalent to comparing them with
+an hypothetical classic binary search free of aliasing issues.</p>
 
-<p>The minimax polynomial fitting code is on github, as a
-<a href="https://github.com/pkhuong/rational-simplex/tree/master/demo/vanilla-fit">demo</a>
-for the
-<a href="https://github.com/pkhuong/rational-simplex">rational-simplex</a>
-system.  The code can easily be adapted to any other basis (e.g. the
-Fourier basis), as long as the coefficients are used linearly.</p>
+<p>Aliasing mostly happens at the beginning of the search, and ternary
+search is (theoretically) suboptimal. It may be faster to execute
+ternary search only at the beginning of the recursion (when aliasing
+stands in the way of caching frequently-used locations), and otherwise
+go for a classic binary search.  I generated ternary/binary searches
+by using ternary search steps until the candidate range size was less
+than the square root of the original range size, and then switching to
+regular binary search steps.</p>
 
-<p>In the next instalment, I plan to use the cut (constraint) generation
-algorithm we developed here in a
-<a href="http://en.wikipedia.org/wiki/Branch_and_cut">branch-and-cut</a>
-algorithm.  The new algorithm will let us handle side-constraints on
-the coefficients: e.g., fix as many as possible to zero, 1, -1 or
-other easy multipliers.</p>
+<p>Finally, quaternary search is interesting because it goes through
+roughly the same access patterns as binary search, but exposes more
+memory-level parallelism.  Again, a very close approximation suffices
+to avoid aliasing issues; I went with reads at \(16/63\),
+\(32/63\) and \(1-16/63 = 47/63\), and iteration on a subrange
+\(16/63\)rd as long.  Depending on the actual capacity for memory level
+parallelism during execution, it will perform between 51% and 152% as
+much work as binary search.</p>
 
-<p>If you found the diversion in Linear programming and cut generation
-interesting, that makes be very happy!  One of my great hopes is to
-see programmers, particularly compiler writers, better exploit the
-work we do in mathematical optimisation.  Sure, “good enough” is nice,
-but wouldn’t it be better to have solutions that are provably optimal
-or within a few percent of optimal?</p>
+<p>I also compared the performance of g++’s (4.7)
+<a href="http://www.sgi.com/tech/stl/set.html">STL set</a>, and google’s
+<a href="http://sparsehash.googlecode.com/svn/trunk/doc/dense_hash_set.html">dense_hash_set</a>,
+which don’t search sorted vectors, but do work with sets, ordered or
+not.</p>
 
-<p>If you want more of that stuff, I find that Chvatal’s book
-<a href="http://books.google.com/books?id=DN20_tW_BV0C">Linear Programming</a> is
-a very nice presentation of linear programming from both the usage and
-implementation points of view; in particular, it avoids the trap of
-simplex tableaux, and directly exposes the meaning of the operations
-(its presentation also happens to be closer to the way real solvers
-work).  Works like Wolsey’s
-<a href="http://books.google.com/books?id=x7RvQgAACAAJ">Integer Programming</a>
-build on the foundation of straight linear programs to tackle more
-complex problems, and introduce techniques we will use (or have used)
-here, like branch-and-bound or cut generation.  The classic
-undergraduate-level text on operations research seems to be Hillier
-and Lieberman’s
-<a href="http://books.google.com/books?id=SrfgAAAAMAAJ">Introduction to operations research</a>
-(I used it, and so did my father nearly 40 years ago)… I’m not sure
-that I’m a fan though.</p>
+<p><span class="pullquote-right" data-pullquote="For our data (32-bit unsigned), that&#8217;s about 700% additional space for each value.">
+The <code>set</code> in g++’s STL is a
+<a href="http://en.wikipedia.org/wiki/Red%E2%80%93black_tree">red-black tree</a>
+with a fair amount of space overhead: each node has three pointers
+(parent, and left and right children) and a colour enum. For our data (32-bit unsigned), that’s about 700% additional space for each value.
+Even before considering malloc overhead, the set uses eight times as
+much memory as a sorted vector.  Obviously, this affects the size of
+datasets that can fit in faster storage (data caches, TLB, or main
+memory)… on multi-socket machines, it also affects the size of
+datasets that can be processed before having to use memory assigned to
+a far-away socket.  This is why the comparison for set was only
+performed until 128M 32-bit elements; after that, there wasn’t enough
+memory (a bit less than 12 GB) on the socket.  In theory, the
+red-black tree is a bit less efficient than binary search, and
+probably in the same range as the ternary or quaternary searches:
+red-black trees trades potentially imperfect balancing (with some
+leaves at depth up to twice the optimum) for much quicker insertions.
+An interesting advantage of the red-black tree is that it naturally
+avoids aliasing issues: nodes will not tend to be laid out in memory
+following a depth-first, in-order traversal.
+</span></p>
+
+<p>Google’s <code>dense_hash_set</code> is an open-addressed hash table with
+quadratic probing.  It seems to target about 25% to 50% utilisation,
+so ends up using between four times or twice as much memory as the
+sorted vector.  I’ve seen horrible implementations of <code>tr1::hash</code> for
+unsigned values in (it’s the identity function on my mac), so I wrote
+a quick <a href="http://arxiv.org/abs/1011.5200">tabular hash function</a>.  It’s
+very similar to the obvious implementation, but the matrix is
+transposed: when some octets are identical (e.g. all-zero high-order
+bits), the table lookups will hit close-by addresses.  On the
+workloads considered here (small consecutive integers), the identity
+hash function would actually perform admirably well, but it would fail
+very hard on more realistic inputs.  The tabular hash function is
+closer to the ideal, and makes the performance of the hash table
+nearly independent of the values constituting the set.  It’s also
+pretty fast: we can expect the lookup table to fit in L2, and most
+probably in L1D, for the microbenchmarks used here.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>tabular hash functor for 32-bit unsigned </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">struct</span> <span class="n">hash_u32</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">size_t</span> <span class="n">tables</span><span class="p">[</span><span class="mi">256</span><span class="p">][</span><span class="mi">8</span><span class="p">];</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">hash_u32</span><span class="p">()</span>
+</span><span class="line">        <span class="p">{</span>
+</span><span class="line">                <span class="k">for</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">256</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                        <span class="k">for</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">j</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="mi">8</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                                <span class="kt">size_t</span> <span class="n">x</span> <span class="o">=</span> <span class="n">random</span><span class="p">(),</span> <span class="n">y</span> <span class="o">=</span> <span class="n">random</span><span class="p">();</span>
+</span><span class="line">                                <span class="n">tables</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">]</span> <span class="o">=</span> <span class="n">x</span><span class="o">^</span><span class="p">(</span><span class="n">y</span><span class="o">&lt;&lt;</span><span class="mi">32</span><span class="p">);</span>
+</span><span class="line">                        <span class="p">}</span>
+</span><span class="line">                <span class="p">}</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="kt">size_t</span> <span class="n">operator</span><span class="p">()</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">x</span><span class="p">)</span> <span class="k">const</span>
+</span><span class="line">        <span class="p">{</span>
+</span><span class="line">                <span class="kt">unsigned</span> <span class="n">x0</span> <span class="o">=</span> <span class="n">x</span><span class="o">&amp;</span><span class="mh">0xff</span><span class="p">,</span>
+</span><span class="line">                        <span class="n">x1</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="o">&gt;&gt;</span><span class="mi">8</span><span class="p">)</span><span class="o">&amp;</span><span class="mh">0xff</span><span class="p">,</span>
+</span><span class="line">                        <span class="n">x2</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="o">&gt;&gt;</span><span class="mi">16</span><span class="p">)</span><span class="o">&amp;</span><span class="mh">0xff</span><span class="p">,</span>
+</span><span class="line">                        <span class="n">x3</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="o">&gt;&gt;</span><span class="mi">24</span><span class="p">)</span><span class="o">&amp;</span><span class="mh">0xff</span><span class="p">;</span>
+</span><span class="line">                <span class="k">return</span> <span class="n">tables</span><span class="p">[</span><span class="n">x0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="o">^</span> <span class="n">tables</span><span class="p">[</span><span class="n">x1</span><span class="p">][</span><span class="mi">1</span><span class="p">]</span>
+</span><span class="line">                        <span class="o">^</span> <span class="n">tables</span><span class="p">[</span><span class="n">x2</span><span class="p">][</span><span class="mi">2</span><span class="p">]</span> <span class="o">^</span> <span class="n">tables</span><span class="p">[</span><span class="n">x3</span><span class="p">][</span><span class="mi">3</span><span class="p">];</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line"><span class="p">};</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p><span class="pullquote-right" data-pullquote="The dense hash table is a valid data point: it helps informs choices that happen in practice.">
+Comparing ordered sets with an unordered (hash) set may seem unfair:
+unordered sets expose fewer operations, and hash tables exploit that
+additional freedom to offer (usually) faster insertions and lookups.
+I don’t care. When I use a container, I don’t necessarily want an ordered or an unordered set.
+I wish to implement an algorithm, and that algorithm could well be
+adapted to exploit the strengths of either ordered or unordered sets.
+The dense hash table is a valid data point: it helps informs choices that happen in practice.
+</span></p>
+
+<p>First, let’s compare these implementations – the hash table (‘goog’),
+the offset binary search (‘ob’), the offset quaternary search
+(‘oq’), the red-black tree (‘stl’), the ternary/binary search (‘tb’),
+and the ternary search (‘ter’) – on the two extreme cases we’ve been
+considering so far: constant searches for the least element, and
+searches for random elements.  None of the algorithms suffer from
+aliasing issues, so the spread, if any, is smoothly covered.  This
+allows me to avoid the rather busy jittered scatter plot and instead
+only interpolate between median cycle counts, with shaded regions
+corresponding to the values between the 10th and 90th percentile.
+The lines for ‘goog’ and ‘stl’ end early: these data structures could
+not represent the largest sets in the 12GB of local memory available
+in each processor.  Also, now that we’ve dealt with the aliasing
+anomalies, I don’t feel it’s useful to graph the cache and TLB misses
+per size and implementation anymore.</p>
+
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/real-first-cycles.png" /></p>
+
+<p>When we always search for the least element in the set, the hash table
+obviously works very well: it only reads the same one or two cache
+lines, and they’re always in cache.  Surprisingly, the red-black tree
+is also a bit faster than the searches in sorted vectors… until it
+exhausts all available memory.  Looking at the behaviour on tiny
+sizes, it seems likely that the allocation sequence yields a nice
+layout for the first few steps of the search.  The offset binary
+search is both faster and more consistent than the classic binary
+search (shown in earlier graphs), but never faster than the offset
+quaternary search. The ternary/binary search is similarly never faster
+than the straight ternary search.</p>
+
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/real-random-cycles.png" /></p>
+
+<p><span class="pullquote-right" data-pullquote="Again, we find that the offset quaternary search dominates the offset binary search, and the ternary search the hybrid ternary/binary search.">
+On fully random searches, the hash table is obviously slower than when
+it keeps reading the same one or two words, but still much faster than
+any of the sorted sets.  The red-black tree is now significantly
+slower than all the sorted vector searches (1000 cycles versus 200 to
+400 cycles on vectors of 128K elements, for example).  Again, we find that the offset quaternary search dominates the offset binary search, and the ternary search the hybrid ternary/binary search.
+</span></p>
+
+<p>For the rest of the post, I’ll only consider google’s dense hash
+table, g++’s red-black tree, the offset quaternary search and the
+ternary search.  Note that both the offset quaternary and ternary
+searches exhibit consistently better performance than the offset
+binary search, for which aliasing isn’t an issue.  These alternative
+ways to search sorted vectors can thus be expected to improve on
+binary search even on vectors of lengths that are far from powers of
+two.</p>
+
+<h3 id="more-interesting-workloads">More interesting workloads</h3>
+
+<p>So far, I’ve only reported runtimes for two workloads: a trivial one,
+in which we always search for the same element, and a worst-case
+scenario, in which all the keys are chosen independently and randomly
+from all the values in the set (missing keys might be even worse for
+some hash tables).  I see two dimensions along which it’s useful to
+interpolate between these workloads.</p>
+
+<p>The first dimension is spatial locality.  We sometimes work with very
+large sorted sets, but almost exclusively search for values in a small
+contiguous subrange.  Within that subrange, however, there is no
+obvious relationship between search keys; we might as well be choosing
+them randomly, with uniform probability.  The constant-element search
+is a degenerate case with a subrange of length one, and the fully
+random choice another degenerate case, with a subrange spanning the
+whole set.  For all vector sizes from 1K to 1G elements, I ran the
+program with subranges beginning at the least value in the set and of
+size 1K, 16K, 64K, 256K, 1M and 2M (or size equal to the whole set if
+it’s too small).  These values are interesting because they roughly
+correspond to working set sizes that bracket the cache and TLB sizes
+for all four implementations.</p>
+
+<p>We can expect all methods to benefit from spatial locality, but not to
+the same extent.  The hash table works well because it scatters
+everything pseudo-randomly in a large vector; when the subrange is
+sufficiently small compared to the set, each key in that subrange can
+be expected to use its own cache line, and the hash table’s
+performance will be the same as on randomly-chosen keys on relatively
+small subranges.  Similarly, the red-black tree uses about eight times
+as much space as sorted vectors for the same data, and will also
+exceed the same cache level much more quickly.</p>
+
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/real-subrange-small-cycles.png" /></p>
+
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/real-subrange-large-cycles.png" /></p>
+
+<p><span class="pullquote-right" data-pullquote="runtimes for the sorted vector searches grow much more slowly, and are more stable than for the red-black tree.">
+The red-black tree was slightly faster than the sorted vector searches
+when the key was always the same.  This isn’t the case when the keys
+are selected from a small subrange.  On all six scenarios and across
+all sizes, the 10th percentile for ‘stl’ is slower than the 90th for
+either ‘oq’ or ‘ter’.  As expected, the runtimes for the hash table
+(‘goog’) evolve in plateaus, as the working set outstrips each level
+of caching.  When it exceeds even the L3 (256K values in distinct
+cache lines is just barely larger than L3) its performance is more or
+less comparable to that of the sorted vector searches, as long as the
+subrange is below 2M items.  All the sorted set implementations
+exhibit the same roughly sigmoidal shape for runtimes as functions of
+the set size.  However, except for a few spikes on very large vectors,
+runtimes for the sorted vector searches grow much more slowly, and are more stable than for the red-black tree.
+In general, the offset quaternary search seems to execute a bit
+faster than the ternary search, but the difference is minimal.  More
+importantly, when working with medium subranges (around 64K to 1M
+elements) in medium or large sets (1M elements or more), the sorted
+vectors searches are competitive with a hash table, in addition to
+being more compact.
+</span></p>
+
+<p>The second dimension is temporal locality.  I simulated workloads
+exhibiting temporal locality with strided accesses. For example with a
+stride of 17, the search keys are, in order, at rank 0, 17, 34, 51,
+etc. in the sorted set.  The constant search is a special case with
+stride zero.  For all vector sizes from 1K to 1G elements, I ran the
+programs with various strides: 1, 17, 65, 129, 257, and 1K+1.  The
+ranks were taken modulo the set’s size, so these odd strides ensure
+that every key is generated for small vectors (i.e. they’re mod-1 step
+sizes, for <a href="http://sal.discontinuity.info/">corewar</a> fans).  The
+ordered sets should exploit this setting well (the red-black tree
+probably less so than the vector searches), and the hash table not at
+all: a good hash function guarantees that similar keys don’t hash to
+close-by values any more than very different keys, and the hash table
+will behave exactly as if keys were chosen randomly.</p>
+
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/real-stride-short-cycles.png" /></p>
+
+<p><img class="center" src="/images/2012-07-30-binary-search-is-a-pathological-case-for-caches/real-stride-medium-cycles.png" /></p>
+
+<p><span class="pullquote-right" data-pullquote="The sorted vector searches are always faster, and in general slightly more stable.">
+The hash table behaves almost exactly like it did with random keys; in
+particular, there is a large increase in runtimes when the set
+comprises at least 1M elements: the hash table then exceeds L3.  Even
+on these very easy inputs, the red-black tree is only faster than the
+hash table on accesses with stride one, the very best case.  Worse, the
+red-black tree already exhibits very wide variations (consider the height of
+the shaded areas for ‘stl’) on such traversals.  It’s
+even wider on longer strides in large vectors, but the red-black tree
+is then also so slow that it’s completely off-graph.  The sorted vector searches are always faster, and in general slightly more stable.
+In fact, they seem comparable with the hash table, if not faster, for
+nearly all vector sizes, as long as the access stride is around 129 or
+less.
+</span></p>
+
+<h2 id="from-data-to-knowledge">From data to knowledge</h2>
+
+<p><span class="pullquote-right" data-pullquote="Each execution of the test program showed very consistent timings, but different executions yielded timings that varied by a factor of two.">
+I only worked on binary search here, and, even with this very simple
+algorithm, there are fairly obscure pitfalls.  The issue with physical
+address allocation affecting cache line aliasing, particularly at the
+L2 level, is easy to miss, and can have a huge impact on results.
+Each execution of the test program showed very consistent timings, but different executions yielded timings that varied by a factor of two.
+We’ve been <a href="http://www.multicoreinfo.com/research/papers/2009/asplos09-producing-data.pdf">warned [pdf]</a>
+about such hidden variables in the past, but that was a pretty
+stealthy instance with a serious effect.
+</span></p>
+
+<p>Even without that hurdle, the slowdown caused by aliasing between
+cache lines when executing binary searches on vectors of
+(nearly-)power-of-two sizes is alarming.  The ratio of runtimes
+between the classic binary search and the offset quaternary search
+is on the order of two to ten, depending on the test case.  Some of
+that is due to MLP, but the offset binary search offers only
+slightly lesser improvements: aliasing really is an issue.  And yet, I
+believe I haven’t seen anyone try to compensate for that when
+comparing fancier search methods that often work best on
+near-power-of-two sizes (e.g. breadth-first or van Emde Boas layouts)
+with simple binary search.</p>
+
+<p>Also worrying is the fact that, even with all the repetitions and
+performance counters, some oddities (especially spikes in runtimes on
+very large vectors) are still left unexplained.</p>
+
+<p>Nevertheless, these experiments can probably teach us something useful.</p>
+
+<p><span class="pullquote-right" data-pullquote="I don&#8217;t think that basing decisions on ill-understood phenomena is a good practice.">
+I don’t think that basing decisions on ill-understood phenomena is a good practice.
+This is why I try to minimise the number of variables and start with a
+logical hypothesis (in this case, “aliasing hurts and MLP helps”),
+rather than just being a slave to the p-value.  Hopefully, this
+approach results in more robust conclusions, particularly in conjunction
+with quantile-based comparisons and a lot of visualisation.  In the
+current case, the most useful conclusions seem to be:
+</span></p>
+
+<ol>
+  <li>use offset binary or quaternary search instead of binary search.
+ Quaternary search is faster if the vectors are expected to be in
+ cache, even when aliasing isn’t an issue, and both methods offer more
+ robust performance;</li>
+  <li>good sorted sets can be faster than hash tables when reads tend to
+ be strided, even with respectable strides on the order of 64 or 128
+ elements;</li>
+  <li>if the searches exhibit spatial locality over a couple hundred
+ thousand bytes, searches in sorted vectors can be comparable to hash
+ sets.</li>
+</ol>
+
+<p>These raise two obvious questions: could we go further than quaternary
+search, and how do the results map to loopy implementations?  I don’t
+think it’s useful to try and go farther than quaternary search: caches
+can only handle a few concurrent requests, and quaternary search’s
+three requests is probably close to, if not past, the maximum.  In an
+implementation that’s not fully unrolled the offset searches are
+probably most easily adapted by multiplying the range by \(33/64 =
+1/2+1/64\) or \(17/64 = 1/4+1/64\), with two shifts and a few adds.
+In either case, L2 cache misses tend to outweight branch
+mispredictions, which themselves are usually more important than
+micro-optimisations at the instruction level.  The speed-ups brought
+about by eliminating aliasing and branches, while exposing
+memory-level parallelism, ought to be notable, even in a loopy
+implementation.</p>
 </div>
   
   
