@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Check for borrows in bitwise operations"
-date: 2020-05-02 17:24:36 -0400
+date: 2020-05-02 17:24:37 -0400
 comments: true
 categories: 
 ---
@@ -25,7 +25,7 @@ value matches any of the follow nine cases:
  * `0b10000000`
  * `0b00000000`
 
-Looking at the bit pattern,[^b-for-bit-literal] the OP's solution with [popcount](https://www.felixcloutier.com/x86/popcnt) and [bitscan](https://www.felixcloutier.com/x86/bsf)
+Looking at the bit patterns,[^b-for-bit-literal] the OP's solution with [popcount](https://www.felixcloutier.com/x86/popcnt) and [bitscan](https://www.felixcloutier.com/x86/bsf)
 is pretty natural.  These instructions are somewhat complex (latency
 closer to 3 cycles than 1, and often port restricted), 
 and it seems like the sort of problem that would have had efficient
@@ -212,5 +212,9 @@ data-dependent fashion, it's always worth considering the two's
 complement representation of the problem for a couple minutes.  Adding
 or subtracting powers of two doesn't always work, but the payoff is
 pretty good when it does.
+
+P.S., [Wojciech Muła offers a different 3-operation sequence with `-p`](http://0x80.pl/notesen/2016-10-16-detecting-bit-pattern.html)
+to solve damageboy's problem.
+That's another nice primitive to generate bitmasks dynamically.
 
 <p><hr style="width: 50%"></p>
