@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-05-02T17:24:58-04:00</updated>
+  <updated>2020-05-02T17:57:56-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -16,7 +16,7 @@
   <entry>
     <title type="html"><![CDATA[Check for borrows in bitwise operations]]></title>
     <link href="https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations/"/>
-    <updated>2020-05-02T17:24:36-04:00</updated>
+    <updated>2020-05-02T17:24:37-04:00</updated>
     <id>https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations</id>
     <content type="html"><![CDATA[<p>In the <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">fourth installment of his series on sorting with AVX2</a>,
 <a href="https://twitter.com/damageboy">@damageboy</a> has a short aside where he
@@ -39,7 +39,7 @@ value matches any of the follow nine cases:</p>
   <li><code>0b00000000</code></li>
 </ul>
 
-<p>Looking at the bit pattern,<sup id="fnref:b-for-bit-literal"><a href="#fn:b-for-bit-literal" class="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
+<p>Looking at the bit patterns,<sup id="fnref:b-for-bit-literal"><a href="#fn:b-for-bit-literal" class="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
 is pretty natural.  These instructions are somewhat complex (latency
 closer to 3 cycles than 1, and often port restricted), 
 and it seems like the sort of problem that would have had efficient
@@ -223,6 +223,10 @@ data-dependent fashion, it’s always worth considering the two’s
 complement representation of the problem for a couple minutes.  Adding
 or subtracting powers of two doesn’t always work, but the payoff is
 pretty good when it does.</p>
+
+<p>P.S., <a href="http://0x80.pl/notesen/2016-10-16-detecting-bit-pattern.html">Wojciech Muła offers a different 3-operation sequence with <code>-p</code></a>
+to solve damageboy’s problem.
+That’s another nice primitive to generate bitmasks dynamically.</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes">
