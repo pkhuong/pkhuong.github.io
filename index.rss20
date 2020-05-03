@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-05-02T20:26:56-04:00</updated>
+  <updated>2020-05-02T20:48:21-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -16,7 +16,7 @@
   <entry>
     <title type="html"><![CDATA[Check for borrows in bitwise operations]]></title>
     <link href="https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations/"/>
-    <updated>2020-05-02T17:24:37-04:00</updated>
+    <updated>2020-05-02T17:24:38-04:00</updated>
     <id>https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations</id>
     <content type="html"><![CDATA[<p>In the <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">fourth installment of his series on sorting with AVX2</a>,
 <a href="https://twitter.com/damageboy">@damageboy</a> has a short aside where he
@@ -149,10 +149,10 @@ c ^ (c - 1) = 0b0000000000000000...11111111111111111...
 <p>We now just have to bitwise <code>and</code> <code>uleb</code> with <code>c ^ (c - 1)</code>
 to obtain the bits of the first <code>ULEB</code> value in <code>uleb</code>, while
 overwriting everything else with 0.  Once we have that, we can either
-<a href="https://www.felixcloutier.com/x86/pext">extract data bits with <code>PEXT</code></a>,
-or, if one is stuck with older or AMD chips, pull out interesting stunts for <a href="https://en.wikipedia.org/wiki/SWAR">SWAR</a> shifts by variable amounts.</p>
+<a href="https://www.felixcloutier.com/x86/pext">extract data bits with <code>PEXT</code></a>
+on recent Intel chips, or otherwise dust off interesting stunts for <a href="https://en.wikipedia.org/wiki/SWAR">SWAR</a> shifts by variable amounts.</p>
 
-<h2 id="now-for-damageboys-problem">Now for <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">@damageboy</a>’s problem</h2>
+<h2 id="now-for-damageboys-problem">Now for <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">damageboy</a>’s problem</h2>
 
 <p>Let’s first repeat the question that motivated this post.  We want to detect when a byte <code>p</code> is one of the following nine values:</p>
 

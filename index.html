@@ -247,10 +247,10 @@ c ^ (c - 1) = 0b0000000000000000...11111111111111111...
 <p>We now just have to bitwise <code>and</code> <code>uleb</code> with <code>c ^ (c - 1)</code>
 to obtain the bits of the first <code>ULEB</code> value in <code>uleb</code>, while
 overwriting everything else with 0.  Once we have that, we can either
-<a href="https://www.felixcloutier.com/x86/pext">extract data bits with <code>PEXT</code></a>,
-or, if one is stuck with older or AMD chips, pull out interesting stunts for <a href="https://en.wikipedia.org/wiki/SWAR">SWAR</a> shifts by variable amounts.</p>
+<a href="https://www.felixcloutier.com/x86/pext">extract data bits with <code>PEXT</code></a>
+on recent Intel chips, or otherwise dust off interesting stunts for <a href="https://en.wikipedia.org/wiki/SWAR">SWAR</a> shifts by variable amounts.</p>
 
-<h2 id="now-for-damageboys-problem">Now for <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">@damageboy</a>’s problem</h2>
+<h2 id="now-for-damageboys-problem">Now for <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">damageboy</a>’s problem</h2>
 
 <p>Let’s first repeat the question that motivated this post.  We want to detect when a byte <code>p</code> is one of the following nine values:</p>
 
