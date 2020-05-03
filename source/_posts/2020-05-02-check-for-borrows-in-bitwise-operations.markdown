@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "Check for borrows in bitwise operations"
+title: Check for borrows in bitwise operations
 date: 2020-05-02 17:24:37 -0400
 comments: true
 categories: 
@@ -216,5 +216,7 @@ pretty good when it does.
 P.S., [Wojciech Muła offers a different 3-operation sequence with `-p`](http://0x80.pl/notesen/2016-10-16-detecting-bit-pattern.html)
 to solve damageboy's problem.
 That's another nice primitive to generate bitmasks dynamically.
+
+<small>Thank you Ruchir for helping me clarify the notation around the ULEB section.</small>
 
 <p><hr style="width: 50%"></p>
