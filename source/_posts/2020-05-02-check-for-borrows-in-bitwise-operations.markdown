@@ -1,7 +1,7 @@
 ---
 layout: post
 title: Check for borrows in bitwise operations
-date: 2020-05-02 17:24:37 -0400
+date: 2020-05-02 17:24:38 -0400
 comments: true
 categories: 
 ---
@@ -139,10 +139,10 @@ subtract 1 from `c` and `xor` that back with `c`.
 We now just have to bitwise `and` `uleb` with `c ^ (c - 1)`
 to obtain the bits of the first `ULEB` value in `uleb`, while
 overwriting everything else with 0.  Once we have that, we can either
-[extract data bits with `PEXT`](https://www.felixcloutier.com/x86/pext),
-or, if one is stuck with older or AMD chips, pull out interesting stunts for [SWAR](https://en.wikipedia.org/wiki/SWAR) shifts by variable amounts.
+[extract data bits with `PEXT`](https://www.felixcloutier.com/x86/pext)
+on recent Intel chips, or otherwise dust off interesting stunts for [SWAR](https://en.wikipedia.org/wiki/SWAR) shifts by variable amounts.
 
-Now for [@damageboy](https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4)'s problem
+Now for [damageboy](https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4)'s problem
 ----------------------------------------------------------------
 
 Let's first repeat the question that motivated this post.  We want to detect when a byte `p` is one of the following nine values:
