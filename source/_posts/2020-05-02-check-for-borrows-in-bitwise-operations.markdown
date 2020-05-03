@@ -1,10 +1,14 @@
 ---
 layout: post
 title: Check for borrows in bitwise operations
-date: 2020-05-02 17:24:38 -0400
+date: 2020-05-02 17:24:39 -0400
 comments: true
-categories: 
+categories:
 ---
+
+<small>2020-05-03: Had to add a complement step in the ULEB
+section. Seems I couldn't actually avoid that crummy-looking
+notation. Spotted by redditor /u/Y_Less.</small>
 
 In the [fourth installment of his series on sorting with AVX2](https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4),
 [@damageboy](https://twitter.com/damageboy) has a short aside where he
@@ -27,7 +31,7 @@ value matches any of the follow nine cases:
 
 Looking at the bit patterns,[^b-for-bit-literal] the OP's solution with [popcount](https://www.felixcloutier.com/x86/popcnt) and [bitscan](https://www.felixcloutier.com/x86/bsf)
 is pretty natural.  These instructions are somewhat complex (latency
-closer to 3 cycles than 1, and often port restricted), 
+closer to 3 cycles than 1, and often port restricted),
 and it seems like the sort of problem that would have had efficient
 solutions before SSE4 finally graced x86 with a [population count](https://en.wikipedia.org/wiki/Hamming_weight) instruction.
 
@@ -49,7 +53,7 @@ or bitscan.  There's also a simpler classic solution to this problem:
 `x == 0 || is_power_of_two(x) <==> (x & (x - 1)) == 0`
 
 How does that expression work?  Say `x` is a power of two. Its binary
-representation is `0b0...010...0`: any number of leading zeros,[^big-endian] 
+representation is `0b0...010...0`: any number of leading zeros,[^big-endian]
 a single "1" bit, and trailing zeros (maybe none).  Let's see what happens when
 we subtract 1 from `x`:
 
@@ -96,20 +100,25 @@ we must rapidly segment ([lex or tokenize](https://en.wikipedia.org/wiki/Lexical
 ends.  Let's focus on the fast path, when the encoded ULEB fits in a
 machine register.
 
-We have `uleb = 0bnnnnnnnnmmmmmmmm...1zzzzzzz0yyyyyyy0...`: a sequence of bytes[^remember-endianness] with the topmost bit equal to 0, followed by a byte with the top bit set to 1, and, finally, arbitrary nuisance bytes (`m...m`, `n...n`, etc.) we wish to ignore.  Ideally, we'd
-extract `data = 0b0000000000000000...?zzzzzzz?yyyyyyy?...` from `uleb`: we want to clear the
-nuisance bytes, and are fine with arbitrary values in the 
+We have `uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...`:
+a sequence of bytes[^remember-endianness] with the topmost bit equal to 1,
+terminated by a byte with the top bit set to 0,
+and, finally, arbitrary nuisance bytes (`m...m`, `n...n`, etc.) we wish to ignore.
+Ideally, we'd extract `data = 0b0000000000000000...?zzzzzzz?yyyyyyy?...` from `uleb`: we want to clear the
+nuisance bytes, and are fine with arbitrary values in the
 ULEB's control bits.
 
 [^remember-endianness]: Remember, while ULEB is little-endian, we use big bit-endianness.
 
-It's pretty clear that the first thing to do is to
+It's much easier to find bits set to 1 than to zero, so the first thing to do is
+to complement the `ULEB` data and
 clear out everything but potential ULEB control bits (the high bit of
-each byte), with `c = uleb & (128 * (WORD_MAX / 255))`, i.e.,
-compute the bitwise `and` of `uleb` with a bitmask of the high bit in each byte.
+each byte), with `c = ~uleb & (128 * (WORD_MAX / 255))`, i.e.,
+compute the bitwise `and` of `~uleb` with a bitmask of the high bit in each byte.
 
-       uleb = 0bnnnnnnnnmmmmmmmm...1zzzzzzz0yyyyyyy0...
-          c = 0bn0000000m0000000...10000000000000000...
+       uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...
+      ~uleb = 0b̅n̅n̅n̅n̅n̅n̅n̅n̅m̅m̅m̅m̅m̅m̅m̅m̅...1z̅z̅z̅z̅z̅z̅z0y̅y̅y̅y̅y̅y̅y0...
+          c = 0b̅n̅0000000̅m̅0000000...10000000000000000...
 
 We could now bitscan to find the index of the first 1 (marking the
 last ULEB byte), and then generate a mask.  However, it seems wasteful to
@@ -131,9 +140,10 @@ what we want: `xor`ing a bit with itself always yields zero, while
 `xor`ing bits that differ yields `1`.  That's the plan for ULEB. We'll
 subtract 1 from `c` and `xor` that back with `c`.
 
-         uleb   = 0bnnnnnnnnmmmmmmmm...1zzzzzzz0yyyyyyy0...
-    c           = 0bn0000000m0000000...10000000000000000...
-         c - 1  = 0bn0000000m0000000...01111111111111111...
+           uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...
+          ~uleb = 0b̅n̅n̅n̅n̅n̅n̅n̅n̅m̅m̅m̅m̅m̅m̅m̅m̅...1z̅z̅z̅z̅z̅z̅z0y̅y̅y̅y̅y̅y̅y0...
+    c           = 0b̅n̅0000000̅m̅0000000...10000000000000000...
+         c - 1  = 0b̅n̅0000000̅m̅0000000...01111111111111111...
     c ^ (c - 1) = 0b0000000000000000...11111111111111111...
 
 We now just have to bitwise `and` `uleb` with `c ^ (c - 1)`
@@ -203,7 +213,7 @@ for bitmaps, but they're often hard to control.  Subtracting or adding
 1 are the main exceptions: it's easy to describe their impact in terms
 of the low bits of the bitmap.  In fact, we can extend that trick to
 subtracting or adding powers of two: it's the same carry/borrow chain effect as for 1,
-except that bits smaller than the power of two pass straight 
+except that bits smaller than the power of two pass straight
 through...
 which might be useful when we expect a known tag followed by a ULEB value that must be decoded.
 
