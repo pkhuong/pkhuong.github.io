@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-05-02T20:48:21-04:00</updated>
+  <updated>2020-05-03T08:29:43-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -16,9 +16,13 @@
   <entry>
     <title type="html"><![CDATA[Check for borrows in bitwise operations]]></title>
     <link href="https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations/"/>
-    <updated>2020-05-02T17:24:38-04:00</updated>
+    <updated>2020-05-02T17:24:39-04:00</updated>
     <id>https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations</id>
-    <content type="html"><![CDATA[<p>In the <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">fourth installment of his series on sorting with AVX2</a>,
+    <content type="html"><![CDATA[<p><small>2020-05-03: Had to add a complement step in the ULEB
+section. Seems I couldn’t actually avoid that crummy-looking
+notation. Spotted by redditor /u/Y_Less.</small></p>
+
+<p>In the <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">fourth installment of his series on sorting with AVX2</a>,
 <a href="https://twitter.com/damageboy">@damageboy</a> has a short aside where he
 tries to detect partitioning (pivot) patterns where elements less than
 and greater than or equal to the pivot are already in the correct
@@ -41,7 +45,7 @@ value matches any of the follow nine cases:</p>
 
 <p>Looking at the bit patterns,<sup id="fnref:b-for-bit-literal"><a href="#fn:b-for-bit-literal" class="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
 is pretty natural.  These instructions are somewhat complex (latency
-closer to 3 cycles than 1, and often port restricted), 
+closer to 3 cycles than 1, and often port restricted),
 and it seems like the sort of problem that would have had efficient
 solutions before SSE4 finally graced x86 with a <a href="https://en.wikipedia.org/wiki/Hamming_weight">population count</a> instruction.</p>
 
@@ -60,7 +64,7 @@ or bitscan.  There’s also a simpler classic solution to this problem:</p>
 <p><code>x == 0 || is_power_of_two(x) &lt;==&gt; (x &amp; (x - 1)) == 0</code></p>
 
 <p>How does that expression work?  Say <code>x</code> is a power of two. Its binary
-representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian"><a href="#fn:big-endian" class="footnote">2</a></sup> 
+representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian"><a href="#fn:big-endian" class="footnote">2</a></sup>
 a single “1” bit, and trailing zeros (maybe none).  Let’s see what happens when
 we subtract 1 from <code>x</code>:</p>
 
@@ -106,18 +110,23 @@ we must rapidly segment (<a href="https://en.wikipedia.org/wiki/Lexical_analysis
 ends.  Let’s focus on the fast path, when the encoded ULEB fits in a
 machine register.</p>
 
-<p>We have <code>uleb = 0bnnnnnnnnmmmmmmmm...1zzzzzzz0yyyyyyy0...</code>: a sequence of bytes<sup id="fnref:remember-endianness"><a href="#fn:remember-endianness" class="footnote">3</a></sup> with the topmost bit equal to 0, followed by a byte with the top bit set to 1, and, finally, arbitrary nuisance bytes (<code>m...m</code>, <code>n...n</code>, etc.) we wish to ignore.  Ideally, we’d
-extract <code>data = 0b0000000000000000...?zzzzzzz?yyyyyyy?...</code> from <code>uleb</code>: we want to clear the
-nuisance bytes, and are fine with arbitrary values in the 
+<p>We have <code>uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...</code>:
+a sequence of bytes<sup id="fnref:remember-endianness"><a href="#fn:remember-endianness" class="footnote">3</a></sup> with the topmost bit equal to 1,
+terminated by a byte with the top bit set to 0,
+and, finally, arbitrary nuisance bytes (<code>m...m</code>, <code>n...n</code>, etc.) we wish to ignore.
+Ideally, we’d extract <code>data = 0b0000000000000000...?zzzzzzz?yyyyyyy?...</code> from <code>uleb</code>: we want to clear the
+nuisance bytes, and are fine with arbitrary values in the
 ULEB’s control bits.</p>
 
-<p>It’s pretty clear that the first thing to do is to
+<p>It’s much easier to find bits set to 1 than to zero, so the first thing to do is
+to complement the <code>ULEB</code> data and
 clear out everything but potential ULEB control bits (the high bit of
-each byte), with <code>c = uleb &amp; (128 * (WORD_MAX / 255))</code>, i.e.,
-compute the bitwise <code>and</code> of <code>uleb</code> with a bitmask of the high bit in each byte.</p>
+each byte), with <code>c = ~uleb &amp; (128 * (WORD_MAX / 255))</code>, i.e.,
+compute the bitwise <code>and</code> of <code>~uleb</code> with a bitmask of the high bit in each byte.</p>
 
-<pre><code>   uleb = 0bnnnnnnnnmmmmmmmm...1zzzzzzz0yyyyyyy0...
-      c = 0bn0000000m0000000...10000000000000000...
+<pre><code>   uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...
+  ~uleb = 0b̅n̅n̅n̅n̅n̅n̅n̅n̅m̅m̅m̅m̅m̅m̅m̅m̅...1z̅z̅z̅z̅z̅z̅z0y̅y̅y̅y̅y̅y̅y0...
+      c = 0b̅n̅0000000̅m̅0000000...10000000000000000...
 </code></pre>
 
 <p>We could now bitscan to find the index of the first 1 (marking the
@@ -140,9 +149,10 @@ what we want: <code>xor</code>ing a bit with itself always yields zero, while
 <code>xor</code>ing bits that differ yields <code>1</code>.  That’s the plan for ULEB. We’ll
 subtract 1 from <code>c</code> and <code>xor</code> that back with <code>c</code>.</p>
 
-<pre><code>     uleb   = 0bnnnnnnnnmmmmmmmm...1zzzzzzz0yyyyyyy0...
-c           = 0bn0000000m0000000...10000000000000000...
-     c - 1  = 0bn0000000m0000000...01111111111111111...
+<pre><code>       uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...
+      ~uleb = 0b̅n̅n̅n̅n̅n̅n̅n̅n̅m̅m̅m̅m̅m̅m̅m̅m̅...1z̅z̅z̅z̅z̅z̅z0y̅y̅y̅y̅y̅y̅y0...
+c           = 0b̅n̅0000000̅m̅0000000...10000000000000000...
+     c - 1  = 0b̅n̅0000000̅m̅0000000...01111111111111111...
 c ^ (c - 1) = 0b0000000000000000...11111111111111111...
 </code></pre>
 
@@ -214,7 +224,7 @@ for bitmaps, but they’re often hard to control.  Subtracting or adding
 1 are the main exceptions: it’s easy to describe their impact in terms
 of the low bits of the bitmap.  In fact, we can extend that trick to
 subtracting or adding powers of two: it’s the same carry/borrow chain effect as for 1,
-except that bits smaller than the power of two pass straight 
+except that bits smaller than the power of two pass straight
 through…
 which might be useful when we expect a known tag followed by a ULEB value that must be decoded.</p>
 
