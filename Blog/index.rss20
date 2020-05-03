@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-05-02T17:57:56-04:00</updated>
+  <updated>2020-05-02T20:26:56-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -227,6 +227,8 @@ pretty good when it does.</p>
 <p>P.S., <a href="http://0x80.pl/notesen/2016-10-16-detecting-bit-pattern.html">Wojciech Muła offers a different 3-operation sequence with <code>-p</code></a>
 to solve damageboy’s problem.
 That’s another nice primitive to generate bitmasks dynamically.</p>
+
+<p><small>Thank you Ruchir for helping me clarify the notation around the ULEB section.</small></p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes">
