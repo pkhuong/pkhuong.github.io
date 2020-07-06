@@ -1,0 +1,4 @@
+hidden: true will publish the page, but not paginate it
+published: false will not publish the page at all
+
+hidden:true, draft: true: list the page in the draft menu.
