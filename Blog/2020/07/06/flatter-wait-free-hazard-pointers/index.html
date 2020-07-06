@@ -1,0 +1,899 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Flatter wait-free hazard pointers - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2020/07/06/flatter-wait-free-hazard-pointers/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Flatter wait-free hazard pointers</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+July
+  
+6th, 
+2020
+
+
+
+
+        
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>Back in February 2020, Blelloch and Wei submitted this cool preprint: <a href="https://arxiv.org/abs/2002.07053">Concurrent Reference Counting and Resource Management in Wait-free Constant Time</a>.
+Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation:<sup id="fnref:but-also"><a href="#fn:but-also" class="footnote">1</a></sup>
+<a href="">safe memory reclamation</a> is a key component for lock-free synchronisation when garbage collection isn’t an option,<sup id="fnref:it-is-gc"><a href="#fn:it-is-gc" class="footnote">2</a></sup>
+and <a href="">hazard pointers</a> let us bound resource leaks much more tightly than, e.g., <a href="">epoch reclamation</a>,
+but classically has a <em>loop</em> in its <a href="https://www.iecc.com/gclist/GC-algorithms.html">read barriers (in the managed language sense)</a>,
+which can be annoying for code generation and isn’t good for worst-case time bounds.</p>
+
+<p>Blelloch’s and Wei’s wait-free proposal eliminates that loop… with a construction that stacks <a href="https://arxiv.org/abs/1911.09671">two emulated primitives—atomic copy, itself implemented with strong LL/SC—</a>on top of what hardware usually offers.
+I see the real value of the proposal in showing that wait-freedom is achievable,
+and that the key is atomic memory-memory copies;
+in this post, I’ll share the engineering work to make their construction practical,
+and come up with wait-free alternatives to the usual lock-free hazard pointers
+that are also competitive in the best case.
+The insight that hazard pointers can be made wait-free as long as we have a wait-free atomic memory-memory copy lets us improve the worst case
+without impacting the best case!</p>
+
+<p>But first, what are hazard pointers?</p>
+
+<h2 id="hazard-pointers-and-the-safe-memory-reclamation-problem">Hazard pointers, and the safe memory reclamation problem</h2>
+
+<p>Hazard pointers were introduced by <a href="https://dblp.uni-trier.de/pers/m/Michael:Maged_M=.html">Maged Michael</a>
+in <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">Hazard Pointers: Safe Memory Reclamation for Lock-Free Objects (2005, PDF)</a>,
+as the first solution to reclaim races in lock-free code.
+The introduction also has a concise explanation of the safe memory reclamation (SMR) problem.</p>
+
+<blockquote>
+  <p>When a thread removes a node, it is possible that some other contending thread—in the course of its lock-free operation—has earlier read a reference to that node, and is about to access its contents. If the removing thread were to reclaim the removed node for arbitrary reuse, the contending thread might corrupt the object or some other object that happens to occupy the space of the freed node, return the wrong result, or suffer an access error by dereferencing an invalid pointer value. […] Simply put, the memory reclamation problem is how to allow the memory of removed nodes to be freed (i.e., reused arbitrarily or returned to the OS), while guaranteeing that no thread accesses free memory, and how to do so in a lock-free manner.</p>
+</blockquote>
+
+<p>In other words, a solution to the SMR problem lets us know when it’s safe to
+<em>physically release</em> resources that used to be owned by a linked data structure,
+once all links to these resources have been removed from that data structure (after “logical deletion”).
+The problem makes intuitive sense for dynamically managed memory,
+but it applies equally well to any resource (e.g., file descriptors),
+and its solutions can even be seen as extremely read-optimised reader/writer locks.</p>
+
+<p>The basic idea behind Hazard Pointers is to have
+each thread publish to permanently allocated<sup id="fnref:stable-alloc"><a href="#fn:stable-alloc" class="footnote">3</a></sup> hazard pointer records (HP records) the set of resources (pointers) it’s temporarily borrowing from a lock-free data structure.
+That’s enough information for a background thread to snapshot the current limbo list of resources that have been logically deleted but not yet physically released,
+scan all records for all threads,
+and physically release all resources in the snapshot that aren’t in any hazard pointer record.</p>
+
+<p>With just enough batching of the limbo list, this scheme can be practical:
+in practice, lock-free algorithms only need to pin a few (often one or two) nodes at a time to ensure memory safety.  As long as we can avoid running arbitrary code while holding hazardous references, we can bound the number of records each thread may need at any one time.
+Scanning the records thus takes time roughly linear in the number of active threads, and we can amortise that to constant time per deleted item by waiting until the size of the limbo list is proportional to a multiple of the number of active threads.<sup id="fnref:even-with-pinned-nodes"><a href="#fn:even-with-pinned-nodes" class="footnote">4</a></sup></p>
+
+<p>The tricky bit is figuring out how to reliably publish to a HP record without locking.
+Hazard pointers simplify that challenge with three observations:</p>
+<ol>
+  <li>It’s OK to have arbitrary garbage in a record (let’s disregard language-level<sup id="fnref:or-hw-level"><a href="#fn:or-hw-level" class="footnote">5</a></sup> undefined behaviour), since it’s only ever subtracted from the limbo list: a garbage record simply doesn’t protect anything.</li>
+  <li>It’s also OK to leave a false positive in a record: our leakage bounds assume each record keeps a different node (resource) alive.</li>
+  <li>1 and 2 mean it doesn’t matter what pinned value we read in a record whose last update was started after we snapshotted the limbo list: resources in the limbo list are unreachable, so freshly pinned resources can’t refer to anything in the snapshot.</li>
+</ol>
+
+<p>This is where the clever bit of hazard pointers comes in:
+we must make sure that any resource (pointer to a node, etc.) we borrow from a lock-free data structure is immediately protected by a HP record.
+We can’t make two things happen atomically without locking, so
+we’ll instead <em>guess</em> what resource we will borrow,
+publish that,
+and then actually borrow the resource.
+If we guessed correctly, we can immediately use the borrowed resource;
+if we were wrong, we simply try again.</p>
+
+<p>On an ideal machine with a <a href="https://en.wikipedia.org/wiki/Sequential_consistency">sequential consistency memory model</a>,
+the pseudocode looks like the following.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_sc.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_read_sc</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">record</span><span class="p">):</span>
+</span><span class="line">    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+</span><span class="line">        <span class="n">guess</span> <span class="o">=</span> <span class="n">cell</span><span class="o">.</span><span class="n">load</span><span class="p">()</span>
+</span><span class="line">        <span class="n">record</span><span class="o">.</span><span class="n">pin</span> <span class="o">=</span> <span class="n">guess</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">guess</span> <span class="o">==</span> <span class="n">cell</span><span class="o">.</span><span class="n">load</span><span class="p">():</span>
+</span><span class="line">            <span class="k">return</span> <span class="n">guess</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>In practice, we must make sure that our write to <code>record.pin</code> is visible before re-reading the cell’s value, and we should also make sure the pointer read is ordered with respect to the rest of the calling read-side code.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_explicit.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_read_explicit</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">record</span><span class="p">):</span>
+</span><span class="line">    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+</span><span class="line">        <span class="n">guess</span> <span class="o">=</span> <span class="n">cell</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span>
+</span><span class="line">        <span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">store_relaxed</span><span class="p">(</span><span class="n">guess</span><span class="p">)</span>
+</span><span class="line">        <span class="n">fence_store_load</span><span class="p">()</span>  <span class="c1"># R1</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">guess</span> <span class="o">==</span> <span class="n">cell</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">():</span> <span class="c1"># R2</span>
+</span><span class="line">            <span class="k">return</span> <span class="n">guess</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We need a store/load fence in <code>R1</code> to make sure the store to the record is visible before the second read in <code>R2</code>.  Under the <a href="https://www.cl.cam.ac.uk/~pes20/weakmemory/x86tso-paper.tphols.pdf">TSO memory model used by x86 chips (PDF)</a>,
+this fence also happens to be the only one that isn’t implicitly satisfied by the hardware memory model.
+It also happens that fences are best implemented with atomic operations
+on x86oids (instructions with a LOCK prefix),
+so we can obviate the need for fencing in <code>R1</code>
+by implementing the store just before <code>R1</code> with an atomic exchange (fetch-and-set).</p>
+
+<p>The slow cleanup path has its own fence that matches <code>R1</code> (the one in <code>R2</code>
+would match mutators’ writes to <code>cell</code>):</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_cleanup_explicit.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_cleanup_explicit</span><span class="p">(</span><span class="n">limbo</span><span class="p">,</span> <span class="n">records</span><span class="p">):</span>
+</span><span class="line">    <span class="n">to_reclaim</span> <span class="o">=</span> <span class="n">limbo</span><span class="o">.</span><span class="n">consume_snapshot_acquire</span><span class="p">()</span>  <span class="c1"># C1</span>
+</span><span class="line">    <span class="n">pinned</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+</span><span class="line">        <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">())</span>  <span class="c1"># C2</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">to_reclaim</span><span class="p">:</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">pinned</span><span class="p">:</span>
+</span><span class="line">            <span class="n">limbo</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">resource</span><span class="p">)</span>
+</span><span class="line">        <span class="k">else</span><span class="p">:</span>
+</span><span class="line">            <span class="n">resource</span><span class="o">.</span><span class="n">destroy</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We must make sure all the values in the limbo list we grab in <code>C1</code>
+were added to the list (and thus logically deleted) before we read any
+of the records in <code>C2</code>, with the  acquire read in <code>C1</code>
+matching the store-load fence in <code>R1</code>.</p>
+
+<p>The following sequence diagrams shows how the fencing guarantees that any
+iteration of <code>hp_read_explicit</code> will fail if it starts before <code>C1</code>
+and observes a stale value.
+If the read succeeds, the ordering between <code>R1</code> and <code>C1</code> instead
+guarantees that the cleanup loop will observed the pinned value
+when it reads the record in <code>C2</code>.</p>
+
+<p><a href="https://sequencediagram.org/index.html#initialData=C4S2BsFMAIDFIHYGNIBNoAsCGAvLAndABwHsQFhJ8Aoaog0JEei6AJUi1SutS2CwAjLAGcYAWUgBbEvgCedBiCYtg0AOr4wVAPQBhKFgQBXIrU3b8+wyaIBaAHySZ8gFzQAqkT6VoKcODQAG5Y4MaQAPzUHFxUADx2zrJy7gDi4SIifpABwaHh0Zzc+I5JbtAACsaC4CAiGNBE5Aho0ADmGVnAJND4kEiyqNQWlFYGnLal0snuXj4w-oEhYZHUZXKOI7rjRqZp+ELQtVKCPbUiwNQAvFfwyDBsAIzQOtB6jzeFsfgJ6+4A8oIxPgggscoFTPMADS9SDAeTQEgIaCoEAAMzRa2m8k2WlG1gme2ggOBoOIzVaywKQA">
+    <img src="/images/2020-07-06-flatter-wait-free-hazard-pointers/fenced-hp.png" />
+</a></p>
+
+<p>This all works, but it’s slow:<sup id="fnref:travis-says-its-fine"><a href="#fn:travis-says-its-fine" class="footnote">6</a></sup> we added an <em>atomic</em> write instruction (or worse, a fence) to a read-only operation.  We can do better with a little help from our operating system.</p>
+
+<h2 id="injecting-fences-with-os-support">Injecting fences with OS support</h2>
+
+<p>When we use fences or atomic instructions correctly, there should be
+an implicit pairing between fences or atomics: we use fencing to
+enforce an ordering (one must fully execute before or after another,
+overlap is forbidden) between pairs of instructions in different
+threads.  For example, the pseudocode for hazard pointers with
+explicit fencing and memory ordering paired the store-load fence in
+<code>R1</code> with the acquisition of the limbo list in <code>C1</code>.</p>
+
+<p>We only need that pairing very rarely, when we actually enter the
+cleanup function.  The amortisation strategy guarantees doesn’t happen too
+quickly, and we can always increase the amortisation factor if we’re
+generating tiny amounts of garbage very quickly.</p>
+
+<p>It kind of sucks that we have to incur a full fence on the fast read
+path, when it only matches reads in the cleanup loop maybe as rarely
+as once a second.  If we wait long enough on the slow path, we can
+<a href="https://pvk.ca/Blog/2019/01/09/preemption-is-gc-for-memory-reordering">rely on events like preemption or other interrupts to insert a barrier</a>
+in all threads that are executing the read-side.</p>
+
+<p>How long is “enough?”
+Linux has the <a href="https://man7.org/linux/man-pages/man2/membarrier.2.html"><code>membarrier</code> syscall</a>
+to block the calling thread until (more than) long enough has elapsed,
+Window has <a href="https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-flushprocesswritebuffers">the similar <code>FlushProcessWriteBuffers</code></a>, and
+on other operating systems, we can probably <a href="https://github.com/pkhuong/barrierd">do something useful with scheduler statistics</a> or ask for a new syscall.</p>
+
+<p>Armed with these new (heavy) system calls, we can replace the store-load fence in <code>R1</code> with a compiler barrier, and execute a slow <code>membarrier</code>/<code>FlushProcessWriteBuffers</code> after <code>C1</code>.
+The cleanup function will then wait long enough to ensure that any
+read-side operation that had executed before <code>R1</code> at the time we read the limbo list in <code>C1</code> will be visible (e.g., because the operating system knows a preemption interrupt executed at least once on each core).
+The pseudocode for this asymmetric strategy follows.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_membarrier.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_read_membarrier</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">record</span><span class="p">):</span>
+</span><span class="line">    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+</span><span class="line">        <span class="n">guess</span> <span class="o">=</span> <span class="n">cell</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span>
+</span><span class="line">        <span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">store_relaxed</span><span class="p">(</span><span class="n">guess</span><span class="p">)</span>
+</span><span class="line">        <span class="n">compiler_barrier</span><span class="p">()</span>  <span class="c1"># R1</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">guess</span> <span class="o">==</span> <span class="n">cell</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">():</span> <span class="c1"># R2</span>
+</span><span class="line">            <span class="k">return</span> <span class="n">guess</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_cleanup_membarrier.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_cleanup_membarrier</span><span class="p">(</span><span class="n">limbo</span><span class="p">,</span> <span class="n">records</span><span class="p">):</span>
+</span><span class="line">    <span class="n">to_reclaim</span> <span class="o">=</span> <span class="n">limbo</span><span class="o">.</span><span class="n">consume_snapshot_acquire</span><span class="p">()</span>
+</span><span class="line">    <span class="n">os</span><span class="o">.</span><span class="n">membarrier</span><span class="p">()</span>  <span class="c1"># C1</span>
+</span><span class="line">    <span class="n">pinned</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+</span><span class="line">        <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">())</span>  <span class="c1"># C2</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">to_reclaim</span><span class="p">:</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">pinned</span><span class="p">:</span>
+</span><span class="line">            <span class="n">limbo</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">resource</span><span class="p">)</span>
+</span><span class="line">        <span class="k">else</span><span class="p">:</span>
+</span><span class="line">            <span class="n">resource</span><span class="o">.</span><span class="n">destroy</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We’ve replaced a fence on the fast read path with a compiler barrier, at the expense of executing a heavy syscall on the slow path.  That’s usually a good trade-off, and is the <a href="https://github.com/facebook/folly/blob/master/folly/synchronization/Hazptr.h">preferred implementation strategy for Folly’s hazard ointers</a>.</p>
+
+<p>The freedom to pair mere <em>compiler</em> barriers with <code>membarrier</code>
+syscalls opens the door for many more “atomic enough” operations, not
+just the fenced stores and loads we used until now:
+similarly to the key idea in <a href="https://github.com/concurrencykit/ck/blob/master/include/ck_ec.h">Concurrency Kit’s atomic-free SPMC event count</a>,
+we can use non-interlocked read-modify-write instructions,
+since any interrupt (please don’t mention imprecise interrupts) will execute before or after any such instruction,
+and never in the middle of an instruction.</p>
+
+<h2 id="wait-free-hazard-pointers-with-interrupt-atomic-instructions">Wait-free hazard pointers with interrupt-atomic instructions</h2>
+
+<p>The key insight <a href="https://arxiv.org/abs/2002.07053">Blelloch and Wei</a>
+had to achieve wait-freedom in hazard pointer is that the combination
+of publishing a guess and confirming that the guess is correct in <code>hp_read</code>
+emulates an atomic memory-memory copy.  Assuming we have such an atomic copy primitive, the read-side becomes trivial.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_blelloch_wei.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_read_membarrier</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">record</span><span class="p">):</span>
+</span><span class="line">    <span class="n">cell</span><span class="o">.</span><span class="n">atomic_copy</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="p">)</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">record</span><span class="o">.</span><span class="n">pin</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The “only” issue is that atomic memory-memory copies don’t exist in contemporary hardware.</p>
+
+<p>However, we’ve already noted that syscalls like <code>membarrier</code> mean we can lower our requirements to interrupt atomicity, i.e., any individual instruction works since we’re assuming precise interrupts… and it just happens that <code>x86</code> and <code>amd64</code> do have single-instruction memory-memory copies!</p>
+
+<p>The <a href="https://www.felixcloutier.com/x86/movs:movsb:movsw:movsd:movsq"><code>MOVS</code> instructions</a> are typically only used with a <code>rep</code> prefix.  However, they can also be executed without any prefix, to execute one iteration of the copy loop.  Executing a <code>REP</code>-free <code>MOVSQ</code> instruction copies one quadword (64 bits) from <code>[RSI]</code> to <code>[RDI</code>], and increment both registers, and all this stuff happens in one instructions, so will never be split by an interrupt.
+That’s an <em>interrupt</em>-atomic copy, so we can simply slot that in place
+of the software atomic copy in Blelloch and Wei’s proposal!</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_movs.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_read_movs</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">record</span><span class="p">):</span>
+</span><span class="line">    <span class="n">x86</span><span class="o">.</span><span class="n">movs</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="p">,</span> <span class="n">cell</span><span class="p">)</span>  <span class="c1"># R1</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">record</span><span class="o">.</span><span class="n">pin</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Again, the <code>MOVS</code> instruction is not atomic, but will be ordered with
+respect to the <code>membarrier</code> syscall in <code>hp_cleanup_membarrier</code>: either
+it fully executes before the <code>membarrier</code> in <code>C1</code>, in which case the
+pinned value will be visible to the cleanup loop, or it executes after
+the <code>membarrier</code>, which guarantees it will not observe a stale value
+that’s waiting in the limbo list.</p>
+
+<p>That’s just one instruction, but instructions aren’t all created
+equal. <a href="https://uops.info/html-instr/MOVSQ.html"><code>MOVS</code> is on the heavy side</a>: in order to read from memory, write to memory, and increment two registers,
+a modern Intel chip has to execute 5 micro-ops in at least ~5 cycles.
+That’s not exactly fast; definitely better than an atomic (<code>LOCK</code>ed)
+instruction, but not fast.</p>
+
+<p>We can improve that with a trick from classic hazard pointers, and
+preserve wait-freedom.  We can usually guess what value we’ll find in
+<code>record.pin</code>, simply by reading <code>cell</code> with a regular relaxed load.
+Unless we’re extremely unlucky (realistically, as long as the reader
+thread isn’t interrupted), <code>MOVSQ</code> will copy the same value we just
+guessed.  That’s enough to exploit branch prediction and turn a data
+dependency on <code>MOVSQ</code> (a high latency instruction) into a data
+dependency on a regular load <code>MOV</code> (low latency), and a highly
+predictable control dependency.  In very low level pseudo code, this
+“speculative” version of the <code>MOVS</code> read-side might look like:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_movs_spec.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_read_movs_spec</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">record</span><span class="p">):</span>
+</span><span class="line">    <span class="n">guess</span> <span class="o">=</span> <span class="n">cell</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span>
+</span><span class="line">    <span class="n">x86</span><span class="o">.</span><span class="n">movs</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="p">,</span> <span class="n">cell</span><span class="p">)</span>  <span class="c1"># R1</span>
+</span><span class="line">    <span class="k">if</span> <span class="n">guess</span> <span class="o">==</span> <span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="p">:</span>
+</span><span class="line">        <span class="k">return</span> <span class="n">guess</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">record</span><span class="o">.</span><span class="n">pin</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>At this point though, we might as well just read assembly.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_movs_spec.s </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class="s"><span class="line"><span></span>    <span class="c1"># rsi: cell, rdi: record.pin</span>
+</span><span class="line">    <span class="c1"># rax: guess</span>
+</span><span class="line">    mov    <span class="p">(</span><span class="o">%rsi),%</span>rax            <span class="c1"># guess = cell.load_relaxed()</span>
+</span><span class="line">    movsq  <span class="o">%ds:(%</span>rsi<span class="p">),</span><span class="o">%es:(%</span>rdi<span class="p">)</span>  <span class="c1"># MOVS cell -&gt; record.pin</span>
+</span><span class="line">    cmp    <span class="o">%rax,-0x8(%</span>rdi<span class="p">)</span>        <span class="c1"># guess == record.pin ?</span>
+</span><span class="line">    jne    slow                   <span class="c1"># if !=, goto slow</span>
+</span><span class="line">    retq                          <span class="c1"># return guess</span>
+</span><span class="line">slow<span class="o">:</span>
+</span><span class="line">    mov    <span class="m">-0</span>x8<span class="p">(</span><span class="o">%rdi),%</span>rax        <span class="c1"># ret = record.pin</span>
+</span><span class="line">    retq                          <span class="c1"># return ret</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>I’ll show at the end that, in reasonable circumstances, this wait-free
+code sequence is faster than the usual membarrier-based lock-free
+read side.  But first, let’s see how we can also recover wait-freedom
+on less CISCy architectures, with an asymmetric “helping” scheme.</p>
+
+<h2 id="interrupt-atomic-copy-with-some-help">Interrupt-atomic copy, with some help</h2>
+
+<p>Blelloch’s and Wei’s wait-free atomic copy primitive builds on the
+usual trick for wait-free algorithms: when a thread would wait for an
+operation that’s half-way done, it helps that operation complete
+instead of blocking.</p>
+
+<p>This strategy has the marked advantage of working.  However, it’s
+also symmetric between the common case (the thread that initiated
+the operation quickly completes it), and the worst case (another
+thread notices the initiating thread got stuck and moves the
+operation along).  We pessimised the common case in order to eliminate blocking in the worst case, a frequent pattern in wait-free algorithms.</p>
+
+<p>The source of the symmetry is our specification of an atomic copy
+from one source field to exactly one destination field, which must
+be written exactly once by either the thread that initiated the copy
+(the hazard pointer reader), and any concurrent helper (the cleanup loop).</p>
+
+<p>We can relax that requirement, since we know that the hazard pointer
+scanning loop can handle spurious or garbage pinned values.  Rather
+than forcing both the fast path and the slow path to write to the same
+pinned field, we will give each HP record <em>two</em> pinned fields: a
+single-writer one for the fast path, and a multi-writer one for all
+helpers.</p>
+
+<p>Until now a hazard pointer record has only had one field, the “pinned”
+value.  We have to add some complexity to make this asymmetric helping
+scheme work: in order for helpers to be able to help, we must publish
+the cell we are reading, and we need somewhere for helpers to write
+the pinned value they read.  We also need some sort of ABA protection
+to make sure slow helpers don’t overwrite a fresher pinned value
+with a stale one, when the <em>helper</em> gets stuck (preempted).</p>
+
+<p>Concretely, the HP record still has a <code>pinned</code> field, which is only
+written by the reader that owns the record, and read by cleanup
+threads.  The <code>help</code> subrecord is written by both the owner of the
+record and any reclaimer that might want to move a reader along.  The
+reader will first write the address of the pointer it wants to read
+and protect in <code>cell</code>, generate a new generation id by incrementing
+<code>gen_sequence</code>, and write that to <code>pinned_or_gen</code>.  We’ll tell
+generation ids apart from pinned addresses by their sign: negative
+values are generation ids, positive ones are addresses.</p>
+
+<p>At this point, any reclaimer should be able to notice that the
+<code>help.pin_or_gen</code> is a generation value, and find a valid cell
+address in <code>help.cell</code>.  That’s enough to read the cell’s value, and
+update to the address is just read with a compare-and-swap (CAS) of
+<code>pinned_or_gen</code>: if the CAS fails, another helper got there first, or
+the reader has already moved on to a new target cell.  In the latter
+case, any in-flight hazard pointer read sequence started before we
+started reclaiming the limbo list, and we can thus ignore the record.</p>
+
+<p>Having populated the <code>help</code> subrecord, a reader can now publish a
+value in <code>pinned</code>, and then look for a pinned value in
+<code>help.pin_or_gen</code>: if a helper published a pinned value there, the
+reader must use it, and not a potentially staler (already destroyed)
+value the reader wrote to <code>pinned</code>.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_record_wf.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">intptr_t</span> <span class="n">gen_sequence</span> <span class="o">=</span> <span class="n">INTPTR_MIN</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"><span class="k">struct</span> <span class="n">hp_record_wf</span> <span class="p">{</span>
+</span><span class="line">        <span class="kt">void</span> <span class="o">*</span><span class="n">pinned</span><span class="p">;</span>
+</span><span class="line">        <span class="k">struct</span> <span class="p">{</span>
+</span><span class="line">                <span class="kt">void</span> <span class="o">**</span><span class="k">volatile</span> <span class="n">cell</span><span class="p">;</span>
+</span><span class="line">                <span class="k">volatile</span> <span class="kt">intptr_t</span> <span class="n">pinned_or_gen</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span> <span class="n">help</span><span class="p">;</span>
+</span><span class="line"><span class="p">};</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>On the read side, we can rely on two compiler barriers to let
+membarriers guarantee writes to the <code>help</code> subrecord are visible
+before we start reading from the target cell, and to guarantee
+that any helper’s write to <code>record.help.pin_or_gen</code> are visible
+before we compare it against <code>gen</code>:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_wf.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_read_wf</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">record</span><span class="p">):</span>
+</span><span class="line">    <span class="n">gen</span> <span class="o">=</span> <span class="n">gen_sequence</span>
+</span><span class="line">    <span class="n">gen_sequence</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span class="line">    <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell</span><span class="o">.</span><span class="n">store_relaxed</span><span class="p">(</span><span class="n">cell</span><span class="p">)</span>
+</span><span class="line">    <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">pin_or_gen</span><span class="o">.</span><span class="n">store_release</span><span class="p">(</span><span class="n">gen</span><span class="p">)</span>
+</span><span class="line">    <span class="n">compiler_barrier</span><span class="p">()</span>  <span class="c1"># RA</span>
+</span><span class="line">    <span class="n">guess</span> <span class="o">=</span> <span class="n">cell</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">()</span>  <span class="c1"># R2</span>
+</span><span class="line">    <span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">store_relaxed</span><span class="p">(</span><span class="n">guess</span><span class="p">)</span>
+</span><span class="line">    <span class="n">compiler_barrier</span><span class="p">()</span>  <span class="c1"># RB</span>
+</span><span class="line">    <span class="k">if</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">pin_or_gen</span> <span class="o">!=</span> <span class="n">gen</span><span class="p">:</span>
+</span><span class="line">        <span class="n">guess</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">pin_or_gen</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">()</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">()</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">guess</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>On the cleanup side, we will consume the limbo list, issue a
+membarrier to catch any read-side critical section that wrote to
+<code>pinned_or_gen</code> before we consumed the list, help these sections
+along, issue another membarrier to guarantee that either the readers’
+writes to <code>record.pin</code> are visible, or our writes to
+<code>record.help.pin_or_gen</code> visible to readers, and finally scan the
+records while remembering to pin the union of <code>record.pin</code> and
+<code>record.help.pin_or_gen</code> if it holds a pinned value.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_cleanup_wf.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_cleanup_wf</span><span class="p">(</span><span class="n">limbo</span><span class="p">,</span> <span class="n">records</span><span class="p">):</span>
+</span><span class="line">    <span class="n">to_reclaim</span> <span class="o">=</span> <span class="n">limbo</span><span class="o">.</span><span class="n">consume_snapshot_acquire</span><span class="p">()</span>
+</span><span class="line">    <span class="n">os</span><span class="o">.</span><span class="n">membarrier</span><span class="p">()</span>  <span class="c1"># C1</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+</span><span class="line">        <span class="n">gen</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">pin_or_gen</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">()</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">gen</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">            <span class="c1"># XXX: How do we know this is safe?!</span>
+</span><span class="line">            <span class="n">value</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">()</span>
+</span><span class="line">            <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">pin_or_gen</span><span class="o">.</span><span class="n">compare_exchange</span><span class="p">(</span><span class="n">gen</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+</span><span class="line">    <span class="n">os</span><span class="o">.</span><span class="n">membarrier</span><span class="p">()</span>  <span class="c1"># C2</span>
+</span><span class="line">    <span class="n">pinned</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+</span><span class="line">        <span class="n">helped</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">pin_or_gen</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">helped</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">            <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">helped</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">())</span>
+</span><span class="line">        <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">())</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">to_reclaim</span><span class="p">:</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">pinned</span><span class="p">:</span>
+</span><span class="line">            <span class="n">limbo</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">resource</span><span class="p">)</span>
+</span><span class="line">        <span class="k">else</span><span class="p">:</span>
+</span><span class="line">            <span class="n">resource</span><span class="o">.</span><span class="n">destroy</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The membarrier in <code>C1</code> matches the compiler barrier in <code>RA</code>: if a
+read-side section executed <code>R2</code> before we consumed the limbo list, its
+writes to <code>record.help</code> must be visible.  The second membarrier in
+<code>C2</code> matches the compiler barrier in <code>RB</code>: if the read-side section
+has written to <code>record.pin</code>, that write must be visible, otherwise,
+the helper’s write to <code>help.pin_or_gen</code> must be visible to the reader.
+Finally, when scanning for pinned values, we can’t determine whether
+the reader used its own value, or the one we published, so we must
+conservatively add both to the pinned set.</p>
+
+<p>That’s a couple more instructions on the read-side that the
+speculative <code>MOVSQ</code> implementation.  However, the instructions are
+simpler, and the portable wait-free implementation benefits even more
+from speculative execution: the final branch is equally predicatble,
+and now depends only on a read of <code>record.help.pin_or_gen</code>, which can
+be satisfied by forwarding the reader’s own write to that same field.</p>
+
+<p>The end result is that, in my microbenchmarks, this portable wait-free
+implementation does slightly <em>better</em> than the speculative <code>MOVSQ</code> code.</p>
+
+<p>We can still do better, by further specialising the code.  The cleanup
+path is already slow, what if we also assumed mutual exclusion, so that
+for each record, only one cleanup call could be in flight at any one time?</p>
+
+<h2 id="interrupt-atomic-copy-with-at-most-one-helper">Interrupt-atomic copy, with at most one helper</h2>
+
+<p>Once we may assume mutual exclusion between cleanup loops, we don’t
+have to worry about ABA protection anymore.  Hazard pointer records
+become simpler:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_record_swf.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">struct</span> <span class="n">hp_record_swf</span> <span class="p">{</span>
+</span><span class="line">        <span class="kt">void</span> <span class="o">*</span><span class="n">pinned</span><span class="p">;</span>
+</span><span class="line">        <span class="k">struct</span> <span class="p">{</span>
+</span><span class="line">                <span class="k">volatile</span> <span class="kt">intptr_t</span> <span class="n">cell_or_pin</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span> <span class="n">help</span><span class="p">;</span>
+</span><span class="line"><span class="p">};</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We’ll also use tagging with negative of positive values, this time to
+distinguish target cell addresses (positive) from pinned values
+(negative).  Now that the read side doesn’t have to update a
+generation counter to obtain unique sequence values, it’s even simpler:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_swf.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_read_swf</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">record</span><span class="p">):</span>
+</span><span class="line">    <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">store_relaxed</span><span class="p">(</span><span class="n">cell</span><span class="o">.</span><span class="n">as_int</span><span class="p">())</span>
+</span><span class="line">    <span class="n">compiler_barrier</span><span class="p">()</span>  <span class="c1"># RA</span>
+</span><span class="line">    <span class="n">guess</span> <span class="o">=</span> <span class="n">cell</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">()</span>  <span class="c1"># R2</span>
+</span><span class="line">    <span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">store_relaxed</span><span class="p">(</span><span class="n">guess</span><span class="p">)</span>
+</span><span class="line">    <span class="n">compiler_barrier</span><span class="p">()</span>  <span class="c1"># RB</span>
+</span><span class="line">    <span class="k">if</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">        <span class="n">guess</span> <span class="o">=</span> <span class="p">(</span><span class="o">-</span><span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">())</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">()</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">guess</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The cleanup function isn’t particularly different, except for the new
+encoding scheme.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_cleanup_swf.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_cleanup_swf</span><span class="p">(</span><span class="n">limbo</span><span class="p">,</span> <span class="n">records</span><span class="p">):</span>
+</span><span class="line">    <span class="k">with</span> <span class="n">cleanup_lock</span><span class="p">:</span>
+</span><span class="line">        <span class="n">to_reclaim</span> <span class="o">=</span> <span class="n">limbo</span><span class="o">.</span><span class="n">consume_snapshot_acquire</span><span class="p">()</span>
+</span><span class="line">        <span class="n">os</span><span class="o">.</span><span class="n">membarrier</span><span class="p">()</span>  <span class="c1"># C1</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+</span><span class="line">            <span class="n">cell</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span>
+</span><span class="line">            <span class="k">if</span> <span class="n">cell</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">                <span class="c1"># XXX: How do we know this is safe?!</span>
+</span><span class="line">                <span class="n">value</span> <span class="o">=</span> <span class="o">-</span><span class="n">cell</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">()</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">()</span><span class="o">.</span><span class="n">as_int</span><span class="p">()</span>
+</span><span class="line">                <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">compare_exchange</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+</span><span class="line">        <span class="n">os</span><span class="o">.</span><span class="n">membarrier</span><span class="p">()</span>  <span class="c1"># C2</span>
+</span><span class="line">        <span class="n">pinned</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+</span><span class="line">            <span class="n">helped</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span>
+</span><span class="line">            <span class="k">if</span> <span class="n">helped</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">                <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">((</span><span class="o">-</span><span class="n">helped</span><span class="p">)</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">())</span>
+</span><span class="line">            <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">())</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">to_reclaim</span><span class="p">:</span>
+</span><span class="line">            <span class="k">if</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">pinned</span><span class="p">:</span>
+</span><span class="line">                <span class="n">limbo</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">resource</span><span class="p">)</span>
+</span><span class="line">            <span class="k">else</span><span class="p">:</span>
+</span><span class="line">                <span class="n">resource</span><span class="o">.</span><span class="n">destroy</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Again, <code>RA</code> matches <code>C1</code>, and <code>RB</code> <code>C2</code>.  We’ll see in the
+microbenchmarks that shaving the handful of instructions associated
+with incrementing the generation counter does help in tight loops.</p>
+
+<h2 id="qualitative-differences-between-hp-implementations">Qualitative differences between HP implementations</h2>
+
+<p>A key attribute for hazard pointers is how much they slow down pointer
+traversal in the common case.  However, there other qualitative
+factors that should impact our choice of implementation.</p>
+
+<p>The <a href="https://github.com/concurrencykit/ck/blob/master/include/ck_hp.h">classic fenced (<code>hp_read_explicit</code>) implementation</a>
+needs one atomic or fence instruction per read, but does not depend on any
+exotic OS operation.</p>
+
+<p>A <a href="https://github.com/facebook/folly/blob/master/folly/synchronization/Hazptr.h">simple membarrier implementation (<code>hp_read_membarrier</code>)</a>
+is ABI compatible with the fenced implementations, but lets the read side
+replace the fence with a compiler barrier, as long as the
+slow cleanup path can issue <a href="https://man7.org/linux/man-pages/man2/membarrier.2.html"><code>membarrier</code> syscalls</a>
+on Linux, or <a href="https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-flushprocesswritebuffers">the similar <code>FlushProcessWriteBuffers</code></a>
+on Windows.  All the remaining implementations (we won’t mention the much more complex wait-free implementation of <a href="https://arxiv.org/abs/2002.07053">Blelloch and Wei</a>)
+also rely on the same syscalls to avoid fences or atomic instructions
+on the read side, while additionally providing wait-freedom (constant
+execution time) for readers, rather than mere lock-freedom.</p>
+
+<p>The simple <code>MOVSQ</code>-based implementations (<code>hp_read_movs</code>) is fully
+compatible with <code>hp_read_membarrier</code>, wait-free, and usually compiles
+down to fewer instruction bytes, but slightly slower.  Adding
+speculation (<code>hp_read_movs_spec</code>) retains compatibility and closes the
+performance gap, with a comparable number of instruction bytes as the
+lock-free membarrier implementation.  Both implementations rely on
+<code>MOVSQ</code>, an instruction that only exists on <code>x86</code> and <code>amd64</code>.</p>
+
+<p>However, we can also provide portable wait-freedom, once we modify the
+cleanup code to help the read side sections forward.  The basic
+implementation <code>hp_read_wf</code> compiles to many more instructions than
+the other read-side implementations, but those instructions are mostly
+upstream of the protected pointer read; in microbenchmarks, the result
+can often be faster than the simple <code>hp_read_membarrier</code> or the
+speculative <code>hp_read_movs_spec</code>.  The downside is that instruction
+bytes tend to hurt much more in real code than in microbenchmarks.</p>
+
+<p>We can simplify and shrink the portable wait-free code by assuming
+mutual exclusion on the cleanup path (<code>hp_read_swf</code>).  Performance is
+even better, and instruction bytes comparable to <code>hp_read_membarrier</code>.
+However, we’ve introduced more opportunities for reclamation hiccups.</p>
+
+<p>More importantly, achieving wait-freedom with concurrent help suffers
+from a fundamental issue: helpers don’t know that the pointer they’re
+trying to help read is stale until they CAS the value they read into
+place.  This means they must be able to safely read potentially stale
+pointers without crashing.  One might think mutual exclusion in the
+cleanup function addresses this issue, but systems often mix and match
+different reclamation schemes, as well as lock-free and lock-ful code.
+On Linux, we can probably
+abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;
+in general I suppose we can setup signal handlers to catch <code>SIGSEGV</code>
+and <code>SIGBUS</code> in dedicated cleanup threads.</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes">
+  <ol>
+    <li id="fn:but-also">
+      <p>I also tend to read anything by <a href="https://dblp.uni-trier.de/pers/b/Blelloch:Guy_E=.html">Guy Blelloch</a>. <a href="#fnref:but-also" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:it-is-gc">
+      <p>In fact, I’ve often argued that SMR <em>is</em> garbage collection, just not tracing GC. <a href="#fnref:it-is-gc" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:stable-alloc">
+      <p>Hazard pointer records must still be managed separately, e.g., with a type stable allocator, but we can bootstrap everything else once we have a few records per thread. <a href="#fnref:stable-alloc" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:even-with-pinned-nodes">
+      <p>We can even do that without keeping track of the number of nodes that were previously pinned by hazard pointer records and kept in the limbo list: each record can only pin at most one node, so we can wait until the limbo list is, e.g., twice the size of the record set. <a href="#fnref:even-with-pinned-nodes" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:or-hw-level">
+      <p>Let’s also hope efforts like <a href="https://www.cl.cam.ac.uk/research/security/ctsrd/cheri/">CHERI</a> don’t have to break lock-free code. <a href="#fnref:or-hw-level" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:travis-says-its-fine">
+      <p>That’s what <a href="https://travisdowns.github.io/blog/2020/07/06/concurrency-costs.html">Travis Downs classifies as a Level 1 concurrency cost</a>, which is usually fine for writes, but adds a sizable overhead to simple read-only code. <a href="#fnref:travis-says-its-fine" class="reversefootnote">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+July
+  
+6th, 
+2020
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/Blog/2020/05/02/check-for-borrows-in-bitwise-operations/" title="Previous Post: Check for borrows in bitwise operations">&laquo; Check for borrows in bitwise operations</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2020 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>
