@@ -1,10 +1,8 @@
 ---
 layout: post
 title: "Flatter wait-free hazard pointers"
-date: 2020-07-07 07:54:17 -0400
-comments: false
-hidden: true
-draft: true
+date: 2020-07-07 14:30:17 -0400
+comments: true
 categories:
 ---
 
@@ -19,14 +17,14 @@ which can be annoying for code generation and bad for worst-case time bounds.
 
 [^it-is-gc]: In fact, I've often argued that SMR *is* garbage collection, just not tracing GC.
 
-Blelloch's and Wei's wait-free algorithm eliminates that loop... with a construction that stacks [two emulated primitives---atomic copy, itself implemented with strong LL/SC---](https://arxiv.org/abs/1911.09671)on top of what real hardware offers.
+Blelloch and Wei's wait-free algorithm eliminates that loop... with a construction that stacks [two emulated primitives---atomic copy, itself implemented with strong LL/SC---](https://arxiv.org/abs/1911.09671)on top of what real hardware offers.
 I see the real value of the construction in proving that wait-freedom is achievable,
 and that the key is atomic memory-memory copies.
 
-In this post, I'll show how to flatten down that abstraction tower into something practical with a bit of engineering work,
+In this post, I'll show how to flatten down that abstraction tower into something practical with a bit of engineering elbow grease,
 and come up with wait-free alternatives to the usual lock-free hazard pointers
-that are also competitive in the best case.
-The insight that hazard pointers can be as wait-free as any atomic memory-memory copy primitive lets us improve the worst case
+that are competitive in the best case.
+Blelloch and Wei's insight that hazard pointers can use any wait-free atomic memory-memory copy lets us improve the worst case
 without impacting the common case!
 
 But first, what are hazard pointers?
@@ -37,7 +35,7 @@ Hazard pointers and the safe memory reclamation problem
 Hazard pointers were introduced by [Maged Michael](https://dblp.uni-trier.de/pers/m/Michael:Maged_M=.html)
 in [Hazard Pointers: Safe Memory Reclamation for Lock-Free Objects (2005, PDF)](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&rep=rep1&type=pdf),
 as the first solution to reclamation races in lock-free code.
-The introduction also has a concise explanation of the safe memory reclamation (SMR) problem.
+The introduction includes a concise explanation of the safe memory reclamation (SMR) problem.
 
 > When a thread removes a node, it is possible that some other contending thread—in the course of its lock-free operation—has earlier read a reference to that node, and is about to access its contents. If the removing thread were to reclaim the removed node for arbitrary reuse, the contending thread might corrupt the object or some other object that happens to occupy the space of the freed node, return the wrong result, or suffer an access error by dereferencing an invalid pointer value. [...] Simply put, the memory reclamation problem is how to allow the memory of removed nodes to be freed (i.e., reused arbitrarily or returned to the OS), while guaranteeing that no thread accesses free memory, and how to do so in a lock-free manner.
 
@@ -105,12 +103,12 @@ def hp_read_explicit(cell, record):
 
 [^beware-accidental-success]: I tend to implement lock-free algorithms with a heavy dose of inline assembly, or [Concurrency Kit](http://concurrencykit.org/)'s wrappers: it's far too easy to run into subtle undefined behaviour.  For example, comparing a pointer after it has been freed is UB in C and C++, even if we don't access the pointee.  Even if we compare as `uintptr_t`, it's apparently debatable whether the code is well defined when the comparison happens to succeed because the pointee was freed, then recycled in an allocation and published to `cell` again.
 
-We need a store/load fence in `R1` to make sure the store to the record (just above `R1`) is visible by the time the second read (`R2`) executes.  Under the [TSO memory model used by x86 chips (PDF)](https://www.cl.cam.ac.uk/~pes20/weakmemory/x86tso-paper.tphols.pdf),
+We need a store/load fence in `R1` to make sure the store to the record (just above `R1`) is visible by the time the second read (`R2`) executes.  Under the [TSO memory model implemented by x86 chips (PDF)](https://www.cl.cam.ac.uk/~pes20/weakmemory/x86tso-paper.tphols.pdf),
 this fence is the only one that isn't implicitly satisfied by the hardware.
 It also happens that fences are best implemented with atomic operations
 on x86oids,
 so we can eliminate the fence in `R1`
-by implementing the store just before `R1` with an atomic exchange (fetch-and-set).
+by replacing the store just before `R1` with an atomic exchange (fetch-and-set).
 
 The slow cleanup path has its own fence that matches `R1` (the one in `R2`
 matches the mutators' writes to `cell`).
@@ -228,12 +226,12 @@ def hp_read_membarrier(cell, record):
     return record.pin
 {% endcodeblock %}
 
-The "only" issue is that atomic memory-memory copies don't exist in contemporary hardware.
+The "only" problem is that atomic copies don't exist in contemporary hardware.
 
-However, we've already noted that syscalls like `membarrier` mean we can weaken our requirements to interrupt atomicity, i.e., any individual non-atomic instruction works since we're assuming precise interrupts... and `x86` and `amd64` do have an instruction for memory-memory copies!
+However, we've already noted that syscalls like `membarrier` mean we can weaken our requirements to interrupt atomicity. In other words, individual non-atomic instructions work since we're assuming precise interrupts... and `x86` and `amd64` do have an instruction for memory-memory copies!
 
-The [`MOVS` instructions](https://www.felixcloutier.com/x86/movs:movsb:movsw:movsd:movsq) are typically only used with a `rep` prefix.  However, they can also be executed without any prefix, to execute one iteration of the copy loop.  Executing a `REP`-free `MOVSQ` instruction copies one quadword (64 bits) from `[RSI]` to `[RDI]`, and increment both registers... and all this stuff happens in one instructions, so will never be split by an interrupt.
-That's an *interrupt*-atomic copy, so we can slot that in place
+The [`MOVS` instructions](https://www.felixcloutier.com/x86/movs:movsb:movsw:movsd:movsq) are typically only used with a `REP` prefix.  However, they can also be executed without any prefix, to execute one iteration of the copy loop.  Executing a `REP`-free `MOVSQ` instruction copies one quadword (64 bits) from `[RSI]` to `[RDI]`, and increment both registers... and all this stuff happens in one instructions, so will never be split by an interrupt.
+That's an *interrupt*-atomic copy, which we can slot in place
 of the software atomic copy in Blelloch and Wei's proposal!
 
 {% codeblock hp_read_movs.py %}
@@ -292,15 +290,15 @@ slow:
 {% endcodeblock %}
 </div>
 
-I'll show at the end that, in reasonable circumstances, this wait-free
+We'll see that, in reasonable circumstances, this wait-free
 code sequence is faster than the usual membarrier-based lock-free
-read side.  But first, let's see how we can also recover wait-freedom
-on less CISCy architectures, with an asymmetric "helping" scheme.
+read side.  But first, let's see how we can achieve wait-freedom
+without CISCy instructions, with an asymmetric "helping" scheme.
 
 Interrupt-atomic copy, with some help
 -------------------------------------
 
-Blelloch's and Wei's wait-free atomic copy primitive builds on the
+Blelloch and Wei's wait-free atomic copy primitive builds on the
 usual trick for wait-free algorithms: when a thread would wait for an
 in-progress operations, it helps that operation complete
 instead of blocking.
@@ -319,7 +317,7 @@ be written exactly once by the thread that initiated the copy
 We can relax that requirement, since we know that the hazard pointer
 scanning loop can handle spurious or garbage pinned values.  Rather
 than forcing both the fast path and the slow path to write to the same
-`pinned` field, we will give each HP record *two* pinned fields: a
+`pin` field, we will give each HP record *two* pin fields: a
 single-writer one for the fast path, and a multi-writer one for all
 helpers.
 
@@ -331,7 +329,7 @@ the pinned value they read.  We also need some sort of ABA protection
 to make sure slow helpers don't overwrite a fresher pinned value
 with a stale one, when the *helper* gets stuck (preempted).
 
-Concretely, the HP record still has a `pinned` field, which is only
+Concretely, the HP record still has a `pin` field, which is only
 written by the reader that owns the record, and read by cleanup
 threads.  The `help` subrecord is written by both the owner of the
 record and any cleanup thread that might want to move a reader along.  The
@@ -357,7 +355,7 @@ struct hp_record_wf {
 At this point, any cleanup thread should be able to notice that the
 `help.pin_or_gen` is a generation value, and find a valid cell address
 in `help.cell`.  That's enough to read the cell's value, and publish to
-the address it just read with a compare-and-swap (CAS) of
+the address it just read with an atomic compare-and-swap (CAS) of
 `pin_or_gen`: if the CAS fails, another helper got there first, or
 the reader has already moved on to a new target cell.  In the latter
 case, any in-flight hazard pointer read sequence started before we
@@ -365,10 +363,10 @@ started reclaiming the limbo list, and it doesn't matter what pinned
 value we extract from the record.
 
 Having populated the `help` subrecord, a reader can now publish a
-value in `pinned`, and then look for a pinned value in
+value in `pin`, and then look for a pinned value in
 `help.pin_or_gen`: if a helper published a pinned value there, the
 reader must use it, and not the potentially stale (already destroyed)
-value the reader wrote to `pinned`.
+value the reader wrote to `pin`.
 
 On the read side, we can rely on two compiler barriers to let
 membarriers guarantee writes to the `help` subrecord are visible
@@ -444,8 +442,8 @@ be satisfied by forwarding the reader's own write to that same field.
 The end result is that, in my microbenchmarks, this portable wait-free
 implementation does slightly *better* than the speculative `MOVSQ` code.
 We make this even tighter, by further specialising the code.  The cleanup
-path is already slow.  What if we also assumed mutual exclusion, so that
-for each record, only one cleanup call can be in flight at any time?
+path is already slow.  What if we also assumed mutual exclusion; what if,
+for each record, only one cleanup at a time could be in flight?
 
 Interrupt-atomic copy, with at most one helper
 ----------------------------------------------
@@ -456,7 +454,7 @@ can lose some weight.
 
 {% codeblock hp_record_swf.c %}
 struct hp_record_swf {
-        void *pinned;
+        void *pin;
         struct {
                 volatile intptr_t cell_or_pin;
         } help;
@@ -553,7 +551,7 @@ upstream of the protected pointer read; in microbenchmarks, the result
 can even be faster than the simple `hp_read_membarrier` or the
 speculative `hp_read_movs_spec`.  The downside is that instruction
 bytes tend to hurt much more in real code than in microbenchmarks.
-We also rely on pointer tagging, which is sometimes a liability.
+We also rely on pointer tagging, which could make the code less widely applicable.
 
 We can simplify and shrink the portable wait-free code by assuming
 mutual exclusion on the cleanup path (`hp_read_swf`).  Performance is
@@ -566,11 +564,20 @@ from a fundamental issue: helpers don't know that the pointer read they're
 helping move forward is stale until they (fail to) CAS into
 place the value they just read.  This means they must be able to safely read potentially stale
 pointers without crashing.  One might think mutual exclusion in the
-cleanup function addresses this issue, but programs often mix and match
+cleanup function fixes that, but programs often mix and match
 different reclamation schemes, as well as lock-free and lock-ful code.
 On Linux, we could
 abuse [the `process_vm_readv` syscall](https://man7.org/linux/man-pages/man2/process_vm_readv.2.html);
-in general I suppose we should install signal handlers in dedicated cleanup threads to catch `SIGSEGV` and `SIGBUS`.
+in general I suppose we could install signal handlers to catch `SIGSEGV` and `SIGBUS`.
+
+Having to help readers forward also loses a nice practical property of
+hazard pointers: it's always safe to spuriously consider arbitrary
+(readable) memory as a hazard pointer record, it only costs us
+additional conservatism in reclamation.  That's not the case anymore,
+once the cleanup thread has to help readers, and thus must write to HP
+records.  This downside does not impact plain implementations of
+hazard pointers, but does make it harder to improve record management
+overhead by taking inspiration from managed language runtimes.
 
 Some microbenchmarks
 --------------------
@@ -714,12 +721,12 @@ circular linked list, with various hazard pointer schemes and *no work to find t
     |  noop                     |            52 |             56 |            56 |
     |  baseline                 |          4056 |           4060 |          4080 |
     |  unrolled                 |          4056 |           4060 |          4080 |
-    |  hp_read_explicit         |         22152 |          22376 |         27240 |
+    |  hp_read_explicit         |         20136 |          20160 |         24740 |
     |  hp_read_membarrier       |          5080 |           5092 |          5164 |
     |  hp_read_movs             |         10060 |          10076 |         10348 |
     |  hp_read_movs_spec        |          8568 |           8568 |          8572 |
-    |  hp_read_wf               |          7168 |           7296 |          7504 |
-    |  hp_read_swf              |          4152 |           4188 |          4256 |
+    |  hp_read_wf               |          6572 |           7620 |          8140 |
+    |  hp_read_swf              |          4268 |           4304 |          4368 |
 
 The table above reports quantiles for the total runtime of 1000
 pointer dereferences, after one million repetitions.
@@ -739,7 +746,7 @@ speculation (`hp_read_movs_spec`) does help shave that to ~4.5 cycles
 slightly better, and its single-cleanup version `hp_read_swf` takes
 the crown, by adding less than 0.2 cycle/dereference.
 
-These results are stable and repeatable, but are fragile, in a way:
+These results are stable and repeatable, but still fragile, in a way:
 except for `hp_read_explicit`, which is massively slowed down by its
 atomic operation, and for `hp_read_movs`, which adds a known latency bump on the hot path, the other slowdowns mostly reflect contention for
 execution resources.  In real life, such contention usually only occurs in
@@ -776,12 +783,12 @@ loops of 1000 pointer dereferences, on an unloaded E5-4617 @ 2.9 GHz.
     |  noop                     |            52 |             56 |            56 |
     |  baseline                 |         10260 |          10320 |         10572 |
     |  unrolled                 |          9056 |           9060 |          9180 |
-    |  hp_read_explicit         |         22752 |          22984 |         27868 |
+    |  hp_read_explicit         |         22124 |          22156 |         26768 |
     |  hp_read_membarrier       |         10052 |          10084 |         10264 |
     |  hp_read_movs             |         12084 |          12112 |         15896 |
     |  hp_read_movs_spec        |          9888 |           9940 |         10152 |
-    |  hp_read_wf               |          9616 |           9669 |          9880 |
-    |  hp_read_swf              |         10096 |          10116 |         10260 |
+    |  hp_read_wf               |          9380 |           9420 |          9672 |
+    |  hp_read_swf              |         10112 |          10136 |         10360 |
 
 The difference between `unrolled` in this table and in the previous
 one shows we actually added around 5 cycles of latency per iteration
@@ -790,7 +797,7 @@ estimated earlier for all the hazard pointer schemes except for the
 remarkably slow `hp_read_explicit` and `hp_read_movs`.  It's thus not
 surprising that all hazard pointer implementations but the latter
 two are on par with the unprotected traversal loops (within 1.1 cycle
-per pointer dereference, comparable to the impact of unrolling a loop
+per pointer dereference, less than the impact of unrolling the loop
 without unlocking any further rewrite).
 
 The relative speed of the methods has changed, compared
@@ -803,11 +810,11 @@ The simple portable wait-free implementation `hp_read_wf` was slower than
 I wouldn't read too much into the relative rankings of
 `hp_read_membarrier`, `hp_read_movs_spec`, `hp_read_wf`, and
 `hp_read_swf`.  They only differ by fractions of a cycle per
-dereference, and the exact values are a function of the
+dereference (all between 9.5 and 10.1 cycle/deref), and the exact values are a function of the
 specific mix of micro-ops in the inner loop, and of the
 near-unpredictable impact of instruction ordering on the chip's
-scheduling logic.  What really matters is that they all incur a
-negligible latency overhead once the pointer chasing loop does *some*
+scheduling logic.  What really matters is that their impact
+on traversal latency is negligible once the pointer chasing loop does *some*
 work to find the next node.
 
 What's the best hazard pointer implementation?
@@ -817,7 +824,7 @@ I hope I've made a convincing case that hazard pointers can be
 *wait-free and efficient* on the read-side, as long as we have access
 to something like `membarrier` or `FlushProcessWriteBuffers` on the
 slow cleanup (reclamation) path.  If one were to look at the
-[microbenchmarks alone](https://gist.github.com/pkhuong/5f3acc53b4f046f2717e645ecd504f7b), one would probably pick `hp_read_swf`.
+microbenchmarks alone, one would probably pick `hp_read_swf`.
 
 However, the real world is more complex that microbenchmarks.  When I
 have to extrapolate from microbenchmarks, I usually worry about the
@@ -838,5 +845,7 @@ impractical, but I can imagine code bases where they would constitute
 hard blockers (e.g., library code, or when protecting arbitrary integers).
 
 TL;DR: Use [`hp_read_swf` if you know what you're doing](#hp_read_swf) or want more wait-free speed holes.  Otherwise, [`hp_read_movs_spec` is an all-around solid option on `x86` and `amd64`](#hp_read_movs_spec), and still wait-free.
+
+P.S., [Travis Downs](https://travisdowns.github.io/) notes that mem-mem `PUSH` might be an alternative to `MOVSQ`, but that requires either pointing `RSP` to arbitrary memory, or allocating hazard pointers on the stack (which isn't necessarily a bad idea).  Another idea worthy of investigation!
 
 <p><hr style="width: 50%"></p>
