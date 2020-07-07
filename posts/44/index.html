@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/08/14/a-one-instruction-write-barrier/">A one-instruction write barrier</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/08/23/on-the-importance-of-keeping-microbenchmarks-honest/">On the importance of keeping microbenchmarks honest</a></h1>
     
     
       <p class="meta">
@@ -99,15 +99,15 @@
 
 Aug
   
-14th, 
+23rd, 
 2012
 
 
 
 
         
-         | <a href="/Blog/2012/08/14/a-one-instruction-write-barrier/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2012/08/14/a-one-instruction-write-barrier/"
+         | <a href="/Blog/2012/08/23/on-the-importance-of-keeping-microbenchmarks-honest/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2012/08/23/on-the-importance-of-keeping-microbenchmarks-honest/"
 	      >Comments</a>
         
         
@@ -116,41 +116,51 @@ Aug
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><a href="http://www.hoelzle.org/publications/write-barrier.pdf">Hölzle’s two-instruction write barrier [PDF]</a>
-for garbage collectors looks like</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><a href="http://tapoueh.org/blog/2012/08/20-performance-the-easiest-way.html">A recent post</a> tried to extract information from a microbenchmark, but the author
+absolutely did not care whether the programs computed the right, or
+even the same, thing.</p>
 
-<pre><code> addr = destination
- offset = addr&gt;&gt;k;
- (cards-(heap_base&gt;&gt;k))[offset] = 1 ; mark one byte
- write to addr
+<p>The result? Pure noise.</p>
+
+<p><code>(expt 10 10)</code> overflows 32 bit <em>signed</em> integers, so the C version
+wound up going through 1410065408 iterations instead.  In fact, signed
+overflow is undefined in C, so a sufficiently devious compiler could
+cap the iteration count to 65536 and still be standard compliant.</p>
+
+<p>On SBCL/x86-64, we can do the following and explicitly ask for machine
+unsigned arithmetic:</p>
+
+<pre><code>CL-USER&gt; (lambda (max)
+           (declare (type (unsigned-byte 64) max)
+                    (optimize speed))
+           (let ((sum 0))
+             (declare (type (unsigned-byte 64) sum))
+             (dotimes (i max sum)
+               (setf sum (ldb (byte 64 0) (+ sum i))))))
+#&lt;FUNCTION (LAMBDA (MAX)) {1004DA3D6B}&gt;
+CL-USER&gt; (disassemble *)
+; disassembly for (LAMBDA (MAX))
+; 04DA3E02:       31C9             XOR ECX, ECX               ; no-arg-parsing entry point
+;       04:       31C0             XOR EAX, EAX
+;       06:       EB0E             JMP L1
+;       08:       0F1F840000000000 NOP
+;       10: L0:   4801C1           ADD RCX, RAX
+;       13:       48FFC0           INC RAX
+;       16: L1:   4839D0           CMP RAX, RDX
+;       19:       72F5             JB L0
+[ function epilogue ]
 </code></pre>
 
-<p>Some SBCL users allocate Lisp object lookalikes in the C heap, and we
-have stack-allocated values; I have to test whether the address is in
-range or mask the offset to avoid overflows.</p>
+<p>Now that <code>ldb</code> <em>portably</em> ensures modular arithmetic, we
+virtually get the exact same thing as what GCC outputs, down to
+alignment.  It’s still slower than the C version because it goes
+through 1e10 iterations of the lossy sum, rather than
+1.4e9.</p>
 
-<p>Or, we could exploit X86’s bit-addressing instructions:</p>
-
-<pre><code> addr = destination
- bts cards, addr
- write to addr
-</code></pre>
-
-<p>where <code>cards</code> is a vector of 256 or 512MB (there’s some trickery to handle
-negative offsets). <code>bts</code> will index into that vector of 4G bits, and
-set the corresponding bit to 1.  On X86-64, we can force <code>cards</code> to be
-in the lower 4GB, and stick to 32 bit addressing: the instruction will
-also implicitly mask out the upper 32 bit of <code>addr</code> before indexing
-into <code>cards</code>.  Too bad it’s around twice or thrice as slow as a shift
-and a byte write (or even shift, mask and byte write) and really sucks
-with SMP.</p>
-
-<p>There are also <a href="&lt;http://weinholt.se/scheme/alignment-check.pdf">hacks [PDF]</a>
-to
-<a href="https://groups.google.com/d/msg/comp.lang.lisp/qQdpmfHhJj8/43LfCzBiCJAJ">abuse</a>
-alignment checking as hardware lowtag (tag data in the lower bit of
-addresses) checks.  Who says that contemporary machines don’t support
-safe languages well? (:</p>
+<p>Microbenchmarks are useful to improve our understanding of complex
+systems.  Microbenchmarks whose results we completely discard not so
+much: if there’s nothing keeping us or the compiler honest, we might
+as well get them to compile to no-ops.</p>
 </div>
   
   

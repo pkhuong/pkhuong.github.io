@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2015/04/26/pointer-less-scapegoat-trees/">Pointer-less Scapegoat Trees</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2015/06/27/linear-log-bucketing-fast-versatile-simple/">Linear-log bucketing: fast, versatile, simple</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-April
+June
   
-26th, 
+27th, 
 2015
 
 
 
 
         
-         | <a href="/Blog/2015/04/26/pointer-less-scapegoat-trees/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2015/04/26/pointer-less-scapegoat-trees/"
+         | <a href="/Blog/2015/06/27/linear-log-bucketing-fast-versatile-simple/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2015/06/27/linear-log-bucketing-fast-versatile-simple/"
 	      >Comments</a>
         
         
@@ -116,236 +116,355 @@ April
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I’m trying something new this week: gathering a small group after
-<a href="http://www.appnexus.com">work</a> for 90 minutes of short talks and
-discussions.  We’ll also have one longer slot because not everything
-fits in a postcard, but my main goal is really to create opportunities
-for everyone to infect us with their excitement for and interest in an
-idea or a question.  I successfully encouraged a couple people to
-present, although many seemed intimidated by the notion… perhaps because we
-have grown to expect well researched and rehearsed performances.
-However, I believe that simple presentations of preliminary work are
-worthwhile, and probably more likely to spark fresh conversations than
-the usual polished fare: it’s healthy to expose our doubts,
-trials, and errors, and there’s certainly value in reminding ourselves
-that everyone else is in that same boat.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><em>There’s a couple code snippets in this post (lb.lisp, bucket.lisp, bucket-down.lisp, bin.c).  They’re all <a href="https://creativecommons.org/publicdomain/zero/1.0/">CC0</a>.</em></p>
 
-<p>Here’s what I quickly (so quickly that my phone failed to focus
-correctly) put together on embedding search trees in sorted
-arrays.  You’ll note that the “slides” are very low tech; hopefully,
-more people will contribute their own style to the potluck next time
-(:</p>
+<p>What do memory allocation, histograms, and event scheduling have in
+common?  They all benefit from rounding values to predetermined
+buckets, and the same bucketing strategy combines acceptable precision
+with reasonable space usage for a wide range of values.  I don’t know
+if it has a real name; I had to come up with the (confusing) term
+“linear-log bucketing” for this post!  I also used it twice last
+week, in otherwise unrelated contexts, so I figure it deserves more
+publicity.</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat01.jpg" /></p>
+<p>I’m sure the idea is old, but I first came across this strategy in
+<a href="https://github.com/jemalloc/jemalloc">jemalloc</a>’s binning scheme for
+allocation sizes.  The general idea is to simplify allocation and reduce
+external fragmentation by rounding allocations up to one of a few bin
+sizes.  The simplest scheme would round up to the next power of two,
+but experience shows that’s extremely wasteful: in the worst case, an
+allocation for \(k\) bytes can be rounded up to \(2k - 2\) bytes,
+for almost 100% space overhead!  Jemalloc further divides each
+power-of-two range into 4 bins, reducing the worst-case space overhead
+to 25%.</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat02.jpg" /></p>
+<p>This sub-power-of-two binning covers medium and large allocations.  We
+still have to deal with small ones: the ABI forces alignment on every
+allocation, regardless of their size, and we don’t want to have too
+many small bins (e.g., 1 byte, 2 bytes, 3 bytes, …, 8 bytes).
+Jemalloc adds another constraint: bins are always multiples of the
+allocation quantum (usually 16 bytes).</p>
 
-<p>I didn’t really think about implementing search trees until 3-4 years
-ago.  I met an online collaborator in Paris who, after a couple G&amp;T,
-brought up the topic of “desert island” data structures: if you were
-stuck with a computer and a system programming guide on a desert
-island, how would you rebuild a standard library from scratch?
-Most data structures and algorithms that we use every day are fairly
-easy to remember, especially if we don’t care about proofs of
-performance: basic dynamic memory allocation, hash tables, sorting,
-not-so-bignum arithmetic, etc. are all straightforward.  He even had a
-mergeable priority queue, with
-<a href="http://en.wikipedia.org/wiki/Skew_heap">skew heaps</a>.  However, 
-we both got stuck on balanced search trees: why would anyone want to
-remember rotation rules?  (Tries were rejected on what I argue are
-purely theoretical grounds ;)</p>
+<p>The sequence for bin sizes thus looks like: 16, 32, 48, 64, 80, 96,
+112, 128, 160, 192, 224, 256, 320, 384, … (0 is special because malloc must
+either return NULL [bad for error checking] or treat it as a full
+blown allocation).</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat03.jpg" /></p>
+<p>I like to think of this sequence as a special initial range with 4
+linearly spaced subbins (0 to 63), followed by power-of-two ranges
+that are again split in 4 subbins (i.e., almost logarithmic binning).
+There are thus two parameters: the size of the initial linear range,
+and the number of subbins per range.  We’re working with integers, so
+we also know that the linear range is at least as large as the number
+of subbins (it’s hard to subdivide 8 integers in 16 bins).</p>
 
-<p>I
-<a href="http://www.pvk.ca/Blog/2012/07/03/binary-search-star-eliminates-star-branch-mispredictions/">love searching</a>
-in <a href="http://www.pvk.ca/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/">sorted arrays</a>, so I kept looking for a way
-to build simpler search trees on top of that.  That lead me to
-<a href="http://repository.cmu.edu/cgi/viewcontent.cgi?article=3453&amp;context=compsci">Bentley and Saxe’s (PDF)</a> dynamisation trick.  The gist of it is
-that there’s a family of methods to build dynamic sets on top of
-static versions.  For sorted arrays, one extreme is an unsorted list
-with fast inserts and slow reads, and the other exactly <em>one</em> sorted
-array, with slow inserts and fast lookups.  The most interesting
-design point lies in the middle, with \( \log n \) sorted arrays,
-yielding \( \mathcal{O}(\lg n) \) time inserts and
-\( \mathcal{O}(\lg\sp{2}n) \) lookups; we can see that design in
-write-optimised databases.  The problem is that my workloads tend to
-be <em>read</em> heavy.</p>
+<p>Assuming both parameters are powers of two, we can find the bucket for
+any value with only a couple x86 instructions, and no conditional jump or
+lookup in memory.  That’s a lot simpler than jemalloc’s
+implementation; if you’re into Java,
+<a href="http://hdrhistogram.org/">HdrHistogram</a>’s binning code is nearly
+identical to mine.</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat04.jpg" /></p>
+<h2 id="common-lisp-my-favourite-programmers-calculator">Common Lisp: my favourite programmer’s calculator</h2>
 
-<p>Some time later, I revisited a <a href="http://www.cs.au.dk/~gerth/papers/soda02.pdf">paper by Brodal, Fagerberg, and Jacob (PDF)</a>.  They
-do a lot of clever things to get interesting performance bounds, but
-I’m really not convinced it’s all worth the complexity<sup id="fnref:1"><a href="#fn:1" class="footnote">1</a></sup>… especially in
-the context of our desert island challenge.  I did find one trick very
-interesting: they preserve logarithmic time lookups when binary
-searching arrays with missing values by recasting these arrays as
-implicit binary trees and guaranteeing that “NULLs” never have valid
-entries as descendants.  That’s a lot simpler than other arguments
-based on guaranteeing a minimum density.  It’s so much simpler that we
-can easily make it work with a branch-free binary search:  we only
-need to treat NULLs as \( \pm \infty \) (depending on whether we
-want a predecessor or a successor).</p>
+<p>As always when working with bits, I first doodled in SLIME/SBCL: CL’s
+bit manipulation functions are more expressive than C’s, and a
+REPL helps exploration.</p>
 
-<p>While lookups are logarithmic time, inserts are
-\(\mathcal{O}(\lg\sp{2} n) \) time.  Still no satisfying
-answer to the desert island challenge.</p>
+<p>Let <code>linear</code> be the \(\log\sb{2}\) of the linear range, and <code>subbin</code>
+the \(\log\sb{2}\) of the number of subbin per range, with 
+<code>linear &gt;= subbin</code>.</p>
 
-<p>I went back to my real research in optimisation, and somehow
-stumbled on
-<a href="http://dspace.mit.edu/handle/1721.1/10639">Igal Galperin’s PhD thesis</a>
-on both on-line optimisation/learning and… simpler balanced binary search trees!</p>
+<p>The key idea is that we can easily find the power of two range (with a
+<code>BSR</code>), and that we can determine the subbin in that range by shifting
+the value right to only keep its <code>subbin</code> most significant (nonzero)
+bits.</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat05.jpg" /></p>
+<p>I clearly need something like \(\lfloor\log\sb{2} x\rfloor\):</p>
 
-<p><a href="http://www.akira.ruc.dk/~keld/teaching/algoritmedesign_f03/Artikler/03/Galperin93.pdf">Scapegoat trees (PDF)</a>
-rebalance by guaranteeing a bound \( \alpha &gt; 0 \) on the
-relative difference between the optimal depth
-(\( \lceil\lg n\rceil \)) for a set of \(n\) values and the height (maximal depth) of
-the balanced tree (at most \( (1+\alpha)\lceil\lg n\rceil \)).  The
-only property that a scapegoat tree has (in addition to those of
-binary search trees) is this bound on the height of the 
-tree, as a function of its size.  Whenever a new node would be
-inserted at a level too deep for the size of the tree, we go up
-its ancestors to find a subtree that is small enough to accomodate
-the newcomer and rebuild it from scratch.  I will try to provide an
-intuition of how they work, but the paper is a much better source.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"lb.lisp" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">lb</span> <span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">1-</span> <span class="p">(</span><span class="nb">integer-length</span> <span class="nv">x</span><span class="p">)))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>For a tree of \(n = 14\) elements, we could have \(\alpha =
-0.25\), for a maximum depth of \(1.25 \lceil\lg 14\rceil = 5\).
-Let’s say we attempt to insert a new value, but the tree is structured such
-that the value would be the child of a leaf that’s already at depth \(5\);
-we’d violate the (im)balance bound.  Instead, we go up until we find
-an ancestor \(A\) at depth, e.g., \(3\) with \(4\) descendants.  The
-ancestor is shallow enough that it has space for \(5 - 3 = 2\)
-levels of descendants, for a total height of \(2 + 1 = 3\) for the
-subtree.  A full binary tree of height \(3\) has 
-\(2\sp{3} - 1 = 7\) nodes, and we thus have enough space for
-\(A\), its \(4\) descendants, and the new node!  These 6 values
-are rebuilt in a near-perfect binary tree: every level must be
-fully populated, except for the last one.</p>
+<p>I’ll also want to treat values smaller than <code>2**linear</code> as
+though they were about <code>2**linear</code> in size.  We’ll do that with</p>
 
-<p>The criteria to find the scapegoat subtree are a bit
-annoying to remember–especially given that we don’t want to
-constantly rebuild the whole tree–but definitely simpler than rotation
-rules.  I feel like that finally solves the desert island balanced
-search tree challenge… but we still have gapped sorted arrays to
-address.</p>
+<pre><code>n-bits := (lb (logior x (ash 1 linear))) === (max linear (lb x))
+</code></pre>
 
-<p>What’s interesting about scapegoat trees is that rebalancing is always
-localised to a subtree.  Rotating without explicit pointers is hard
-(not impossible, amazingly enough), but scapegoat trees just
-reconstruct the whole subtree, i.e., a contiguous section of the
-sorted array.  That’s easy: slide non-empty values to the right, and
-redistribute recursively.  But, again, finding the scapegoat subtree
-is annoying.</p>
+<p>We now want to shift away all but the top <code>subbin</code> bits of <code>x</code></p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat06.jpg" /></p>
-<center><small>The \\(\alpha\lg (n)\\) above should read \\((1 + \alpha)\lg n\\), and \\(\lg\lg n + \mathrm{Exp}\cdot\lg n\\) should be \\((\lg\lg n) (1 + \mathrm{Exp})\\).</small></center>
+<pre><code>shift := (- n-bits subbin)
+sub-index := (ash x (- shift))
+</code></pre>
 
-<p>That made me think: what if I randomised scapegoat selection?  Rather than
-counting elements in subtrees, I could approximate that
-probabilistically by sampling from an exponential distribution… which
-we can easily approximate with the geometric for \(p = 0.5\) by
-counting leading zeros in bitstrings.</p>
+<p>For a memory allocator, the problem is that the last rightward shift
+rounds <em>down</em>!  Let’s add a small mask to round things up:</p>
 
-<p>I’m still not totally convinced that it works, but I vaguely remember
-successfully testing an implementation and sketching a proof that we
-can find the scapegoat subtree by going up according to a scaled
-geometric to preserve amortised logarithmic time inserts.  The
-probability function decreases quickly enough that we preserve
-logarithmic time inserts on average, yet slowly enough that we can
-expect to redistribute a region before it runs out of space.</p>
+<pre><code>mask := (ldb (byte shift 0) -1) ; that's `shift` 1 bits
+rounded := (+ x mask)
+sub-index := (ash rounded (- shift))
+</code></pre>
 
-<p>The argument is convoluted, but the general idea is based
-on the observation that, in a tree of maximum height \(m\), a
-subtree at depth \(k\) can contain at most
-\(n\sp\prime = 2\sp{m - k + 1} - 1\) elements (including the
-subtree’s root).</p>
+<p>We have the top <code>subbin</code> bits (after rounding) in <code>sub-index</code>.  We
+only need to find the range index</p>
 
-<p>We only violate the imbalance bound in a subtree if
-we attempt to insert more than \(n\sp\prime\) elements in it.
-Rebalancing works by designating the shallowest subtree that’s not yet
-full as the scapegoat.  We could simplify the selection of the
-scapegoat tree by counting the number of inserts in each subtree, but
-that’d waste a lot of space.  Instead, we count probabilistically and
-ensure that there’s a high probability (that’s why we always go up by
-at least \(\lg \lg n\) levels) that each subtree will be
-rebalanced at least once before it hits its insertion count limit.
-The memoryless property of the geometric distribution means that
-this works even after a rebalance.  If we eventually fail to find
-space, it’s time to completely rebuild the subtree; this case happens
-rarely enough (\(p \approx \frac{\lg n}{n}\)) that the amortised
-time for insertions is still logarithmic.</p>
+<pre><code>range := (- n-bits linear) ; n-bits &gt;= linear
+</code></pre>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat07.jpg" /></p>
-<center><small>Again \\(2\sp{\alpha \lg n}\\) should be \\(2\sp{(1 + \alpha)\lg n}\\).</small></center>
+<p>Finally, we combine these two together by shifting <code>index</code> by
+<code>subbin</code> bits</p>
 
-<p>We can do the same thing when embedding scapegoat trees in implicit
-trees.  The problem is that a multiplicative overhead in depth results
-in an exponential space blowup.  The upside is that the overhead is
-tunable: we can use less space at the expense of slowing down
-inserts.</p>
+<pre><code>index := (+ (ash range subbin) sub-index)
+</code></pre>
 
-<p>In fact, if we let \( \alpha \rightarrow 0 \), we find Brodal et
-al’s scheme (I don’t know why they didn’t just cite Galperin and
-Rivest on scapegoat trees)!  The difference is that we are now pretty
-sure that we can easily let a random number generator guide our
-redistribution.</p>
+<p>Extra! Extra! We can also find the maximum value for the bin with</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat09.jpg" /></p>
+<pre><code>size := (logandc2 rounded mask)
+</code></pre>
 
-<p>I only covered insertions and lookups so far.  It turns out that
-deletions in scapegoat trees are easy: replace the deleted node with
-one of its leaves.  Deletions should also eventually trigger
-a full rebalance to guarantee logarithmic time lookups.</p>
+<p>Assembling all this yields</p>
 
-<p><img class="center" src="/images/2015-04-26-pointer-less-scapegoat-trees/scapegoat10.jpg" /></p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"bucket.lisp" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">bucket</span> <span class="p">(</span><span class="nv">x</span> <span class="nv">linear</span> <span class="nv">subbin</span><span class="p">)</span>
+</span><span class="line">  <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">n-bits</span> <span class="p">(</span><span class="nv">lb</span> <span class="p">(</span><span class="nb">logior</span> <span class="nv">x</span> <span class="p">(</span><span class="nb">ash</span> <span class="mi">1</span> <span class="nv">linear</span><span class="p">))))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">shift</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n-bits</span> <span class="nv">subbin</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">mask</span> <span class="p">(</span><span class="nb">ldb</span> <span class="p">(</span><span class="nb">byte</span> <span class="nv">shift</span> <span class="mi">0</span><span class="p">)</span> <span class="mi">-1</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">rounded</span> <span class="p">(</span><span class="nb">+</span> <span class="nv">x</span> <span class="nv">mask</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">sub-index</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">rounded</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">shift</span><span class="p">)))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">range</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n-bits</span> <span class="nv">linear</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">index</span> <span class="p">(</span><span class="nb">+</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">range</span> <span class="nv">subbin</span><span class="p">)</span> <span class="nv">sub-index</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">size</span> <span class="p">(</span><span class="nb">logandc2</span> <span class="nv">rounded</span> <span class="nv">mask</span><span class="p">)))</span>
+</span><span class="line">    <span class="p">(</span><span class="nb">values</span> <span class="nv">index</span> <span class="nv">size</span><span class="p">)))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Classical implicit representations for sorted sets make us choose
-between appallingly slow (linear time) inserts and slow lookups.
-With stochastic scapegoat trees embedded in implicit binary trees, we
-get logarithmic time lookups, and we have a continuum of choices
-between wasting an exponential amount of space and slow
-\( \mathcal{O}(\lg\sp{2} n) \) inserts.  In order to get there, we
-had to break one rule: we allowed ourselves \(\mathcal{O}(n)\)
-additional space, rather than \(\mathcal{o}(n)\), but it’s all
-<em>empty</em> space.</p>
+<p>Let’s look at what happens when we want \(2\sp{2} = 4\) subbin per
+range, and a linear progression over \([0, 2\sp{4} = 16)\).</p>
 
-<p>What other rule or assumption can we challenge (while staying true to
-the spirit of searching in arrays)?</p>
+<pre><code>CL-USER&gt; (bucket 0 4 2)
+0 ; 0 gets bucket 0 and rounds up to 0
+0
+CL-USER&gt; (bucket 1 4 2)
+1 ; 1 gets bucket 1 and rounds up to 4
+4
+CL-USER&gt; (bucket 4 4 2)
+1 ; so does 4
+4
+CL-USER&gt; (bucket 5 4 2)
+2 ; 5 gets the next bucket
+8
+CL-USER&gt; (bucket 9 4 2)
+3
+12
+CL-USER&gt; (bucket 15 4 2)
+4
+16
+CL-USER&gt; (bucket 17 4 2)
+5
+20
+CL-USER&gt; (bucket 34 4 2)
+9
+40
+</code></pre>
 
-<p>I’ve been thinking about interpolation lately: what if we had a
-monotone (not necessarily injective) function to map from the set’s
-domain to machine integers?  That’d let us bucket values or
-interpolate to skip the first iterations of the search.  If we can
-also assume that the keys are uniformly distributed once mapped to
-integers, we can use a linear Robin Hood hash table: with a linear
-(but small) space overhead, we get constant time expected inserts and
-lookups, and what seems to be \( O(\lg \lg n) \) worst case<sup id="fnref:2"><a href="#fn:2" class="footnote">2</a></sup>
-lookups with high probability.</p>
+<p>The sequence is exactly what we want: 0, 4, 8, 12, 16, 20, 24, 28, 32, 40, 48, …!</p>
 
-<p>Something else is bothering me.  We embed in full binary trees, and
-thus binary search over arrays of size \(2\sp{n} - 1\)… and we know
-that’s a
-<a href="http://www.pvk.ca/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/">bad idea</a>.
-We could switch to ternary trees, but that means inserts and deletes
-must round to the next power of three.  Regular div-by-mul and
-scaling back up by the divisor always works; is there a simpler way to round
-to a power of three or to find the remainder by such a number?</p>
+<p>The function is marginally simpler if we can round down instead of up.</p>
 
-<p>I don’t know!  Can anyone offer insights or suggest new paths to explore?</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"bucket-down.lisp" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">bucket-down</span> <span class="p">(</span><span class="nv">x</span> <span class="nv">linear</span> <span class="nv">subbin</span><span class="p">)</span>
+</span><span class="line">  <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">n-bits</span> <span class="p">(</span><span class="nv">lb</span> <span class="p">(</span><span class="nb">logior</span> <span class="nv">x</span> <span class="p">(</span><span class="nb">ash</span> <span class="mi">1</span> <span class="nv">linear</span><span class="p">))))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">shift</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n-bits</span> <span class="nv">subbin</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">sub-index</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">x</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">shift</span><span class="p">)))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">range</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n-bits</span> <span class="nv">linear</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">index</span> <span class="p">(</span><span class="nb">+</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">range</span> <span class="nv">subbin</span><span class="p">)</span> <span class="nv">sub-index</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">size</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">sub-index</span> <span class="nv">shift</span><span class="p">)))</span>
+</span><span class="line">     <span class="p">(</span><span class="nb">values</span> <span class="nv">index</span> <span class="nv">size</span><span class="p">)))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<div class="footnotes">
-  <ol>
-    <li id="fn:1">
-      <p>I think jumping the van Emde Boa[s] is a thing, but they at least went for the minor version, the van Emde Boas layout ;) <a href="#fnref:1" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:2">
-      <p>The maximal distance between the interpolation point and the actual location appears to scale logarithmically with the number of elements.  We perform a binary search over a logarithmic-size range, treating empty entries as \(\infty\). <a href="#fnref:2" class="reversefootnote">&#8617;</a></p>
-    </li>
-  </ol>
-</div>
+<pre><code>CL-USER&gt; (bucket-down 0 4 2)
+0 ; 0 still gets the 0th bucket 
+0 ; and rounds down to 0
+CL-USER&gt; (bucket-down 1 4 2)
+0 ; but now so does 1
+0
+CL-USER&gt; (bucket-down 3 4 2)
+0 ; and 3
+0
+CL-USER&gt; (bucket-down 4 4 2)
+1 ; 4 gets its bucket
+4
+CL-USER&gt; (bucket-down 7 4 2)
+1 ; and 7 shares it
+4
+CL-USER&gt; (bucket-down 15 4 2)
+3 ; 15 gets the 3rd bucket for [12, 15]
+12
+CL-USER&gt; (bucket-down 16 4 2)
+4
+16
+CL-USER&gt; (bucket-down 17 4 2)
+4
+16
+CL-USER&gt; (bucket-down 34 4 2)
+8
+32
+</code></pre>
+
+<p>That’s the same sequence of bucket sizes, but rounded down in size
+instead of up.</p>
+
+<h2 id="the-same-in-gcc">The same, in GCC</h2>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"bin.c" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">unsigned</span> <span class="kt">int</span>
+</span><span class="line"><span class="nf">lb</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">x</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="cm">/* I need an extension just for integer-length (: */</span>
+</span><span class="line">        <span class="k">return</span> <span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span> <span class="kt">long</span><span class="p">)</span> <span class="o">*</span> <span class="n">CHAR_BIT</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="n">__builtin_clzll</span><span class="p">(</span><span class="n">x</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/*</span>
+</span><span class="line"><span class="cm"> * The following isn&#39;t exactly copy/pasted, so there might be</span>
+</span><span class="line"><span class="cm"> * transcription bugs.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">size_t</span>
+</span><span class="line"><span class="nf">bin_of</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">size</span><span class="p">,</span> <span class="kt">size_t</span> <span class="o">*</span><span class="n">rounded_size</span><span class="p">,</span>
+</span><span class="line">    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">linear</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">subbin</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">size_t</span> <span class="n">mask</span><span class="p">,</span> <span class="n">range</span><span class="p">,</span> <span class="n">rounded</span><span class="p">,</span> <span class="n">sub_index</span><span class="p">;</span>
+</span><span class="line">        <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">n_bits</span><span class="p">,</span> <span class="n">shift</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">n_bits</span> <span class="o">=</span> <span class="n">lb</span><span class="p">(</span><span class="n">size</span> <span class="o">|</span> <span class="p">(</span><span class="mi">1ULL</span> <span class="o">&lt;&lt;</span> <span class="n">linear</span><span class="p">));</span>
+</span><span class="line">        <span class="n">shift</span> <span class="o">=</span> <span class="n">n_bits</span> <span class="o">-</span> <span class="n">subbin</span><span class="p">;</span>
+</span><span class="line">        <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1ULL</span> <span class="o">&lt;&lt;</span> <span class="n">shift</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rounded</span> <span class="o">=</span> <span class="n">size</span> <span class="o">+</span> <span class="n">mask</span><span class="p">;</span> <span class="cm">/* XXX: overflow. */</span>
+</span><span class="line">        <span class="n">sub_index</span> <span class="o">=</span> <span class="n">rounded</span> <span class="o">&gt;&gt;</span> <span class="n">shift</span><span class="p">;</span>
+</span><span class="line">        <span class="n">range</span> <span class="o">=</span> <span class="n">n_bits</span> <span class="o">-</span> <span class="n">linear</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="o">*</span><span class="n">rounded_size</span> <span class="o">=</span> <span class="n">rounded</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">mask</span><span class="p">;</span>
+</span><span class="line">        <span class="k">return</span> <span class="p">(</span><span class="n">range</span> <span class="o">&lt;&lt;</span> <span class="n">subbin</span><span class="p">)</span> <span class="o">+</span> <span class="n">sub_index</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">size_t</span>
+</span><span class="line"><span class="nf">bin_down_of</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">size</span><span class="p">,</span> <span class="kt">size_t</span> <span class="o">*</span><span class="n">rounded_size</span><span class="p">,</span>
+</span><span class="line">    <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">linear</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">subbin</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">size_t</span> <span class="n">range</span><span class="p">,</span> <span class="n">sub_index</span><span class="p">;</span>
+</span><span class="line">        <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">n_bits</span><span class="p">,</span> <span class="n">shift</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">n_bits</span> <span class="o">=</span> <span class="n">lb</span><span class="p">(</span><span class="n">size</span> <span class="o">|</span> <span class="p">(</span><span class="mi">1ULL</span> <span class="o">&lt;&lt;</span> <span class="n">linear</span><span class="p">));</span>
+</span><span class="line">        <span class="n">shift</span> <span class="o">=</span> <span class="n">n_bits</span> <span class="o">-</span> <span class="n">subbin</span><span class="p">;</span>
+</span><span class="line">        <span class="n">sub_index</span> <span class="o">=</span> <span class="n">size</span> <span class="o">&gt;&gt;</span> <span class="n">shift</span><span class="p">;</span>
+</span><span class="line">        <span class="n">range</span> <span class="o">=</span> <span class="n">n_bits</span> <span class="o">-</span> <span class="n">linear</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="o">*</span><span class="n">rounded_size</span> <span class="o">=</span> <span class="n">sub_index</span> <span class="o">&lt;&lt;</span> <span class="n">shift</span><span class="p">;</span>
+</span><span class="line">        <span class="k">return</span> <span class="p">(</span><span class="n">range</span> <span class="o">&lt;&lt;</span> <span class="n">subbin</span><span class="p">)</span> <span class="o">+</span> <span class="n">sub_index</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h2 id="whats-it-good-for">What’s it good for?</h2>
+
+<p>I first implementated this code to mimic’s jemalloc binning scheme: in
+a memory allocator, a linear-logarithmic sequence give us
+alignment and bounded space overhead (bounded internal fragmentation),
+while keeping the number of size classes down (controlling external
+fragmentation).</p>
+
+<p><a href="http://hdrhistogram.org/">High dynamic range histograms</a> use the same
+class of sequences to bound the relative error introduced by binning,
+even when recording latencies that vary between microseconds and
+hours.</p>
+
+<p>I’m currently considering this binning strategy to handle a large
+number of timeout events, when an exact priority queue is overkill.  A
+timer wheel would work, but tuning memory usage is annoying.  Instead
+of going for a hashed or hierarchical timer wheel, I’m thinking of
+binning events by timeout, with one FIFO per bin: events may
+be late, but never by more than, e.g., 10% their timeout.  I also
+don’t really care about sub millisecond precision, but wish to treat
+zero specially; that’s all taken care of by the “round up” linear-log
+binning code.</p>
+
+<p>In general, if you ever think to yourself that dispatching on the
+bitwidth of a number would mostly work, except that you need more
+granularity for large values, and perhaps less for small ones,
+linear-logarithmic binning sequences may be useful.  They let you tune
+the granularity at both ends, and we know how to round values and map
+them to bins with simple functions that compile to fast and compact
+code!</p>
+
+<p>P.S. If a chip out there has fast int-&gt;FP conversion and slow bit
+scans(!?), there’s another approach: convert the integer to FP,
+scale by, e.g., \(1.0 / 16\), add 1, and shift/mask to extract
+the bottom of the exponent and the top of the significand.  That’s not
+slow, but unlikely to be faster than a bit scan and a couple
+shifts/masks.</p>
 </div>
   
   

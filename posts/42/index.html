@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/08/27/tabasco-sort-super-optimal-merge-sort/">Tabasco Sort: a super-optimal merge sort</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/10/07/the-eight-useful-polynomial-approximations-of-sinf-3/">The eight useful polynomial approximations of `sinf(3)'</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Aug
+Oct
   
-27th, 
+7th, 
 2012
 
 
 
 
         
-         | <a href="/Blog/2012/08/27/tabasco-sort-super-optimal-merge-sort/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2012/08/27/tabasco-sort-super-optimal-merge-sort/"
+         | <a href="/Blog/2012/10/07/the-eight-useful-polynomial-approximations-of-sinf-3/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2012/10/07/the-eight-useful-polynomial-approximations-of-sinf-3/"
 	      >Comments</a>
         
         
@@ -116,1131 +116,498 @@ Aug
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>EDIT: 2012-08-29: I added a section to compare comparison counts with
-known bounds for general comparison sorts and sorting networks.</p>
-
-<p>In an
-<a href="http://pvk.ca/Blog/2012/08/13/engineering-a-list-merge-sort/">earlier post</a>,
-I noted how tedious coding unrolled sorts can be.  Frankly, that’s the
-main reason I stopped at leaf sorts of size three.  Recently,
-<a href="http://blog.racket-lang.org/2012/08/fully-inlined-merge-sort.html">Neil Toronto</a>
-wrote a nice post on the generation of size-specialised merge sorts.
-The post made me think about that issue a bit more, and I now have a
-neat way to generate unrolled/inlined merge sorts that are
-significantly smaller than the comparison and size “-optimal” inlined
-merge sorts.</p>
-
-<p>The code is up as a
-<a href="http://discontinuity.info/~pkhuong/tabasco-sort.lisp">single-file library</a>,
-and sorts short vectors faster than SBCL’s inlined heapsort by a
-factor of two to three… and compiles to less machine code.  The
-generator is a bit less than 100 LOC, so I’m not sure I want to
-include it in the mainline yet.  If someone wants to add support for
-more implementations, I’d be happy to extend Tabasco sort, and might
-even consider letting it span multiple files ;)</p>
-
-<h2 id="differently-optimal-sorts">Differently-optimal sorts</h2>
-
-<p>The inlined merge sort for three values (<code>a</code>, <code>b</code>, and <code>c</code>) is copied
-below.  It has to detect between \(3! = 6\) permutation, and does so
-with an optimal binary search tree.  That scheme leads to code with
-\(n! - 1\) comparisons to sort n values, and for which each
-execution only goes through two or three comparisons (\(\approx \lg n!\)).</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"optimal" inlined merge sort (n = 3) </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(if (&lt; b c)
-</span><span class="line">    (if (&lt; a b)
-</span><span class="line">        (values a b c)
-</span><span class="line">        (if (&lt; a c)
-</span><span class="line">            (values b a c)
-</span><span class="line">            (values b c a)))
-</span><span class="line">    (if (&lt; a c)
-</span><span class="line">        (values a c b)
-</span><span class="line">        (if (&lt; a b)
-</span><span class="line">            (values c a b)
-</span><span class="line">            (values c b a))))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>An optimal sorting network for three values needs only three
-comparisons, and always executes those three comparisons.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>optimal sorting network (n = 3) </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(progn
-</span><span class="line">  (when (&lt; c b)
-</span><span class="line">    (rotatef b c))
-</span><span class="line">  (when (&lt; b a)
-</span><span class="line">    (rotatef a b))
-</span><span class="line">  (when (&lt; c b)
-</span><span class="line">    (rotatef b c)))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>Finally, the leaf sort I used in SBCL is smaller than the inlined
-merge sort (three comparisons), but sometimes executes fewer than
-three comparisons.  It’s superoptimal ;)</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"super-optimal" inlined merge sort (n = 3) </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(progn
-</span><span class="line">  (when (&lt; c b)
-</span><span class="line">    (rotatef b c))
-</span><span class="line">  (if (&lt; b a)
-</span><span class="line">      (if (&lt; c a)
-</span><span class="line">          (values b c a)
-</span><span class="line">          (values b a c))
-</span><span class="line">      (values a b c)))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>The optimal merge sort is larger than the optimal sorting network, and
-the optimal sorting network performs potentially more comparisons than
-the optimal merge sort…</p>
-
-<p>Each implementation is optimal for different search spaces: the
-optimal merge sort never merges continuations, and the sorting
-network’s only control dependencies are in the conditional swaps.</p>
-
-<p>The “super-optimal” merge sort does better by allowing itself both
-assignments (or tail-calls) and non-trivial control flow: it’s smaller
-than the inlined merge sort (but performs more data movement), and
-potentially executes fewer comparisons than the sorting network (with
-a larger total code size).  And, essential attribute in practice, it’s
-easy to generate.  This contrasts with optimal sorting networks, for
-which we do not have any generation method short of brute force
-search; in fact, in practice, sorting networks tend to exploit
-suboptimal (by a factor of \(\log n\)) schemes like
-<a href="http://www.iti.fh-flensburg.de/lang/algorithmen/sortieren/bitonic/bitonicen.htm">bitonic sort</a>
-or
-<a href="http://www.iti.fh-flensburg.de/lang/algorithmen/sortieren/networks/oemen.htm">odd-even merge sort</a>.
-Then again, we’re only concerned with tiny sorts, and asymptotics can
-be misleading: Batcher’s odd-even merge sort happens to be optimal for
-\(n\leq 8\).  The issue with sorting networks remains:
-data-oblivious control flow pessimises their comparison count.</p>
-
-<h2 id="generalising-from-size-3">Generalising from size 3</h2>
-
-<p>What the last merge sort does is to first sort both halves of the
-values (<code>a</code> is trivially sorted, and <code>b c</code> needs one conditional
-swap), and then, assuming that each half (<code>a</code> and <code>b c</code>) is sorted,
-find the right permutation with which to merge them.  Rather than
-\(n!\) permutations, a merge only needs to distinguish between
-\(C(n, \lfloor n/2\rfloor) = \frac{n!}{\lfloor n/2\rfloor!\lceil n/2\rceil!}\)
-permutations, and the recursive sorts are negligible compared to the
-merge step.  That’s a huge reduction in code size!</p>
-
-<p>A simple merge generator fits in half a
-<a href="http://wry.me/~darius/hacks/screenfuls/screen3.html">screenful</a>.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>unrolled merge generator </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun emit-permute (destinations sources)
-</span><span class="line">  ;; (setf values) is parallel assignment
-</span><span class="line">  `(setf (values ,@destinations) (values ,@sources)))
-</span><span class="line">
-</span><span class="line">(defun emit-merge-1 (destinations left right acc)
-</span><span class="line">  "Build a search tree to determine the right permutation to
-</span><span class="line">   merge LEFT and RIGHT, given that each is pre-sorted."
-</span><span class="line">  (cond ((null left)
-</span><span class="line">         (emit-permute destinations (append (reverse acc) right)))
-</span><span class="line">        ((null right)
-</span><span class="line">         (emit-permute destinations (append (reverse acc) left)))
-</span><span class="line">        (t
-</span><span class="line">         `(if (&lt; ,(first right) ,(first left)) ; stable sort
-</span><span class="line">              ,(emit-merge-1 destinations
-</span><span class="line">                             left (rest right)
-</span><span class="line">                             (cons (first right) acc))
-</span><span class="line">              ,(emit-merge-1 destinations
-</span><span class="line">                             (rest left) right
-</span><span class="line">                             (cons (first left) acc))))))
-</span><span class="line">
-</span><span class="line">(defun emit-merge (left right)
-</span><span class="line">  (emit-merge-1 (append left right) left right nil))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>Given two lists of sorted variables, <code>emit-merge</code> calls <code>emit-merge-1</code>
-to generate code that finds the right permutation, and executes it at
-the leaf.  A binary search tree is generated by keeping track of the
-merged list in a reverse-order (to enable tail-sharing) accumulator of
-variable names.  As expected, when merging a list of length one with
-another of length two, we get pretty much the code I wrote by hand
-earlier.</p>
-
-<pre><code>CL-USER&gt; (emit-merge '(a) '(b c))
-(if (&lt; b a)
-    (if (&lt; c a)
-        (setf (values a b c) (values b c a))
-        (setf (values a b c) (values b a c)))
-    (setf (values a b c) (values a b c)))
-</code></pre>
-
-<p>There’s one striking weakness: we generate useless code for the
-identity permutation.  We could detect that case, or, more generally,
-we could find the cycle decomposition of each permutation and use it
-to minimise temporary values; that’d implicitly take care of cases
-like <code>(setf (values a b c) (values b a c))</code>, in which some values are
-left unaffected.</p>
-
-<h2 id="a-smarter-permutation-generator">A smarter permutation generator</h2>
-
-<p>I’ll represent permutations as associative lists, from source to
-destination.  Finding a cycle is easy: just walk the permutation from
-an arbitrary value until we loop back.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>extract a single cycle from a linearly-represented permutation </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun find-cycle (mapping)
-</span><span class="line">  "Extract an arbitrary cycle from a non-empty mapping,
-</span><span class="line">   returning both the cycle and the rest of the mapping."
-</span><span class="line">  (assert mapping)
-</span><span class="line">  (let* ((head  (pop mapping))
-</span><span class="line">         (cycle (list (cdr head))))
-</span><span class="line">    (loop
-</span><span class="line">     (let* ((next-source (first cycle))
-</span><span class="line">            (pair        (assoc next-source mapping)))
-</span><span class="line">       (cond (pair
-</span><span class="line">              (push (cdr pair) cycle)
-</span><span class="line">              ;; if this sucks enough to matter, the output
-</span><span class="line">              ;; will be humongous anyway
-</span><span class="line">              (setf mapping (remove pair mapping)))
-</span><span class="line">             (t
-</span><span class="line">              (assert (eql next-source (first head)))
-</span><span class="line">              (return (values cycle mapping))))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>To generate the code corresponding to a permutation, I can extract all
-the cycles, execute each cycle with a <code>rotatef</code>.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>cycle-decomposition-based permute generator </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun emit-permute (destinations sources)
-</span><span class="line">  "Emit a [destinations &lt;- sources] permutation via its
-</span><span class="line">   cycle decomposition"
-</span><span class="line">  ;; source -&gt; destination alist, minus trivial pairs
-</span><span class="line">  (let ((mapping (remove-if (lambda (pair)
-</span><span class="line">                              (eql (car pair) (cdr pair)))
-</span><span class="line">                            (pairlis sources destinations))))
-</span><span class="line">    `(progn
-</span><span class="line">       ,@(loop while mapping
-</span><span class="line">               collect
-</span><span class="line">               (multiple-value-bind (cycle new-mapping)
-</span><span class="line">                   (find-cycle mapping)
-</span><span class="line">                 (setf mapping new-mapping)
-</span><span class="line">                 `(rotatef ,@cycle))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>The merge step for a sort of size three is now a bit more explicit,
-but likely compiles to code that uses fewer registers as well. It
-probably doesn’t matter on good SSA-based backends, but those are the
-exception rather than the norm in the Lisp world.</p>
-
-<pre><code>CL-USER&gt; (emit-merge '(a) '(b c))
-(if (&lt; b a)
-    (if (&lt; c a)
-        (progn (rotatef a b c))
-        (progn (rotatef a b)))
-    (progn))
-</code></pre>
-
-<h2 id="adding-the-recursive-steps">Adding the recursive steps</h2>
-
-<p>The only thing missing for a merge sort is to add base cases and
-recursion.  The base case is easy: lists of length one are sorted.
-Inlining recursion is trivial, as is usually the case when generating
-Lisp code.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"super-optimal" inlined merge sort </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun emit-sort-1 (values length)
-</span><span class="line">  (when (&gt; length 1)
-</span><span class="line">    (let* ((split (truncate length 2))
-</span><span class="line">           (left  (subseq values 0 split))
-</span><span class="line">           (right (subseq values split)))
-</span><span class="line">      `(progn
-</span><span class="line">         ,(emit-sort-1 left  split)
-</span><span class="line">         ,(emit-sort-1 right (- length split))
-</span><span class="line">         ,(emit-merge left right)))))
-</span><span class="line">
-</span><span class="line">(defun emit-sort (values)
-</span><span class="line">  (emit-sort-1 values (length values)))
-</span><span class="line">
-</span><span class="line">(defmacro inline-sort (&amp;rest values)
-</span><span class="line">  (let* ((pairs (loop for value in values
-</span><span class="line">                      collect `(,(gensym "TEMP") ,value)))
-</span><span class="line">         (temps (mapcar #'first pairs)))
-</span><span class="line">    `(let ,pairs
-</span><span class="line">       ,(emit-sort temps)
-</span><span class="line">       (values ,@temps))))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>The resulting three-value sorter looks good; there are some
-redundancies with nested or empty <code>progn</code>s, but any half-decent
-compiler will take care of that.  Python certainly does a goob job on
-that code.</p>
-
-<pre><code>CL-USER&gt; (emit-sort '(a b c))
-(progn
- nil
- (progn
-  nil
-  nil
-  (if (&lt; c b)
-      (progn (rotatef b c))
-      (progn)))
- (if (&lt; b a)
-     (if (&lt; c a)
-         (progn (rotatef a b c))
-         (progn (rotatef a b)))
-     (progn)))
-CL-USER&gt; (disassemble (lambda (a b c)
-                        (declare (type fixnum a b c))
-                        (inline-sort a b c)))
-; disassembly for (lambda (a b c))
-; 0E88F150:       498BD0           mov rdx, r8                ; no-arg-parsing entry point
-;       53:       498BC9           mov rcx, r9
-;       56:       498BDA           mov rbx, r10
-;       59:       4D39CA           cmp r10, r9
-;       5C:       7C30             jl L3
-;       5E: L0:   4C39C1           cmp rcx, r8
-;       61:       7D0B             jnl L1
-;       63:       4C39C3           cmp rbx, r8
-;       66:       7C1B             jl L2
-;       68:       488BD1           mov rdx, rcx
-;       6B:       498BC8           mov rcx, r8
-;       6E: L1:   488BF9           mov rdi, rcx
-;       71:       488BF3           mov rsi, rbx
-;       74:       488D5D10         lea rbx, [rbp+16]
-;       78:       B906000000       mov ecx, 6
-;       7D:       F9               stc
-;       7E:       488BE5           mov rsp, rbp
-;       81:       5D               pop rbp
-;       82:       C3               ret
-;       83: L2:   488BD1           mov rdx, rcx
-;       86:       488BCB           mov rcx, rbx
-;       89:       498BD8           mov rbx, r8
-;       8C:       EBE0             jmp L1
-;       8E: L3:   498BCA           mov rcx, r10
-;       91:       498BD9           mov rbx, r9
-;       94:       EBC8             jmp L0
-</code></pre>
-
-<p>I thought about generating calls to <code>values</code> in the final merge,
-rather than permuting, but decided against: I know SBCL doesn’t
-generate clever code when permuting registers, and that’d result in
-avoidable spills.  I also considered generating code in CPS rather
-than emitting assignments; again, I decided against because I can’t
-depend on SBCL to emit clever permutation code.  The transformation
-would make sense in a dialect with weaker support (both compiler and
-social) for assignment.</p>
-
-<h2 id="how-good-is-the-generated-code">How good is the generated code?</h2>
-
-<p>Both this inline merge sort and the original, permutation-free (except
-at the leaves), one actually define the exact same algorithms.  For
-any input, both (should) execute the same comparisons in the same
-order: the original inline merge sort simply inlines the whole set of
-execution traces, without even merging control flow.</p>
-
-<p>The permutation-free sort guarantees that it never performs redundant
-comparisons.  Whether it performs the strict minimum number of
-comparisons, either on average or in the worst case, is another question.
-At first, I thought that \(\lg n!\) should be a good estimate, since
-the search tree seems optimally balanced.  The problem is \(n!\)
-tends to have many other prime factors than 2, and we can thus expect
-multiple comparisons to extract less than 1 bit of information, for
-each execution.  The lower bound can thus be fairly far from the
-actual value… Still, this question is only practically relevant for
-tiny sorts, so the discrepancy shouldn’t be too large.</p>
-
-<p>A simple way to get the minimum, average or maximum comparison count
-would be to annotate the permutation-free generator to compute the
-shortest, average and longest path as it generates the search tree.</p>
-
-<p>I’ll instead mimic the current generator.</p>
-
-<p>The first step is to find the number of comparisons to perform a
-merge of <code>m</code> and <code>n</code> values.</p>
-
-<p>If either <code>m</code> or <code>n</code> is zero, merging the sequences is trivial.</p>
-
-<p>Otherwise, the minimum number of comparisons is <code>(min m n)</code>: the
-sequences are pre-sorted, and the shortest sequence comes first.  The
-maximum is <code>(1- (+ m n))</code>.  I couldn’t find a simple expression for
-the average over all permutations.  Instead, I iterate over all
-possible combinations and count the number of comparisons until either
-subsequence is exhausted.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>compute the number of comparisons during merges </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun merge-count (m n)
-</span><span class="line">  ;; return min, expected, max comparison to merge
-</span><span class="line">  ;; presorted subsequences of m and n values
-</span><span class="line">  (if (zerop (min m n))
-</span><span class="line">      (values 0 0 0)
-</span><span class="line">      (let ((comparisons 0)
-</span><span class="line">            (count 0)
-</span><span class="line">            (min   most-positive-fixnum)
-</span><span class="line">            (max   0))
-</span><span class="line">        (dotimes (i (ash 1 (+ m n))
-</span><span class="line">                    (values min
-</span><span class="line">                            (/ comparisons
-</span><span class="line">                               count)
-</span><span class="line">                            max))
-</span><span class="line">          ;; only consider combinations with m ones
-</span><span class="line">          ;; (and n zeros)
-</span><span class="line">          (when (= (logcount i) m)
-</span><span class="line">            (let ((cmp (1- (+ m n)))
-</span><span class="line">                  (mask i))
-</span><span class="line">              ;; no more comparison needed until two consecutive
-</span><span class="line">              ;; elements from distinct subsequences
-</span><span class="line">              (loop while (eql (logbitp 0 mask)
-</span><span class="line">                               (logbitp 1 mask))
-</span><span class="line">                    do (decf cmp)
-</span><span class="line">                       (setf mask (ash mask -1)))
-</span><span class="line">              (setf min (min min cmp)
-</span><span class="line">                    max (max max cmp))
-</span><span class="line">              (incf comparisons cmp)
-</span><span class="line">              (incf count)))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>Counting the number of comparisons in sorts is then trivial, with a
-recursive function.  I didn’t even try to memoise repeated
-computations: the generated code is ludicrously long when sorting as
-few as 13 or 14 values.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>compute the number of comparisons in merge sort </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun sort-count (n)
-</span><span class="line">  (if (&lt;= n 1)       ; trivially sorted
-</span><span class="line">      (values 0 0 0)
-</span><span class="line">      (let ((min 0)
-</span><span class="line">            (avg 0)
-</span><span class="line">            (max 0))
-</span><span class="line">        (flet ((inc (min- avg- max-)
-</span><span class="line">                 (incf min min-)
-</span><span class="line">                 (incf avg avg-)
-</span><span class="line">                 (incf max max-)))
-</span><span class="line">          ;; accumulate min/avg/max count from sorting the left and
-</span><span class="line">          ;; right subsequences, and merging
-</span><span class="line">          (multiple-value-call #'inc (sort-count (floor n 2)))
-</span><span class="line">          (multiple-value-call #'inc (sort-count (ceiling n 2)))
-</span><span class="line">          (multiple-value-call #'inc (merge-count (floor n 2)
-</span><span class="line">                                                  (ceiling n 2))))
-</span><span class="line">        (values min avg max))))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<pre><code>CL-USER&gt; (loop for i from 2 upto 16
-               do (multiple-value-bind (min avg max)
-                      (sort-count i)
-                    (format t "~4D ~6,2F ~6D ~6,2F ~6D~%"
-                            i (log (! i) 2d0)
-                            min (float avg) max)))
-;; n  lg(n!)   min   avg     max ;   best   network
-   2   1.00      1   1.00      1 ;   1      1
-   3   2.58      2   2.67      3 ;   3      3
-   4   4.58      4   4.67      5 ;   5      5
-   5   6.91      5   7.17      8 ;   7      9
-   6   9.49      7   9.83     11 ;   10     12
-   7  12.30      9  12.73     14 ;   13     16
-   8  15.30     12  15.73     17 ;   16     19
-   9  18.47     13  19.17     21 ;   19     25?
-  10  21.79     15  22.67     25 ;   22     29?
-  11  25.25     17  26.29     29 ;   26     35?
-  12  28.84     20  29.95     33 ;   30     39?
-  13  32.54     22  33.82     37 ;   34     45?
-  14  36.34     25  37.72     41 ;   38     51?
-  15  40.25     28  41.69     45 ;   42     56?
-  16  44.25     32  45.69     49 ;   46?    60?
-</code></pre>
-
-<p>I annotated the output with comments (marked with semicolons).  The
-columns are, from left to right, the sort size, the theoretical lower
-bound (on the average or maximum number of comparisons), the minimum
-number of comparisons (depending on the input permutation), the
-average (over all input permutations), and the maximum count.  I added
-two columns by hand: the optimal worst-case (maximum) comparison
-counts (over all sorting methods, copied from the
-<a href="http://oeis.org/A036604">OEIS</a>), and the optimal size for sorting
-networks, when known (lifted from a table
-<a href="http://nn.cs.utexas.edu/downloads/papers/valsalam.utcstr11.pdf">here [pdf]</a>).
-Inexact (potentially higher than the optimum) bounds are marked with a
-question mark.</p>
-
-<p>For the input size the inline merge sort can reasonably tackle (up to
-ten or so), its worst-case is reasonably close to the best possible,
-and its average case tends to fall between the lower bound and the
-best possible.  Over all these sizes, the merge sort’s worst case
-performs fewer comparisons than the optimal or best-known sorting
-networks.  The current best upper bounds on the minimal worst-case
-comparison count seem to be based on insertion sort passes that
-minimise the number of comparisons with a binary search.  I don’t
-believe that’s directly useful for the current use case, but a similar
-trick might be useful to reduce the number of comparisons, at the
-expense of reasonably more data movement.</p>
-
-<h2 id="making-it-cl-strength">Making it CL-strength</h2>
-
-<p>That’s already a decent proof of concept.  It’s also far too plain to
-fit in the industrial-strength Common Lisp way.  An inline sorting
-macro worthy of CL should be parameterised on both comparator and key
-functions, and work with arbitrary places rather than only variables.</p>
-
-<p>Parameterising the comparator is trivial.  The key could be handled by
-calling it at each comparison, but that’s wasteful.  We’re generating
-code; might as well go for glory.  Just like in the list merge sort,
-I’ll cache calls to the key function in the merge tree.  I’ll also use
-special variables instead of passing a half-dozen parameters around in
-the generator.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>key/comparator-aware merge generator </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-<span class="line-number">31</span>
-<span class="line-number">32</span>
-<span class="line-number">33</span>
-<span class="line-number">34</span>
-<span class="line-number">35</span>
-<span class="line-number">36</span>
-<span class="line-number">37</span>
-<span class="line-number">38</span>
-<span class="line-number">39</span>
-<span class="line-number">40</span>
-<span class="line-number">41</span>
-<span class="line-number">42</span>
-<span class="line-number">43</span>
-<span class="line-number">44</span>
-<span class="line-number">45</span>
-<span class="line-number">46</span>
-<span class="line-number">47</span>
-<span class="line-number">48</span>
-<span class="line-number">49</span>
-<span class="line-number">50</span>
-<span class="line-number">51</span>
-<span class="line-number">52</span>
-<span class="line-number">53</span>
-<span class="line-number">54</span>
-<span class="line-number">55</span>
-<span class="line-number">56</span>
-<span class="line-number">57</span>
-<span class="line-number">58</span>
-<span class="line-number">59</span>
-<span class="line-number">60</span>
-<span class="line-number">61</span>
-<span class="line-number">62</span>
-<span class="line-number">63</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defvar *inline-sort-comparator*)
-</span><span class="line">(defvar *inline-sort-key*)
-</span><span class="line">(defvar *inline-sort-destinations*)
-</span><span class="line">(defvar *inline-sort-left-head*)
-</span><span class="line">(defvar *inline-sort-right-head*)
-</span><span class="line">
-</span><span class="line">(defun emit-merge-1 (left right acc)
-</span><span class="line">  "Build a search tree to determine the right permutation to
-</span><span class="line">   merge LEFT and RIGHT, given that each is pre-sorted."
-</span><span class="line">  ;; stability trickery
-</span><span class="line">  `(if (funcall ,*inline-sort-comparator* ,*inline-sort-right-head*
-</span><span class="line">                                          ,*inline-sort-left-head*)
-</span><span class="line">       ,(let* ((acc        (cons (first right) acc))
-</span><span class="line">               (right      (rest right)))
-</span><span class="line">          ;; pop from RIGHT, and recurse if RIGHT isn't empty.
-</span><span class="line">          (if right
-</span><span class="line">              `(let ((,*inline-sort-right-head*
-</span><span class="line">                       (funcall ,*inline-sort-key* ,(first right))))
-</span><span class="line">                 ,(emit-merge-1 left right acc))
-</span><span class="line">              (emit-permute *inline-sort-destinations*
-</span><span class="line">                            (append (reverse acc) left))))
-</span><span class="line">       ;; same
-</span><span class="line">       ,(let* ((acc  (cons (first left) acc))
-</span><span class="line">               (left (rest left)))
-</span><span class="line">          (if left
-</span><span class="line">              `(let ((,*inline-sort-left-head*
-</span><span class="line">                       (funcall ,*inline-sort-key* ,(first left))))
-</span><span class="line">                 ,(emit-merge-1 left right acc))
-</span><span class="line">              (emit-permute *inline-sort-destinations*
-</span><span class="line">                            (append (reverse acc) right))))))
-</span><span class="line">
-</span><span class="line">(defun emit-merge (left right)
-</span><span class="line">  "Caching calls to KEY means we have to special-case empty lists
-</span><span class="line">   (which doesn't happen when we sort, anyway)"
-</span><span class="line">  (cond ((null left)
-</span><span class="line">         (emit-permute right right))
-</span><span class="line">        ((null right)
-</span><span class="line">         (emit-permute left left))
-</span><span class="line">        (t
-</span><span class="line">         (let ((*inline-sort-destinations* (append left right))
-</span><span class="line">               (*inline-sort-left-head*  (gensym "LEFT-HEAD-KEY"))
-</span><span class="line">               (*inline-sort-right-head* (gensym "RIGHT-HEAD-KEY")))
-</span><span class="line">           `(let ((,*inline-sort-left-head*  (funcall ,*inline-sort-key*
-</span><span class="line">                                                      ,(first left)))
-</span><span class="line">                  (,*inline-sort-right-head* (funcall ,*inline-sort-key*
-</span><span class="line">                                                      ,(first right))))
-</span><span class="line">              ,(emit-merge-1 left right nil))))))
-</span><span class="line">
-</span><span class="line">(defun emit-sort-1 (values length)
-</span><span class="line">  "Unrolled and inlined recursive merge sort generator.
-</span><span class="line">   Lists of length 1 or less are trivially sorted; recurse
-</span><span class="line">   on the rest."
-</span><span class="line">  (when (&gt; length 1)
-</span><span class="line">    (let* ((split (truncate length 2))
-</span><span class="line">           (left  (subseq values 0 split))
-</span><span class="line">           (right (subseq values split)))
-</span><span class="line">      `(progn
-</span><span class="line">         ,(emit-sort-1 left  split)
-</span><span class="line">         ,(emit-sort-1 right (- length split))
-</span><span class="line">         ,(emit-merge left right)))))
-</span><span class="line">
-</span><span class="line">(defun emit-sort (values *inline-sort-comparator* *inline-sort-key*)
-</span><span class="line">  (emit-sort-1 values (length values)))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>Finally, handling arbitrary places, thus letting the macro take care
-of writing results back to the places, is just regular macrology.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>CL-style inline sort macro </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-<span class="line-number">31</span>
-<span class="line-number">32</span>
-<span class="line-number">33</span>
-<span class="line-number">34</span>
-<span class="line-number">35</span>
-<span class="line-number">36</span>
-<span class="line-number">37</span>
-<span class="line-number">38</span>
-<span class="line-number">39</span>
-<span class="line-number">40</span>
-<span class="line-number">41</span>
-<span class="line-number">42</span>
-<span class="line-number">43</span>
-<span class="line-number">44</span>
-<span class="line-number">45</span>
-<span class="line-number">46</span>
-<span class="line-number">47</span>
-<span class="line-number">48</span>
-<span class="line-number">49</span>
-<span class="line-number">50</span>
-<span class="line-number">51</span>
-<span class="line-number">52</span>
-<span class="line-number">53</span>
-<span class="line-number">54</span>
-<span class="line-number">55</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defmacro inline-sort ((comparator &amp;key key (overwrite t))
-</span><span class="line">                       &amp;body values
-</span><span class="line">                       &amp;environment env)
-</span><span class="line">  "Sorts all VALUES in increasing order with respect to COMPARATOR and
-</span><span class="line">   KEY.  COMPARATOR should be a strict order, like CL:&lt;, and KEY defaults
-</span><span class="line">   to NIL (which is interpreted as the identity).  By default, the result
-</span><span class="line">   is written back to the places; that's skipped if OVERWRITE is NIL. A
-</span><span class="line">   literal NIL value for overwrite will avoid generating any write.
-</span><span class="line">   The SORT form always evaluates to the sorted values, in order."
-</span><span class="line">  (let (vars vals
-</span><span class="line">        store-vars writer-forms
-</span><span class="line">        reader-forms
-</span><span class="line">        temps
-</span><span class="line">        (_comparator (gensym "COMPARATOR"))
-</span><span class="line">        (_key        (gensym "KEY"))
-</span><span class="line">        (_overwrite  (gensym "OVERWRITE")))
-</span><span class="line">    (loop for value in (reverse values) do
-</span><span class="line">      (push (gensym "TEMP") temps)
-</span><span class="line">      ;; only use the setf expansion if we might write to the place.
-</span><span class="line">      (if (not overwrite)
-</span><span class="line">          (push value reader-forms)
-</span><span class="line">          (multiple-value-bind (var val store-var writer reader)
-</span><span class="line">              (get-setf-expansion value env)
-</span><span class="line">            (setf vars (append var vars)
-</span><span class="line">                  vals (append val vals))
-</span><span class="line">            (push store-var store-vars)
-</span><span class="line">            (push writer writer-forms)
-</span><span class="line">            (push reader reader-forms))))
-</span><span class="line">    `(let* ((,_comparator ,comparator)
-</span><span class="line">            (,_comparator (if (functionp ,_comparator)
-</span><span class="line">                              ,_comparator
-</span><span class="line">                              (symbol-function ,_comparator)))
-</span><span class="line">            (,_key        ,(or key '#'identity))
-</span><span class="line">            (,_key        (if (functionp ,_key)
-</span><span class="line">                              ,_key
-</span><span class="line">                              (symbol-function ,_key)))
-</span><span class="line">            (,_overwrite  ,overwrite)
-</span><span class="line">            ,@(mapcar 'list vars vals)
-</span><span class="line">            ,@(mapcar 'list temps reader-forms))
-</span><span class="line">       (declare (ignorable ,_comparator ,_key ,_overwrite))
-</span><span class="line">       ,(emit-sort temps _comparator _key)
-</span><span class="line">       ,(and overwrite
-</span><span class="line">             `(when ,_overwrite
-</span><span class="line">                ,@(loop
-</span><span class="line">                    for value in values
-</span><span class="line">                    for store-var-list in store-vars
-</span><span class="line">                    for writer in writer-forms
-</span><span class="line">                    for temp in temps
-</span><span class="line">                    collect
-</span><span class="line">                    (progn
-</span><span class="line">                      (unless (= 1 (length store-var-list))
-</span><span class="line">                        (error "Can't sort multiple-value place ~S" value))
-</span><span class="line">                      `(let ((,(first store-var-list) ,temp))
-</span><span class="line">                         ,writer)))))
-</span><span class="line">       (values ,@temps))))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>Now, the macro can be used to sort, e.g., vectors of double floats
-“in-place” (inasmuch as copying everything to registers can be
-considered in-place).</p>
-
-<pre><code>CL-USER&gt; (macroexpand-1 `(inline-sort (#'&lt; :key #'-)
-                           (aref array 0) (aref array 1) (aref array 2)))
-(let* ((#:comparator1184 #'&lt;)
-       (#:comparator1184
-        (if (functionp #:comparator1184)
-            #:comparator11184
-            (symbol-function #:comparator1184)))
-       (#:key1185 #'-)
-       (#:key1185
-        (if (functionp #:key1185)
-            #:key1185
-            (symbol-function #:key1185)))
-       (#:overwrite1186 t)
-       (#:array1195 array)
-       (#:array1192 array)
-       (#:array1189 array)
-       (#:temp1193 (aref #:array1195 0))
-       (#:temp1190 (aref #:array1192 1))
-       (#:temp1187 (aref #:array1189 2)))
-  (declare (ignorable #:comparator1184 #:key1185 #:overwrite1186))
-  (progn
-   nil
-   (progn
-    nil
-    nil
-    (let ((#:left-head-key1196 (funcall #:key1185 #:temp1190))
-          (#:right-head-key1197 (funcall #:key1185 #:temp1187)))
-      (if (funcall #:comparator1184 #:right-head-key1197 #:left-head-key1196)
-          (progn (rotatef #:temp1190 #:temp1187))
-          (progn))))
-   (let ((#:left-head-key1198 (funcall #:key1185 #:temp1193))
-         (#:right-head-key1199 (funcall #:key1185 #:temp1190)))
-     (if (funcall #:comparator1184 #:right-head-key1199 #:left-head-key1198)
-         (let ((#:right-head-key1199 (funcall #:key1185 #:temp1187)))
-           (if (funcall #:comparator1184 #:right-head-key1199
-                        #:left-head-key1198)
-               (progn (rotatef #:temp1193 #:temp1190 #:temp1187))
-               (progn (rotatef #:temp1193 #:temp1190))))
-         (progn))))
-  (when #:overwrite1186
-    (let ((#:new1194 #:temp1193))
-      (sb-kernel:%aset #:array1195 0 #:new1194))
-    (let ((#:new1191 #:temp1190))
-      (sb-kernel:%aset #:array1192 1 #:new1191))
-    (let ((#:new1188 #:temp1187))
-      (sb-kernel:%aset #:array1189 2 #:new1188)))
-  (values #:temp1193 #:temp1190 #:temp1187))
-t
-CL-USER&gt; (disassemble (lambda (array)
-                        (declare (type (simple-array double-float (3)) array))
-                        (inline-sort (#'&lt; :key #'-)
-                          (aref array 0) (aref array 1) (aref array 2))
-                        array))
-; disassembly for (lambda (array))
-; 0C5A5661:       F20F105201       movsd XMM2, [rdx+1]        ; no-arg-parsing entry point
-;      666:       F20F104209       movsd XMM0, [rdx+9]
-;      66B:       F20F104A11       movsd XMM1, [rdx+17]
-;      670:       660F28E0         movapd XMM4, XMM0
-;      674:       660F5725A4000000 xorpd XMM4, [rip+164]
-;      67C:       660F28D9         movapd XMM3, XMM1
-;      680:       660F571D98000000 xorpd XMM3, [rip+152]
-;      688:       660F2FDC         comisd XMM3, XMM4
-;      68C:       7A02             jp L0
-;      68E:       7267             jb L3
-;      690: L0:   660F28DA         movapd XMM3, XMM2
-;      694:       660F571D84000000 xorpd XMM3, [rip+132]      ; negate double-float
-;      69C:       660F28E0         movapd XMM4, XMM0
-;      6A0:       660F572578000000 xorpd XMM4, [rip+120]
-;      6A8:       660F2FE3         comisd XMM4, XMM3
-;      6AC:       7A26             jp L1
-;      6AE:       7324             jnb L1
-;      6B0:       660F28E1         movapd XMM4, XMM1
-;      6B4:       660F572564000000 xorpd XMM4, [rip+100]
-;      6BC:       660F2FE3         comisd XMM4, XMM3
-;      6C0:       7A27             jp L2
-;      6C2:       7325             jnb L2
-;      6C4:       660F28DA         movapd XMM3, XMM2
-;      6C8:       660F28D0         movapd XMM2, XMM0
-;      6CC:       660F28C1         movapd XMM0, XMM1
-;      6D0:       660F28CB         movapd XMM1, XMM3
-;      6D4: L1:   F20F115201       movsd [rdx+1], XMM2
-;      6D9:       F20F114209       movsd [rdx+9], XMM0
-;      6DE:       F20F114A11       movsd [rdx+17], XMM1
-;      6E3:       488BE5           mov rsp, rbp
-;      6E6:       F8               clc
-;      6E7:       5D               pop rbp
-;      6E8:       C3               ret
-;      6E9: L2:   660F28DA         movapd XMM3, XMM2
-;      6ED:       660F28D0         movapd XMM2, XMM0
-;      6F1:       660F28C3         movapd XMM0, XMM3
-;      6F5:       EBDD             jmp L1
-;      6F7: L3:   660F28D8         movapd XMM3, XMM0
-;      6FB:       660F28C1         movapd XMM0, XMM1
-;      6FF:       660F28CB         movapd XMM1, XMM3
-;      703:       EB8B             jmp L0
-</code></pre>
-
-<h2 id="bonus-hooking-in-sbcl">Bonus: Hooking in SBCL</h2>
-
-<p>The inline sort supports the same options as <code>CL:SORT</code>, so it’d be
-really interesting to opportunistically compile calls to the latter
-into size-specialised inline sort.  The usual, portable, way to code
-that sort of macro qua source-to-source optimiser in CL is with
-compiler macros; compiler macros have access to all the usual
-macroexpansion-time utility, but the function definition is left in
-place.  That way the user can still use the function as a first-class
-function, and the compiler-macro can decline the transformation if a
-regular call would work better (and the compiler can ignore any
-compiler macro).  That’s not enough for our needs, though… and there
-can only be one compiler macro per function, so adding one to code we
-don’t own is a bad idea.</p>
-
-<p>Python’s first internal representation (ir1) is optimised by
-iteratively deriving tighter type information, and (mostly) pattern
-matching on the type of function calls.  Its DEFTRANSFORM form lets us
-add new rules, and there may be an arbitrary number of such rules for
-each function.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Hooking our sort generator in SBCL </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-<span class="line-number">31</span>
-<span class="line-number">32</span>
-<span class="line-number">33</span>
-<span class="line-number">34</span>
-<span class="line-number">35</span>
-<span class="line-number">36</span>
-<span class="line-number">37</span>
-<span class="line-number">38</span>
-<span class="line-number">39</span>
-<span class="line-number">40</span>
-<span class="line-number">41</span>
-<span class="line-number">42</span>
-<span class="line-number">43</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "SB-C")
-</span><span class="line">(defvar *unrolled-vector-sort-max-length* 8)
-</span><span class="line">
-</span><span class="line">(defun maybe-emit-unrolled-merge-sort (node sequence key)
-</span><span class="line">  (unless (policy node (&gt; speed space))
-</span><span class="line">    (give-up-ir1-transform))
-</span><span class="line">  (let* ((sequence-type (lvar-type sequence))
-</span><span class="line">         (dimensions (array-type-dimensions-or-give-up
-</span><span class="line">                      sequence-type)))
-</span><span class="line">    (unless (typep dimensions '(cons number null))
-</span><span class="line">      (give-up-ir1-transform
-</span><span class="line">       "~@&lt;sequence argument isn't a vector of known length~:@&gt;"))
-</span><span class="line">    (let ((length (first dimensions)))
-</span><span class="line">      (when (&gt; length *unrolled-vector-sort-max-length*)
-</span><span class="line">        (give-up-ir1-transform
-</span><span class="line">         "~@&lt;sequence argument too long for unrolled sort ~
-</span><span class="line">              (length ~S greater than ~S)~:@&gt;"
-</span><span class="line">         length *unrolled-vector-sort-max-length*))
-</span><span class="line">      (if (&lt;= length 1)
-</span><span class="line">          'sequence
-</span><span class="line">          `(with-array-data ((array sequence)
-</span><span class="line">                             (start)
-</span><span class="line">                             (end))
-</span><span class="line">             (declare (optimize (insert-array-bounds-checks 0))
-</span><span class="line">                      (ignore end))
-</span><span class="line">             (inline-sort
-</span><span class="line">                 ((%coerce-callable-to-fun predicate)
-</span><span class="line">                  :key ,(if key
-</span><span class="line">                            '(%coerce-callable-to-fun key)
-</span><span class="line">                            '#'identity))
-</span><span class="line">               ,@(loop for i below length
-</span><span class="line">                       collect `(aref array (+ start ,i))))
-</span><span class="line">             sequence)))))
-</span><span class="line">
-</span><span class="line">(deftransform sort ((sequence predicate &amp;key key)
-</span><span class="line">                    * * :node node)
-</span><span class="line">  "unroll sort of short vectors"
-</span><span class="line">  (maybe-emit-unrolled-merge-sort node sequence key))
-</span><span class="line">
-</span><span class="line">(deftransform stable-sort ((sequence predicate &amp;key key)
-</span><span class="line">                           * * :node node)
-</span><span class="line">  "unroll stable-sort of short vectors"
-</span><span class="line">  (maybe-emit-unrolled-merge-sort node sequence key))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>The two deftransforms at the end define new rules that match on calls
-to <code>CL:SORT</code> and <code>CL:STABLE-SORT</code>, with arbitrary argument types and
-return types: basic type checks are performed elsewhere, and
-<code>maybe-emit-unrolled-merge-sort</code> does the rest.  Transforms are
-identified by the docstring (which also improve compiler notes), and
-the argument and return types, so the forms are reevaluation-safe.</p>
-
-<p>All the logic lies in <code>maybe-emit-unrolled-merge-sort</code>.  The <code>policy</code>
-form checks that the optimisation policy at the call node has <code>speed</code>
-greater than <code>space</code>, and gives up on the transformation otherwise.
-The next step is to make sure the sequence argument is an array, and
-that its dimensions are known and define a vector (its dimension list
-is a list of one number).  The final guard makes sure we only
-specialise on small sorts (at most
-<code>*unrolled-vector-sort-max-length*</code>).</p>
-
-<p>Finally, we get to code generation itself.  A vector of length 1 or 0
-is trivially pre-sorted.  I could also directly emit the inner
-<code>inline-sort</code> form, but SBCL has some stuff to hoist out computations
-related to hairy arrays.  <code>with-array-data</code> takes a potentially
-complex array (e.g. displaced, or not a vector), and binds the
-relevant variables to the underlying simple array of rank 1, and the
-start and end indices corresponding to the range we defined
-(defaulting to the whole range of the input array).  Bound checks are
-eliminated because static information ensures the accesses are safe
-(or the user lied and asked not to insert type checks earlier), and
-the <code>start</code> index is declared to be small enough that we can add to it
-without overflow – Python doesn’t implement the sort of sophisticated
-shape analyses that could figure that out.  Finally, a straight
-<code>inline-sort</code> form can be emitted.</p>
-
-<p>That machinery means we’ll get quicker and shorter inline sort code
-when the size is known ahead of time.  For example, a quick
-disassembly shows the following is about one fourth the size of the
-size-generic inline code (with <code>(simple-array double-float (*))</code>, and
-<code>(optimize speed (space 0))</code>.
-    CL-USER&gt; (lambda (x)
-               (declare (type (simple-array double-float (4)) x)
-                        (optimize speed))
-               (sort x #’&lt;))
-    #&lt;FUNCTION (lambda (x)) {100BFF457B}&gt;
-    CL-USER&gt; (disassemble *)
-    ; disassembly for (lambda (x))
-    ; 0BFF45CF:       F20F105A01       movsd XMM3, [rdx+1]        ; no-arg-parsing entry point
-    ;      5D4:       F20F104209       movsd XMM0, [rdx+9]
-    ;      5D9:       F20F104A11       movsd XMM1, [rdx+17]
-    ;      5DE:       F20F105219       movsd XMM2, [rdx+25]
-    ;      5E3:       660F2FC3         comisd XMM0, XMM3
-    ;      5E7:       7A0E             jp L0
-    ;      5E9:       730C             jnb L0
-    ;      5EB:       660F28E3         movapd XMM4, XMM3
-    ;      5EF:       660F28D8         movapd XMM3, XMM0
-    ;      5F3:       660F28C4         movapd XMM0, XMM4
-    […]</p>
-
-<p>Even for vectors of length 8 (the default limit), the specialised
-merge sort is shorter than SBCL’s inlined heapsort, and about three
-times as fast on shuffled vectors.</p>
-
-<h2 id="thats-it">That’s it</h2>
-
-<p>It took me much longer to write this up than to code the generator,
-but I hope this can be useful to other people.  One thing I’d like to
-note is that sorting networks are much harder to get right than this
-generator, and pessimise performance: without branches, there must be
-partially redundant computations on non-power-of-two sizes.  In the
-absence of solid compiler support for conditional swaps, I doubt the
-additional overhead of <em>optimal</em> sorting networks can be compensated
-by the simpler control flow, never mind the usual odd-even or bitonic
-networks.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>I just spent a few CPU-months to generate
+<a href="https://github.com/pkhuong/polynomial-approximation-catalogue">these text files</a>.
+They catalogue all the “interesting” (from an efficiency and accuracy
+point of view) polynomial approximations of degree 16 or lower for a
+couple transcendental functions, over small but useful ranges, in
+single and double float arithmetic.  This claim seems to raise many
+good questions when people hear it.</p>
+
+<p>What’s wrong with Taylor approximations? Why the need to specify a
+range?</p>
+
+<p>Why are the results different for single and double floating point
+arithmetic? Doesn’t rounding each coefficient to the closest float
+suffice?</p>
+
+<p>Why do I deem only certain approximations to be interesting and
+others not, and how can there be so few?</p>
+
+<p>In this post, I attempt to provide answers to these interrogations,
+and sketch how I exploited classic
+<a href="http://www.scienceofbetter.org/">operations research (OR)</a> tools to
+enter the numerical analysts’ playground.</p>
+
+<p>The final section describe how I’d interpret the catalogue when coding
+quick and slightly inaccurate polynomial approximations.  Such lossy
+approximations seem to be used a lot in machine learning, game
+programming and signal processing: for these domains, it makes sense
+to allow more error than usual, in exchange for faster computations.</p>
+
+<p>The CL code is all up in the repository for
+<a href="https://github.com/pkhuong/rational-simplex/tree/master/demo/branch-and-cut-fit">rational-simplex</a>,
+but it’s definitely research-grade. Readers beware.</p>
+
+<h1 id="minimax-approximations">Minimax approximations</h1>
+
+<p><span class="pullquote-right" data-pullquote="Taylor approximations are usually easy to compute, but only provide good approximations over an infinitesimal range.">
+The natural way to approximate functions with polynomials
+(particularly if one spends time with physicists or engineers) is to
+use truncated Taylor series.  Taylor approximations are usually easy to compute, but only provide good approximations over an infinitesimal range.  For example, the degree-1 Taylor approximation for \(\exp\)
+centered around 0 is \(1 + x\).  It’s also obviously suboptimal, if
+one wishes to minimise the worst-case error: the exponential function
+is convex, and gradients consistently under-approximate convex functions.
+</span></p>
+
+<p><img class="center" src="/images/2012-10-07-the-eight-useful-polynomial-approximations-of-sinf-3/minimax.png" />
+<!-- ggplot(data.frame(x=c(-1, 1)), aes(x)) + stat_function(fun=exp, aes(colour='exp')) + stat_function(fun=function(x) { 1+x}, aes(color='1 + x')) + stat_function(fun=function(x) { 1.26+1.18*x}, aes(colour='1.26 + 1.18x')) + scale_colour_manual("Function", value=c("black","blue", "red"), breaks=c("exp", "1 + x", "1.26 + 1.18x")) --></p>
+
+<p>Another affine function, \(1.26 + 1.18x\), intersects \(\exp\) in
+two points and is overall much closer over \([-1, 1]\).  In fact,
+this latter approximation (roughly) minimises the maximal absolute
+error over that range: it’s clearly not as good as the Taylor
+approximation in the vicinity of 0, but it’s also much better in the
+worst case (all bets are off outside \([-1, 1]\)).  That’s why I’m
+(or anyone’s libm, most likely) not satisfied by Taylor polynomials,
+and instead wish to compute approximations that minimise the error
+over a known range; function-specific identities can be exploited to
+reduce any input to such a range.</p>
+
+<h2 id="computing-minimax-polynomials">Computing minimax polynomials</h2>
+
+<p>As far as I know, the typical methods to find polynomial
+approximation that minimise the maximal error (minimax polynomials)
+are iterative algorithms in the style of the <a href="http://en.wikipedia.org/wiki/Remez_algorithm">Remez exchange algorithm</a>.
+These methods exploit real analysis results to reduce the problem to
+computing minimax polynomials over very few points (one per coefficient,
+i.e. one more than the degree): once an approximation is found by
+solving a linear equation system, error extrema are computed and used
+as a basis to find the next approximation.  Given arbitrary-precision
+arithmetic and some properties on the approximated function, the
+method converges.  It’s elegant, but depends on high-precision
+arithmetic.</p>
+
+<p>Instead, I
+<a href="http://pvk.ca/Blog/2012/05/24/fitting-polynomials-by-generating-linear-constraints/">reduce the approximation problem to a sequence of linear optimisation programs</a>.
+Exchange algorithms solve minimax subproblems over exactly as many
+points as there are coefficients: the fit can then be solved as a
+linear equation.  I find it simpler to use many more constraints than
+there are coefficients, and solve the resulting optimisation problem
+subject to linear inequalities directly, as a
+<a href="http://en.wikipedia.org/wiki/Linear_programming">linear program</a>.</p>
+
+<p>There are obviously no cycling problems in this cutting planes
+approach (the set of points grows monotonically), and all the
+machinery from exchange algorithms can be reused: there is the same
+need for a good set of initial points and for determining error
+extrema.  The only difference is that points can always be added to
+the subproblem without having to remove any, and that we can restrict
+points to correspond to floating values (i.e. values we might actually
+get as input) without hindering convergence.  The last point seems
+pretty important when looking at high-precision approximations.</p>
+
+<p>For example, let’s approximate the exponential function over \([-1, 1]\)
+with an affine function.  The initial points could
+simply be the bounds, -1 and 1.  The result is the line that passes by
+\(\exp(-1)\) and \(\exp(1)\), approximately \(1.54 + 1.18x\).
+The error is pretty bad around 0; solving for the minimax line over
+three points (-1, 0 and 1) yields a globally optimal solution,
+approximately \(1.16 + 1.18x\).</p>
+
+<p><img class="center" src="/images/2012-10-07-the-eight-useful-polynomial-approximations-of-sinf-3/cutting-planes.png" />
+<!-- ggplot(data.frame(x=c(-1, 1)), aes(x)) + stat_function(fun=exp, aes(colour='exp')) + stat_function(fun=function(x) { 1.54+1.18*x}, aes(color='1.54 + 1.18x')) + stat_function(fun=function(x) { 1.26+1.18*x}, aes(colour='1.26 + 1.18x')) + scale_colour_manual("Function", value=c("black","blue", "red"), breaks=c("exp", "1.54 + 1.18x", "1.26 + 1.18x")) --></p>
+
+<p>There’s a lot of meat to wrap around this bone.  I use a
+<a href="https://bitbucket.org/tarballs_are_good/computable-reals">computable reals</a>
+package in Common Lisp to pull arbitrary-precision rational
+approximations for arithmetic expressions; using libm directly would
+approximate an approximation, and likely cause strange results.  A
+<a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/branch-and-cut-fit/newton.lisp">variant of Newton’s algorithm</a>
+(with bisection steps) converges to error extrema (points which can be
+added to the linear subproblem); arbitrary precision real arithmetic
+is very useful to ensure convergence down to machine precision here.
+Each linear subproblem is solved with an
+<a href="https://github.com/pkhuong/rational-simplex">exact simplex algorithm in rational arithmetic</a>,
+and convergence is declared when the value of the error extrema found
+in the Newton steps correspond to that estimated by the subproblem.
+Finally, the fact that the input are floating-point values is
+exploited by ensuring that all the points considered in the linear
+subproblems correspond exactly to FP values: rather than only rounding
+a point to the nearest FP value, its two immediately neighbouring
+(predecessor and successor) FP values were also added to the
+subproblem.  Adding immediate neighbours helps skip iterations in
+which extrema move only by one <a href="http://en.wikipedia.org/wiki/Unit_in_the_last_place">ULP</a>.</p>
+
+<p>Initialising the method with a good set of points is essential to
+obtain reasonable performance.  The
+<a href="http://en.wikipedia.org/wiki/Chebyshev_nodes">Chebyshev nodes</a> are
+known to yield
+<a href="http://www.uta.edu/faculty/rcli/papers/li2004.pdf">nearly optimal [PDF]</a>
+initial approximations.  The LP-based approach can exploit a large
+number of starting points, so I went with very many initial Chebyshev
+nodes (256, for polynomials of degree at most 16), and, again,
+adjoined three neighbouring FP values for each point.  It doesn’t seem
+useful to me to determine the maximal absolute error very precisely,
+and I declared convergence when the value predicted by the LP
+relaxation was off by less than 0.01%.  Also key to the performance
+were tweaks in the polynomial evaluation function to avoid rational
+arithmetic until the very last step.</p>
+
+<h1 id="exactly-represented-coefficients">Exactly represented coefficients</h1>
+
+<p><span class="pullquote-right" data-pullquote="rounding coefficients can result in catastrophic error blowups.">
+The previous section gives one reason why there are different tables
+for single and double float approximations: the ranges of input
+considered during optimisation differ.  There’s another reason that’s
+more important, particularly for single float coefficients:
+rounding coefficients can result in catastrophic error blowups.
+</span></p>
+
+<p>For example, rounding \(2.5 x\sp{2}\) to the nearest integer
+coefficient finds either \(2 x\sp{2}\) or \(3 x\sp{2}\).  However \(2
+x\sp{2} + x\sp{3}\) is also restricted to integer coefficients, but
+more accurate over \([0, .5]\).  Straight coefficient-wise
+rounding yields an error of \(\frac{1}{2} x\sp{2}\), versus
+\(\frac{1}{2} x\sp{2} - x\sp{3}\) for the degree-3 approximation.
+As the following graph shows, the degree-3 approximation is much
+closer for the range we’re concerned with.</p>
+
+<p><img class="center" src="/images/2012-10-07-the-eight-useful-polynomial-approximations-of-sinf-3/rounding.png" />
+<!-- ggplot(data.frame(x=c(0, .5)), aes(x)) + stat_function(fun=function(x){.5*x^2}, aes(colour='|2.5 x^2 - 2 x^2|')) + stat_function(fun=function(x) { .5*x^2-x^3}, aes(color='|2.5 x^2 - (2 x^2 + x^3)|')) + scale_colour_manual("Error", breaks=c('|2.5 x^2 - 2 x^2|', '|2.5 x^2 - (2 x^2 + x^3)|'), value=c('red', 'blue')) --></p>
+
+<p>Floating point values are more densely distributed than the integers
+for the range of values we usually encounter in polynomial
+approximations, but still discrete, and the same phenomenon crops up,
+at a smaller scale.</p>
+
+<p>The
+<a href="http://www.marc.mezzarobba.net/m2/summary_chevillard.pdf">state of the art</a>
+for this version of the approximation problem seems to be based on an
+initial Remez step, followed by a reduction to a
+<a href="http://en.wikipedia.org/wiki/Lattice_problem#Closest_vector_problem_.28CVP.29">CVP</a>.</p>
+
+<p>The cutting planes approach points to a natural solution from the OR
+world: a branch and cut method.  The issue with the cutting planes
+solution is that, while I only generate points that correspond to FP
+values, the decision variables (coefficients) are free to take
+arbitrary rational values.</p>
+
+<p>Branching can be used to split up a decision variable’s range and
+eliminate from consideration a range of non-FP values.  The decision
+variables’ upper and lower bounds are tightened in a large number of
+subproblems; solutions gradually converge to all-FP values and their
+optimality is then proven.</p>
+
+<p>Embedding the cutting planes method in a branch and bound lets us find
+polynomial approximations with float coefficients that minimise the
+maximal error over float arguments, with correctly rounded powers.
+The only remaining simplification is that we assume that the dot
+product in the polynomial evaluation is error-free.  Sadly, removing
+this simplification results in a horrible discrete optimisation
+problem with a very bumpy objective function.  I’m not sure that any
+exact approach can solve this in reasonable time.  Still, there are
+ways to evaluate FP polynomials very accurately, and I’m mostly
+interested in approximations to trade accuracy for speed, so rounding
+errors may well be negligible compared to approximation errors.</p>
+
+<h2 id="a-branch-and-cut-method-for-polynomial-approximations">A branch-and-cut method for polynomial approximations</h2>
+
+<p>As in all
+<a href="http://en.wikipedia.org/wiki/Branch_and_bound">branch and bound</a>
+methods, a problem is split in subproblems by restricting the range of
+some coefficient to exclude some infeasible (non-FP) values.  For
+example, in the previous example (in which we’re looking for integer
+coefficients), the 2.5 coefficient would lead to two subproblems, one
+in which the degree-2 coefficient is at most 2 \((\lfloor 2.5\rfloor)\),
+and another in which it’s at least 3 \((\lceil2.5 \rceil)\),
+excluding all the fractional values between 2 and 3.  For floats,
+we restrict to the closest floats that under- or over- approximate
+the current value.</p>
+
+<p>However, instead of solving the full continuous relaxation (which is
+impractical, given the large number of potential argument values), our
+subproblems are solved with cutting planes.  The trick is that cuts
+(constraints, which correspond to argument values) from any branch can
+be used everywhere else.  Thus, the global point pool is shared
+between all subproblems, rather than re-generating it from scratch for
+each subproblem.  In practice, this lifting of cutting planes to the
+root problem seems essential for efficiency; that’s certainly what it
+took for branch-and-cut MIP solvers to take off.</p>
+
+<p>I generate cuts at the root, but afterwards only when a subproblem
+yields all-FP values.  This choice was made for efficiency reasons.
+Finding error extrema is relatively slow, but, more importantly,
+adding cuts really slows down re-optimisation: the state of the
+simplex algorithm can be preserved between invocations, and
+warm-starting tends to be extremely efficient when only some
+variables’ bounds have been modified.  However, it’s also necessary to
+add constraints when an incumbent is all-FP, lest we prematurely
+declare victory.</p>
+
+<p>There are two really important choices when designing branch and bound
+algorithms: how the branching variable is chosen, and the order in
+which subproblems are explored.  With polynomial approximations, it
+seems to make sense to branch on the coefficient corresponding to the
+lowest degree first: I simply scan the solution and choose the
+least-degree coefficient that isn’t represented exactly as a float.
+Nodes are explored in a hybrid depth-first/best-first order: when a
+subproblem yields children (its objective value is lower than the
+current best feasible solution, and it isn’t feasible itself), the
+next node is its child corresponding to the bound closest to the
+branching variable’s value, otherwise the node with the least
+predicted value is chosen.  The depth-first/closest-first dives
+quickly converge to decent feasible solutions, while the best-first
+choice will increase the lower bound, bringing us closer to proving
+optimality.</p>
+
+<p>A randomised rounding heuristic is also used to provide initial
+feasible (all-FP) solutions, and the incumbent is considered close
+enough to optimal when it’s less than 5% off from the best-known lower
+bound.  When the method returns, we have a polynomial approximation
+with coefficients that are exactly representable as single or double
+floats (depending on the setting), and which (almost) minimises the
+approximation error on float arguments.</p>
+
+<h1 id="interesting-approximations">Interesting approximations</h1>
+
+<p>The branch and cut can be used to determine an (nearly-)
+optimally accurate FP polynomial approximation given a maximum degree.
+However, the degree isn’t the only tunable to accelerate polynomial
+evaluation: some coefficients are nicer than others.  Multiplying by 0
+is obviously very easy (nothing to do), while multiplication by +/-1
+is pretty good (no multiplication), and by +/- 2 not too bad either
+(strength-reduce the multiplication into an addition).  It would be
+possible to consider other integers, but it doesn’t seem to make
+sense: on current X86, floating point multiplication is only 33-66%
+slower (more latency) than FP addition, and fiddling with the exponent
+field means ping-ponging between the FP and integer domains.</p>
+
+<p>There are millions of such approximations with a few “nice”
+coefficients, even when restricting the search to low degrees (e.g. 10
+or lower).  However, the vast majority of them will be wildly
+inaccurate.  I decided to only consider approximations that are at
+least as accurate as the best approximation of degree three lower:
+e.g. a degree-3 polynomial with nice coefficients is only
+(potentially) interesting if it’s at least as accurate as a constant.
+Otherwise, it’s most likely even quicker to just use a lower-degree
+approximation.</p>
+
+<p><span class="pullquote-right" data-pullquote="what&#8217;s the point in looking at a degree-4 polynomial with one coefficient equal to 0 if there&#8217;s a degree-3 with one zero that&#8217;s just as accurate?">
+That’s not enough: this filter still leaves thousands of polynomials.
+Most of the approximations will be dominated by another; what’s the point in looking at a degree-4 polynomial with one coefficient equal to 0 if there’s a degree-3 with one zero that’s just as accurate?  The relative importance
+of the degree, and the number of zeroes, ones and twos will vary
+depending on the environment and evaluation technique.  However, it
+seems reasonable to assume that zeroes are always at least as quick to
+work with as ones, and ones as quick as twos.  The constant
+offset ought to be treated distinctly from other coefficients.  It’s
+only added rather than multiplied, so any speed-up is lower, but an
+offset of 0 is still pretty nice, and, on some architectures, there is
+special support to load constants like 1 or 2.
+</span></p>
+
+<p>This lets me construct a simple but robust performance model: a
+polynomial is more quickly evaluated than another if it’s of lower or
+same degree, doesn’t have more non-zero, non-{zero, one} or non-{zero,
+one, two} multipliers, and if its constant offset is a nicer integer
+(0 is nicer than +/- 1 is nicer than +/- 2 is nicer than arbitrary
+floats).</p>
+
+<p>With these five metrics, in addition to accuracy, we have a
+multi-objective optimisation problem.  In some situations, humans may
+be able to determine a weighting procedure to bring the dimension down
+to a scalar objective value, but the procedure would be highly
+domain-specific.  Instead, we can use this partial order to report
+solutions on the Pareto front of accuracy and efficiency: it’s only
+worth reporting an approximation if there is no approximation that’s
+better or equal in accuracy and in all the performance metrics.  The
+performance and accuracy characteristics are strongly correlated
+(decreasing the degree or forcing nice coefficients tends to decrease
+the accuracy, and a zero coefficient is also zero-or-one, etc.), so
+it’s not too surprising that there are so few non-dominated solutions.</p>
+
+<h2 id="enumerating-potentially-interesting-approximations">Enumerating potentially-interesting approximations</h2>
+
+<p>The branch and cut can be used to find the most accurate
+approximation, given an assignment for a few values (e.g. the constant
+term is 1, or the first degree coefficient 0).  I’ll use it as a
+subproblem solver, in a more exotic branch and bound approach.</p>
+
+<p>We wish to enumerate all the partial assignments that correspond to
+not-too-horrible solutions, and save those.  A normal branch and bound
+can’t be applied directly, as one of the choices is to leave a given
+variable free to take any value.  However, bounding still works: if a
+given partial assignment leads to an approximation that’s too
+inaccurate, the accuracy won’t improve by fixing even more
+coefficients.</p>
+
+<p>I started with a search in which children were generated by adjoining
+one fixed value to partial assignments.  So, after the root node,
+there could be one child with the constant term fixed to 0, 1 or 2
+(and everything else free), another with the first coefficient fixed
+to 0, 1 or 2 (everything else left free), etc.</p>
+
+<p>Obviously, this approach leads to a search graph: fixing the constant
+term to 0 and then the first coefficient to 0, or doing in the reverse
+order leads to the same partial assignment.  A hash table ensures that
+no partial assignment is explored twice.  There’s still a lot of
+potential for wasted computation: if bounding lets us determine that
+fixing the constant coefficient to 0 is worthless, we will still
+generate children with the constant fixed to 0 in other branches!</p>
+
+<p>I borrowed a trick from the SAT solving and constraint programming
+communities,
+<a href="http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.30.2870">nogood recording</a>.
+Modern SAT solvers go far beyond strict branching search: in practice,
+it seems that good branching orders will lead to quick solutions,
+while a few bad ones take forever to solve.  Solvers thus frequently
+reset the search tree to a certain extent.  However, information is
+still communicated across search trees via learned clauses.  When the
+search backtracks (an infeasible partial assignment is found), a nogood
+set of conflicting partial assignments can be computed: no feasible
+solution will include this nogood assignment.</p>
+
+<p>Some time ago, Vasek Chvatal introduced
+<a href="http://dimacs.rutgers.edu/TechnicalReports/abstracts/1995/95-14.html">Resolution Search</a>
+to port this idea to 0/1 optimisation, and Marius Posta, a friend at
+CIRRELT and Université de Montréal,
+<a href="https://www.cirrelt.ca/DocumentsTravail/CIRRELT-2009-16.pdf">extended it to general discrete optimisation [PDF]</a>.
+The complexity mostly comes from the desire to generate partial
+assignments that, if they’re bad, will merge well with the current set
+of learned clauses.  This way, the whole set of nogoods (or, rather,
+an approximation that suffices to guarantee convergence) can be
+represented and queried efficiently.</p>
+
+<p>There’s no need to be this clever here: each subproblem involves an
+exact (rational arithmetic) branch and cut.  Simply scanning the set
+of arbitrary nogoods to look for a match significantly accelerates the
+search.  The process is sketched below.</p>
+
+<p><a href="/images/2012-10-07-the-eight-useful-polynomial-approximations-of-sinf-3/search-tree.jpg"><img class="center" src="/images/2012-10-07-the-eight-useful-polynomial-approximations-of-sinf-3/search-tree-small.jpg" /></a></p>
+
+<p>The search is further accelerated by executing multiple branch and
+cuts and nogood scans in parallel.</p>
+
+<p>The size of the search graph is also reduced by only fixing
+coefficients to a few values.  There’s no point in forcing a
+coefficient to take the value of 0, 1 or 2 (modulo sign) if it already
+does.  Thus, a coefficient with a value of 0 is left free; otherwise a
+child extending the partial assignment with 0 is created.  Similarly,
+a child extended with a value of 1 is only generated if the
+coefficient isn’t already at 0 or 1 (we suppose that multiplication by
+0 is at least as efficient as by 1), and similarly for 2.  Finally,
+coefficients between 0 and 1 are only forced to 0 or 1, and those
+between 1 and 3 to 0, 1 or 2.  If a coefficient takes a greater
+absolute value than 3, fixing it most probably degrades the
+approximation too strongly, and it’s left free – then again such
+coefficients only seem to happen on really hard-to-approximate
+functions like \(\log\) over \([1, 2]\).  Also, the last
+coefficient is never fixed to zero (that would be equivalent to
+looking at lower-degree approximations, which was done in previous
+searches).  Of course, with negative coefficients, the fixed values
+are negated as well.</p>
+
+<p>This process generates a large number of potentially interesting
+polynomial approximations.  The non-dominated ones are found with a
+straight doubly nested loop, with a slight twist: accuracy is computed
+with machine floating point arithmetic, thus taking rounding into
+account.  The downside is that it’s actually approximated, by sampling
+fairly many (the FP neighbourhood of 8K Chebyshev nodes) points;
+preliminary testing indicates that’s good enough for a relative error
+(on the absolute error estimate) lower than 1e-5.  There tends to be a
+few exactly equivalent polynomials (all the attributes are the same,
+including accuracy – they only differ by a couple ULP in a few
+coefficients); in that case, one is chosen arbitrarily.  There’s
+definitely some low-hanging fruit to better capture the performance
+partial order; the error estimate is an obvious candidate.  The hard
+part was generating all the potentially interesting approximations,
+though, so one can easily re-run the selection algorithm with tweaked
+criteria later.</p>
+
+<h1 id="exploiting-the-approximation-indices">Exploiting the approximation indices</h1>
+
+<p>I’m not sure what functions are frequently approximated over what
+ranges, so I went with the obvious ones: \(\cos\) and \(\sin\)
+over \([-\pi/2, \pi/2]\), \(\exp\) and arctan over \([-1, 1]\)
+or \([0, 1]\), \(\log\) over \([1, 2]\), and \(\log 1+x\) and
+\(\log\sb{2} 1+x\) over \([0, 1]\).  This used up a fair amount of
+CPU time, so I stopped at degree 16.</p>
+
+<p>Each file reports the accuracy and efficient metrics, then the
+coefficients in floating point and rational form, and a hash of the
+coefficients to identify the approximation.  The summary columns are
+all aligned, but each line is very long, so the files are best read
+without line wrapping.</p>
+
+<p>For example, if I were looking for a fairly good approximation of
+degree 3 for \(\exp\) in single floats, I’d look at
+<a href="https://github.com/pkhuong/polynomial-approximation-catalogue/blob/master/single/exp-degree-lb_error-non_zero-non_one-non_two-constant-error">exp-degree-lb_error-non_zero-non_one-non_two-constant-error</a>.</p>
+
+<p>The columns report the accuracy and efficiency metrics, in the order
+used to sort approximations lexicographically:</p>
+
+<ol>
+  <li>the approximation’s degree;</li>
+  <li>the floor of the negated base-2 logarithm of the maximum error
+(roughly bits of absolute accuracy, rounded up);</li>
+  <li>the number of non-zero multipliers;</li>
+  <li>the number of non-{-1, 0, 1} multipliers;</li>
+  <li>whe number of non-{-2, -1, 0, 1, 2} multipliers;</li>
+  <li>whether the constant’s absolute value is 0, 1, 2, or other (in which
+case the value is 3); and</li>
+  <li>the maximum error.</li>
+</ol>
+
+<p>After that, separated by pipes, come the coefficients in float form,
+then in rational form, and the MD5 hash of the coefficients in a float
+vector (in a contiguous vector, in increasing order of degree, with
+X86’s little-endian sign-magnitude representation).  The hash might
+also be useful if you’re worried that your favourite implementation
+isn’t parsing floats right.</p>
+
+<p>There are three polynomials with degree 3, and they all offer
+approximately the same accuracy (lb_error = 10).  I’d choose between
+the most accurate polynomial</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">exp(x) = 0.9994552 + 1.0166024 x + 0.42170283 x**2 + 0.2799766 x**3 # exp-74F7B9B7E0E73A804ABF6AC6C006BD98</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>or one with a nicer multiplier that doesn’t even double the maximum error</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">exp(x) = 1.0009761 + x + 0.4587815 x**2 + 0.2575481 x**3 # exp-D4C349D8F2C45EC0BE2154D1052EAA03</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>On the other hand, if I were looking for an accurate-enough
+approximation of \(\log 1+x\), I’d open
+<a href="https://github.com/pkhuong/polynomial-approximation-catalogue/blob/master/single/log1px-lb_error-degree-error-non_zero-non_one-non_two-constant">log1px-lb_error-degree-error-non_zero-non_one-non_two-constant</a>.</p>
+
+<p>The columns are in the order used for the lexicographic sort:</p>
+
+<ol>
+  <li>the number of bits of accuracy;</li>
+  <li>the approximation’s degree;</li>
+  <li>the maximum error;</li>
+  <li>the number of non-zero multipliers;</li>
+  <li>the number of non-{-1, 0, 1} multipliers;</li>
+  <li>the number of non-{-2, -1, 0, 1, 2} multipliers; and</li>
+  <li>whether the constant’s absolute value is 0, 1, 2, or other (in which
+case the value is 3).</li>
+</ol>
+
+<p>An error around 1e-4 would be reasonable for my needs, and
+<code>log1px-6AE509</code> seems interesting: maximum error is around 1.5e-4,
+it’s degree 4, the constant offset is 0 and the first multiplier 1.
+If I needed a bit more accuracy (7.1e-5), I’d consider <code>log1px-E8200B</code>:
+it’s degree 4 as well, and the constant is still 0.</p>
+
+<p>It seems to me optimisation tools like approximation generators are
+geared toward fire and forget usage.  I don’t believe that’s a
+realistic story: very often, the operator will have a fuzzy range of
+acceptable parameters, and presenting a small number of solutions with
+fairly close matches lets them exploit domain-specific insights.  In
+this case, rather than specifying fixed coefficients and degree or
+accuracy goals, users can scan the indices and decide whether each
+trade-off is worth it or not.  That’s particularly true of the single
+float approximations, for which the number of possibilities tends to
+be tiny (e.g. eight non-dominated approximations for
+<a href="https://github.com/pkhuong/polynomial-approximation-catalogue/blob/master/single/sin-degree-lb_error-non_zero-non_one-non_two-constant-error">\(\sin\)</a>).</p>
 </div>
   
   
