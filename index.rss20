@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-07-07T08:23:40-04:00</updated>
+  <updated>2020-07-07T08:25:17-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -37,8 +37,7 @@ without impacting the common case!</p>
 
 <p>But first, what are hazard pointers?</p>
 
-<p>Hazard pointers and the safe memory reclamation problem
-——————————————————-x</p>
+<h2 id="hazard-pointers-and-the-safe-memory-reclamation-problem">Hazard pointers and the safe memory reclamation problem</h2>
 
 <p>Hazard pointers were introduced by <a href="https://dblp.uni-trier.de/pers/m/Michael:Maged_M=.html">Maged Michael</a>
 in <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">Hazard Pointers: Safe Memory Reclamation for Lock-Free Objects (2005, PDF)</a>,
