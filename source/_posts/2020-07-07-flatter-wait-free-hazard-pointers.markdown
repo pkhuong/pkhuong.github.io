@@ -32,7 +32,7 @@ without impacting the common case!
 But first, what are hazard pointers?
 
 Hazard pointers and the safe memory reclamation problem
--------------------------------------------------------x
+-------------------------------------------------------
 
 Hazard pointers were introduced by [Maged Michael](https://dblp.uni-trier.de/pers/m/Michael:Maged_M=.html)
 in [Hazard Pointers: Safe Memory Reclamation for Lock-Free Objects (2005, PDF)](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&rep=rep1&type=pdf),
