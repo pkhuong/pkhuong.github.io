@@ -1051,7 +1051,7 @@ cycle per pointer dereference.  Our first wait-free implementation,
 speculation (<code>hp_read_movs_spec</code>) does help shave that to ~4.5 cycles
 (110%).  The portable wait-free implementation <code>hp_read_wf</code> does
 slightly better, and its single-cleanup version <code>hp_read_swf</code> takes
-the crown, by adding less than 0.2 cycle/dereference.</p>
+the crown, by adding around 0.2 cycle/dereference.</p>
 
 <p>These results are stable and repeatable, but still fragile, in a way:
 except for <code>hp_read_explicit</code>, which is massively slowed down by its
