@@ -112,20 +112,20 @@ July
 
 
 <div class="entry-content" style="font-family: ; font-size: "><p>Back in February 2020, Blelloch and Wei submitted this cool preprint: <a href="https://arxiv.org/abs/2002.07053">Concurrent Reference Counting and Resource Management in Wait-free Constant Time</a>.
-Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation:<sup id="fnref:but-also"><a href="#fn:but-also" class="footnote">1</a></sup>
-<a href="">safe memory reclamation</a> is a key component for lock-free synchronisation when garbage collection isn’t an option,<sup id="fnref:it-is-gc"><a href="#fn:it-is-gc" class="footnote">2</a></sup>
-and <a href="">hazard pointers</a> let us bound resource leaks much more tightly than, e.g., <a href="">epoch reclamation</a>,
-but classically has a <em>loop</em> in its <a href="https://www.iecc.com/gclist/GC-algorithms.html">read barriers (in the managed language sense)</a>,
-which can be annoying for code generation and isn’t good for worst-case time bounds.</p>
+Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also"><a href="#fn:but-also" class="footnote">1</a></sup>
+<a href="">Safe memory reclamation</a> is a key component for lock-free synchronisation when garbage collection isn’t an option,<sup id="fnref:it-is-gc"><a href="#fn:it-is-gc" class="footnote">2</a></sup>
+and <a href="">hazard pointers</a> let us bound resource leaks much more tightly than, e.g., <a href="">epoch reclamation</a>.
+However the usual implementation has a <em>loop</em> in its <a href="https://www.iecc.com/gclist/GC-algorithms.html">read barriers (in the garbage collection sense)</a>,
+which can be annoying for code generation and bad for worst-case time bounds.</p>
 
-<p>Blelloch’s and Wei’s wait-free proposal eliminates that loop… with a construction that stacks <a href="https://arxiv.org/abs/1911.09671">two emulated primitives—atomic copy, itself implemented with strong LL/SC—</a>on top of what hardware usually offers.
-I see the real value of the proposal in showing that wait-freedom is achievable,
-and that the key is atomic memory-memory copies;
-in this post, I’ll share the engineering work to make their construction practical,
+<p>Blelloch’s and Wei’s wait-free algorithm eliminates that loop… with a construction that stacks <a href="https://arxiv.org/abs/1911.09671">two emulated primitives—atomic copy, itself implemented with strong LL/SC—</a>on top of what hardware usually offers.
+I see the real value of the construction in showing that wait-freedom is achievable,
+and that the key is atomic memory-memory copies.
+In this post, I’ll show how a bit of engineering work makes that construction practical,
 and come up with wait-free alternatives to the usual lock-free hazard pointers
 that are also competitive in the best case.
 The insight that hazard pointers can be made wait-free as long as we have a wait-free atomic memory-memory copy lets us improve the worst case
-without impacting the best case!</p>
+without impacting the common case!</p>
 
 <p>But first, what are hazard pointers?</p>
 
@@ -133,7 +133,7 @@ without impacting the best case!</p>
 
 <p>Hazard pointers were introduced by <a href="https://dblp.uni-trier.de/pers/m/Michael:Maged_M=.html">Maged Michael</a>
 in <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">Hazard Pointers: Safe Memory Reclamation for Lock-Free Objects (2005, PDF)</a>,
-as the first solution to reclaim races in lock-free code.
+as the first solution to reclamation races in lock-free code.
 The introduction also has a concise explanation of the safe memory reclamation (SMR) problem.</p>
 
 <blockquote>
@@ -154,14 +154,14 @@ scan all records for all threads,
 and physically release all resources in the snapshot that aren’t in any hazard pointer record.</p>
 
 <p>With just enough batching of the limbo list, this scheme can be practical:
-in practice, lock-free algorithms only need to pin a few (often one or two) nodes at a time to ensure memory safety.  As long as we can avoid running arbitrary code while holding hazardous references, we can bound the number of records each thread may need at any one time.
-Scanning the records thus takes time roughly linear in the number of active threads, and we can amortise that to constant time per deleted item by waiting until the size of the limbo list is proportional to a multiple of the number of active threads.<sup id="fnref:even-with-pinned-nodes"><a href="#fn:even-with-pinned-nodes" class="footnote">4</a></sup></p>
+in practice, lock-free algorithms only need to pin a few (usually one or two) nodes at a time to ensure memory safety.  As long as we can avoid running arbitrary code while holding hazardous references, we can bound the number of records each thread may need at any one time.
+Scanning the records thus takes time roughly linear in the number of active threads, and we can amortise that to constant time per deleted item by waiting until the size of the limbo list is greater than a multiple of the number of active threads.<sup id="fnref:even-with-pinned-nodes"><a href="#fn:even-with-pinned-nodes" class="footnote">4</a></sup></p>
 
 <p>The tricky bit is figuring out how to reliably publish to a HP record without locking.
 Hazard pointers simplify that challenge with three observations:</p>
 <ol>
-  <li>It’s OK to have arbitrary garbage in a record (let’s disregard language-level<sup id="fnref:or-hw-level"><a href="#fn:or-hw-level" class="footnote">5</a></sup> undefined behaviour), since it’s only ever subtracted from the limbo list: a garbage record simply doesn’t protect anything.</li>
-  <li>It’s also OK to leave a false positive in a record: our leakage bounds assume each record keeps a different node (resource) alive.</li>
+  <li>It’s OK to have arbitrary garbage in a record (let’s disregard language-level<sup id="fnref:or-hw-level"><a href="#fn:or-hw-level" class="footnote">5</a></sup> undefined behaviour), since protected values are only ever subtracted from the limbo list: a garbage record simply doesn’t protect anything.</li>
+  <li>It’s also OK to leave a false positive in a record: our leakage bounds assume each record keeps a different node (resource) alive, and that’s the worst case.</li>
   <li>1 and 2 mean it doesn’t matter what pinned value we read in a record whose last update was started after we snapshotted the limbo list: resources in the limbo list are unreachable, so freshly pinned resources can’t refer to anything in the snapshot.</li>
 </ol>
 
@@ -172,7 +172,7 @@ we’ll instead <em>guess</em> what resource we will borrow,
 publish that,
 and then actually borrow the resource.
 If we guessed correctly, we can immediately use the borrowed resource;
-if we were wrong, we simply try again.</p>
+if we were wrong, we must try again.</p>
 
 <p>On an ideal machine with a <a href="https://en.wikipedia.org/wiki/Sequential_consistency">sequential consistency memory model</a>,
 the pseudocode looks like the following.</p>
@@ -192,7 +192,7 @@ the pseudocode looks like the following.</p>
 </span><span class="line">            <span class="k">return</span> <span class="n">guess</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>In practice, we must make sure that our write to <code>record.pin</code> is visible before re-reading the cell’s value, and we should also make sure the pointer read is ordered with respect to the rest of the calling read-side code.</p>
+<p>In practice, we must make sure that our write to <code>record.pin</code> is visible before re-reading the cell’s value, and we should also make sure the pointer read is ordered with respect to the rest of the calling read-side code.<sup id="fnref:beware-accidental-success"><a href="#fn:beware-accidental-success" class="footnote">6</a></sup></p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_explicit.py </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -211,15 +211,15 @@ the pseudocode looks like the following.</p>
 </span><span class="line">            <span class="k">return</span> <span class="n">guess</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>We need a store/load fence in <code>R1</code> to make sure the store to the record is visible before the second read in <code>R2</code>.  Under the <a href="https://www.cl.cam.ac.uk/~pes20/weakmemory/x86tso-paper.tphols.pdf">TSO memory model used by x86 chips (PDF)</a>,
-this fence also happens to be the only one that isn’t implicitly satisfied by the hardware memory model.
+<p>We need a store/load fence in <code>R1</code> to make sure the store to the record is visible before <code>R2</code> is visible by the time the second read executes.  Under the <a href="https://www.cl.cam.ac.uk/~pes20/weakmemory/x86tso-paper.tphols.pdf">TSO memory model used by x86 chips (PDF)</a>,
+this fence is the only one that isn’t implicitly satisfied by the hardware.
 It also happens that fences are best implemented with atomic operations
 on x86oids (instructions with a LOCK prefix),
-so we can obviate the need for fencing in <code>R1</code>
+so we can emulate the fence in <code>R1</code>
 by implementing the store just before <code>R1</code> with an atomic exchange (fetch-and-set).</p>
 
 <p>The slow cleanup path has its own fence that matches <code>R1</code> (the one in <code>R2</code>
-would match mutators’ writes to <code>cell</code>):</p>
+matches the mutators’ writes to <code>cell</code>).</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_cleanup_explicit.py </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -260,7 +260,7 @@ when it reads the record in <code>C2</code>.</p>
     <img src="/images/2020-07-06-flatter-wait-free-hazard-pointers/fenced-hp.png" />
 </a></p>
 
-<p>This all works, but it’s slow:<sup id="fnref:travis-says-its-fine"><a href="#fn:travis-says-its-fine" class="footnote">6</a></sup> we added an <em>atomic</em> write instruction (or worse, a fence) to a read-only operation.  We can do better with a little help from our operating system.</p>
+<p>This all works, but it’s slow:<sup id="fnref:travis-says-its-fine"><a href="#fn:travis-says-its-fine" class="footnote">7</a></sup> we added an <em>atomic</em> write instruction (or worse, a fence) to a read-only operation.  We can do better with a little help from our operating system.</p>
 
 <h2 id="injecting-fences-with-os-support">Injecting fences with OS support</h2>
 
@@ -272,14 +272,14 @@ threads.  For example, the pseudocode for hazard pointers with
 explicit fencing and memory ordering paired the store-load fence in
 <code>R1</code> with the acquisition of the limbo list in <code>C1</code>.</p>
 
-<p>We only need that pairing very rarely, when we actually enter the
+<p>We only need that pairing very rarely, when a thread actually executes the
 cleanup function.  The amortisation strategy guarantees doesn’t happen too
 quickly, and we can always increase the amortisation factor if we’re
 generating tiny amounts of garbage very quickly.</p>
 
 <p>It kind of sucks that we have to incur a full fence on the fast read
 path, when it only matches reads in the cleanup loop maybe as rarely
-as once a second.  If we wait long enough on the slow path, we can
+as, e.g., once a second.  If we waited long enough on the slow path, we could
 <a href="https://pvk.ca/Blog/2019/01/09/preemption-is-gc-for-memory-reordering">rely on events like preemption or other interrupts to insert a barrier</a>
 in all threads that are executing the read-side.</p>
 
@@ -289,7 +289,7 @@ to block the calling thread until (more than) long enough has elapsed,
 Window has <a href="https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-flushprocesswritebuffers">the similar <code>FlushProcessWriteBuffers</code></a>, and
 on other operating systems, we can probably <a href="https://github.com/pkhuong/barrierd">do something useful with scheduler statistics</a> or ask for a new syscall.</p>
 
-<p>Armed with these new (heavy) system calls, we can replace the store-load fence in <code>R1</code> with a compiler barrier, and execute a slow <code>membarrier</code>/<code>FlushProcessWriteBuffers</code> after <code>C1</code>.
+<p>Armed with these new blocking system calls, we can replace the store-load fence in <code>R1</code> with a compiler barrier, and execute a slow <code>membarrier</code>/<code>FlushProcessWriteBuffers</code> after <code>C1</code>.
 The cleanup function will then wait long enough to ensure that any
 read-side operation that had executed before <code>R1</code> at the time we read the limbo list in <code>C1</code> will be visible (e.g., because the operating system knows a preemption interrupt executed at least once on each core).
 The pseudocode for this asymmetric strategy follows.</p>
@@ -328,7 +328,7 @@ The pseudocode for this asymmetric strategy follows.</p>
 </span><span class="line">    <span class="n">os</span><span class="o">.</span><span class="n">membarrier</span><span class="p">()</span>  <span class="c1"># C1</span>
 </span><span class="line">    <span class="n">pinned</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
 </span><span class="line">    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
-</span><span class="line">        <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">())</span>  <span class="c1"># C2</span>
+</span><span class="line">        <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">())</span>
 </span><span class="line">    <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">to_reclaim</span><span class="p">:</span>
 </span><span class="line">        <span class="k">if</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">pinned</span><span class="p">:</span>
 </span><span class="line">            <span class="n">limbo</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">resource</span><span class="p">)</span>
@@ -336,22 +336,22 @@ The pseudocode for this asymmetric strategy follows.</p>
 </span><span class="line">            <span class="n">resource</span><span class="o">.</span><span class="n">destroy</span><span class="p">()</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>We’ve replaced a fence on the fast read path with a compiler barrier, at the expense of executing a heavy syscall on the slow path.  That’s usually a good trade-off, and is the <a href="https://github.com/facebook/folly/blob/master/folly/synchronization/Hazptr.h">preferred implementation strategy for Folly’s hazard ointers</a>.</p>
+<p>We’ve replaced a fence on the fast read path with a compiler barrier, at the expense of executing a heavy syscall on the slow path.  That’s usually a good trade-off, and is the <a href="https://github.com/facebook/folly/blob/master/folly/synchronization/Hazptr.h">preferred implementation strategy for Folly’s hazard pointers</a>.</p>
 
-<p>The freedom to pair mere <em>compiler</em> barriers with <code>membarrier</code>
+<p>The ability to pair mere <em>compiler</em> barriers with <code>membarrier</code>
 syscalls opens the door for many more “atomic enough” operations, not
 just the fenced stores and loads we used until now:
 similarly to the key idea in <a href="https://github.com/concurrencykit/ck/blob/master/include/ck_ec.h">Concurrency Kit’s atomic-free SPMC event count</a>,
 we can use non-interlocked read-modify-write instructions,
-since any interrupt (please don’t mention imprecise interrupts) will execute before or after any such instruction,
+since any interrupt (please don’t mention imprecise interrupts) will happen before or after any such instruction,
 and never in the middle of an instruction.</p>
 
 <h2 id="wait-free-hazard-pointers-with-interrupt-atomic-instructions">Wait-free hazard pointers with interrupt-atomic instructions</h2>
 
-<p>The key insight <a href="https://arxiv.org/abs/2002.07053">Blelloch and Wei</a>
-had to achieve wait-freedom in hazard pointer is that the combination
+<p>The key insight that lets <a href="https://arxiv.org/abs/2002.07053">Blelloch and Wei</a>
+achieve wait-freedom in hazard pointer is that the combination
 of publishing a guess and confirming that the guess is correct in <code>hp_read</code>
-emulates an atomic memory-memory copy.  Assuming we have such an atomic copy primitive, the read-side becomes trivial.</p>
+emulates an atomic memory-memory copy.  If only we had such an atomic copy primitive, the read-side would be trivial.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_blelloch_wei.py </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -364,10 +364,10 @@ emulates an atomic memory-memory copy.  Assuming we have such an atomic copy pri
 
 <p>The “only” issue is that atomic memory-memory copies don’t exist in contemporary hardware.</p>
 
-<p>However, we’ve already noted that syscalls like <code>membarrier</code> mean we can lower our requirements to interrupt atomicity, i.e., any individual instruction works since we’re assuming precise interrupts… and it just happens that <code>x86</code> and <code>amd64</code> do have single-instruction memory-memory copies!</p>
+<p>However, we’ve already noted that syscalls like <code>membarrier</code> mean we can lower our requirements to interrupt atomicity, i.e., any individual instruction works since we’re assuming precise interrupts… and it just happens that <code>x86</code> and <code>amd64</code> do have an instruction for memory-memory copies!</p>
 
-<p>The <a href="https://www.felixcloutier.com/x86/movs:movsb:movsw:movsd:movsq"><code>MOVS</code> instructions</a> are typically only used with a <code>rep</code> prefix.  However, they can also be executed without any prefix, to execute one iteration of the copy loop.  Executing a <code>REP</code>-free <code>MOVSQ</code> instruction copies one quadword (64 bits) from <code>[RSI]</code> to <code>[RDI</code>], and increment both registers, and all this stuff happens in one instructions, so will never be split by an interrupt.
-That’s an <em>interrupt</em>-atomic copy, so we can simply slot that in place
+<p>The <a href="https://www.felixcloutier.com/x86/movs:movsb:movsw:movsd:movsq"><code>MOVS</code> instructions</a> are typically only used with a <code>rep</code> prefix.  However, they can also be executed without any prefix, to execute one iteration of the copy loop.  Executing a <code>REP</code>-free <code>MOVSQ</code> instruction copies one quadword (64 bits) from <code>[RSI]</code> to <code>[RDI</code>], and increment both registers… and all this stuff happens in one instructions, so will never be split by an interrupt.
+That’s an <em>interrupt</em>-atomic copy, so we can slot that in place
 of the software atomic copy in Blelloch and Wei’s proposal!</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_movs.py </span></figcaption>
@@ -381,9 +381,9 @@ of the software atomic copy in Blelloch and Wei’s proposal!</p>
 
 <p>Again, the <code>MOVS</code> instruction is not atomic, but will be ordered with
 respect to the <code>membarrier</code> syscall in <code>hp_cleanup_membarrier</code>: either
-it fully executes before the <code>membarrier</code> in <code>C1</code>, in which case the
+the copy fully executes before the <code>membarrier</code> in <code>C1</code>, in which case the
 pinned value will be visible to the cleanup loop, or it executes after
-the <code>membarrier</code>, which guarantees it will not observe a stale value
+the <code>membarrier</code>, which guarantees the copy will not observe a stale value
 that’s waiting in the limbo list.</p>
 
 <p>That’s just one instruction, but instructions aren’t all created
@@ -452,19 +452,19 @@ on less CISCy architectures, with an asymmetric “helping” scheme.</p>
 
 <p>Blelloch’s and Wei’s wait-free atomic copy primitive builds on the
 usual trick for wait-free algorithms: when a thread would wait for an
-operation that’s half-way done, it helps that operation complete
+in-progress operations, it helps that operation complete
 instead of blocking.</p>
 
 <p>This strategy has the marked advantage of working.  However, it’s
 also symmetric between the common case (the thread that initiated
 the operation quickly completes it), and the worst case (another
 thread notices the initiating thread got stuck and moves the
-operation along).  We pessimised the common case in order to eliminate blocking in the worst case, a frequent pattern in wait-free algorithms.</p>
+operation along).  We pessimised the common case in order to eliminate blocking in the worst case, a frequent and unfortunate pattern in wait-free algorithms.</p>
 
 <p>The source of the symmetry is our specification of an atomic copy
 from one source field to exactly one destination field, which must
 be written exactly once by either the thread that initiated the copy
-(the hazard pointer reader), and any concurrent helper (the cleanup loop).</p>
+(the hazard pointer reader), or any concurrent helper (the cleanup loop).</p>
 
 <p>We can relax that requirement, since we know that the hazard pointer
 scanning loop can handle spurious or garbage pinned values.  Rather
@@ -474,7 +474,7 @@ single-writer one for the fast path, and a multi-writer one for all
 helpers.</p>
 
 <p>Until now a hazard pointer record has only had one field, the “pinned”
-value.  We have to add some complexity to make this asymmetric helping
+value.  We must add some complexity to make this asymmetric helping
 scheme work: in order for helpers to be able to help, we must publish
 the cell we are reading, and we need somewhere for helpers to write
 the pinned value they read.  We also need some sort of ABA protection
@@ -484,27 +484,12 @@ with a stale one, when the <em>helper</em> gets stuck (preempted).</p>
 <p>Concretely, the HP record still has a <code>pinned</code> field, which is only
 written by the reader that owns the record, and read by cleanup
 threads.  The <code>help</code> subrecord is written by both the owner of the
-record and any reclaimer that might want to move a reader along.  The
+record and any cleanup thread that might want to move a reader along.  The
 reader will first write the address of the pointer it wants to read
-and protect in <code>cell</code>, generate a new generation id by incrementing
-<code>gen_sequence</code>, and write that to <code>pinned_or_gen</code>.  We’ll tell
-generation ids apart from pinned addresses by their sign: negative
+and protect in <code>cell</code>, generate a new unique generation id by incrementing
+<code>gen_sequence</code>, and write that to <code>pinned_or_gen</code>.  We’ll tag
+generation ids with their sign: negative
 values are generation ids, positive ones are addresses.</p>
-
-<p>At this point, any reclaimer should be able to notice that the
-<code>help.pin_or_gen</code> is a generation value, and find a valid cell
-address in <code>help.cell</code>.  That’s enough to read the cell’s value, and
-update to the address is just read with a compare-and-swap (CAS) of
-<code>pinned_or_gen</code>: if the CAS fails, another helper got there first, or
-the reader has already moved on to a new target cell.  In the latter
-case, any in-flight hazard pointer read sequence started before we
-started reclaiming the limbo list, and we can thus ignore the record.</p>
-
-<p>Having populated the <code>help</code> subrecord, a reader can now publish a
-value in <code>pinned</code>, and then look for a pinned value in
-<code>help.pin_or_gen</code>: if a helper published a pinned value there, the
-reader must use it, and not a potentially staler (already destroyed)
-value the reader wrote to <code>pinned</code>.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_record_wf.c </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -526,6 +511,22 @@ value the reader wrote to <code>pinned</code>.</p>
 </span><span class="line">        <span class="p">}</span> <span class="n">help</span><span class="p">;</span>
 </span><span class="line"><span class="p">};</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>At this point, any cleanup thread should be able to notice that the
+<code>help.pin_or_gen</code> is a generation value, and find a valid cell address
+in <code>help.cell</code>.  That’s enough to read the cell’s value, and update to
+the address is just read with a compare-and-swap (CAS) of
+<code>pinned_or_gen</code>: if the CAS fails, another helper got there first, or
+the reader has already moved on to a new target cell.  In the latter
+case, any in-flight hazard pointer read sequence started before we
+started reclaiming the limbo list, and it doesn’t matter what pinned
+value we extract from the record.</p>
+
+<p>Having populated the <code>help</code> subrecord, a reader can now publish a
+value in <code>pinned</code>, and then look for a pinned value in
+<code>help.pin_or_gen</code>: if a helper published a pinned value there, the
+reader must use it, and not the potentially stale (already destroyed)
+value the reader wrote to <code>pinned</code>.</p>
 
 <p>On the read side, we can rely on two compiler barriers to let
 membarriers guarantee writes to the <code>help</code> subrecord are visible
@@ -565,9 +566,9 @@ membarrier to catch any read-side critical section that wrote to
 <code>pinned_or_gen</code> before we consumed the list, help these sections
 along, issue another membarrier to guarantee that either the readers’
 writes to <code>record.pin</code> are visible, or our writes to
-<code>record.help.pin_or_gen</code> visible to readers, and finally scan the
+<code>record.help.pin_or_gen</code> are visible to readers, and finally scan the
 records while remembering to pin the union of <code>record.pin</code> and
-<code>record.help.pin_or_gen</code> if it holds a pinned value.</p>
+<code>record.help.pin_or_gen</code> if the latter holds a pinned value.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_cleanup_wf.py </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -632,17 +633,16 @@ and now depends only on a read of <code>record.help.pin_or_gen</code>, which can
 be satisfied by forwarding the reader’s own write to that same field.</p>
 
 <p>The end result is that, in my microbenchmarks, this portable wait-free
-implementation does slightly <em>better</em> than the speculative <code>MOVSQ</code> code.</p>
-
-<p>We can still do better, by further specialising the code.  The cleanup
+implementation does slightly <em>better</em> than the speculative <code>MOVSQ</code> code.
+We can still do better, by further specialising the code.  The cleanup
 path is already slow, what if we also assumed mutual exclusion, so that
-for each record, only one cleanup call could be in flight at any one time?</p>
+for each record, only one cleanup call can be in flight at any time?</p>
 
 <h2 id="interrupt-atomic-copy-with-at-most-one-helper">Interrupt-atomic copy, with at most one helper</h2>
 
 <p>Once we may assume mutual exclusion between cleanup loops, we don’t
 have to worry about ABA protection anymore.  Hazard pointer records
-become simpler:</p>
+can lose some weight.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_record_swf.c </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -662,7 +662,7 @@ become simpler:</p>
 <p>We’ll also use tagging with negative of positive values, this time to
 distinguish target cell addresses (positive) from pinned values
 (negative).  Now that the read side doesn’t have to update a
-generation counter to obtain unique sequence values, it’s even simpler:</p>
+generation counter to obtain unique sequence values, it’s even simpler.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_swf.py </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -735,9 +735,7 @@ encoding scheme.</p>
 </span><span class="line">                <span class="n">resource</span><span class="o">.</span><span class="n">destroy</span><span class="p">()</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Again, <code>RA</code> matches <code>C1</code>, and <code>RB</code> <code>C2</code>.  We’ll see in the
-microbenchmarks that shaving the handful of instructions associated
-with incrementing the generation counter does help in tight loops.</p>
+<p>Again, <code>RA</code> matches <code>C1</code>, and <code>RB</code> <code>C2</code>.  This new implementation is as fast as <code>hp_read_wf</code> on the read side, and needs even fewer instructions.</p>
 
 <h2 id="qualitative-differences-between-hp-implementations">Qualitative differences between HP implementations</h2>
 
@@ -761,10 +759,10 @@ execution time) for readers, rather than mere lock-freedom.</p>
 
 <p>The simple <code>MOVSQ</code>-based implementations (<code>hp_read_movs</code>) is fully
 compatible with <code>hp_read_membarrier</code>, wait-free, and usually compiles
-down to fewer instruction bytes, but slightly slower.  Adding
+down to fewer instruction bytes, but is slightly slower.  Adding
 speculation (<code>hp_read_movs_spec</code>) retains compatibility and closes the
-performance gap, with a comparable number of instruction bytes as the
-lock-free membarrier implementation.  Both implementations rely on
+performance gap, with a number of instruction bytes comparable to the
+lock-free membarrier implementation.  In either case, we rely on
 <code>MOVSQ</code>, an instruction that only exists on <code>x86</code> and <code>amd64</code>.</p>
 
 <p>However, we can also provide portable wait-freedom, once we modify the
@@ -772,13 +770,14 @@ cleanup code to help the read side sections forward.  The basic
 implementation <code>hp_read_wf</code> compiles to many more instructions than
 the other read-side implementations, but those instructions are mostly
 upstream of the protected pointer read; in microbenchmarks, the result
-can often be faster than the simple <code>hp_read_membarrier</code> or the
+can even be faster than the simple <code>hp_read_membarrier</code> or the
 speculative <code>hp_read_movs_spec</code>.  The downside is that instruction
-bytes tend to hurt much more in real code than in microbenchmarks.</p>
+bytes tend to hurt much more in real code than in microbenchmarks.
+We also rely on pointer tagging, which is sometimes a liability.</p>
 
 <p>We can simplify and shrink the portable wait-free code by assuming
 mutual exclusion on the cleanup path (<code>hp_read_swf</code>).  Performance is
-even better, and instruction bytes comparable to <code>hp_read_membarrier</code>.
+roughly the same, and instruction bytes comparable to <code>hp_read_membarrier</code>.
 However, we’ve introduced more opportunities for reclamation hiccups.</p>
 
 <p>More importantly, achieving wait-freedom with concurrent help suffers
@@ -790,8 +789,357 @@ cleanup function addresses this issue, but systems often mix and match
 different reclamation schemes, as well as lock-free and lock-ful code.
 On Linux, we can probably
 abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;
-in general I suppose we can setup signal handlers to catch <code>SIGSEGV</code>
+in general I suppose we can install signal handlers to catch <code>SIGSEGV</code>
 and <code>SIGBUS</code> in dedicated cleanup threads.</p>
+
+<h2 id="some-microbenchmarks">Some microbenchmarks</h2>
+
+<p>The overhead of hazard pointers only matters in code that traverse a
+lot of pointers, especially pointer chains.  That’s why I’ll focus on
+microbenchmarking a loop that traverses a pseudorandomly shuffled
+circular linked list for a fixed number of pointer chasing hops.</p>
+
+<p>The un-protected (baseline) inner loop follows.  Note the NULL
+end-of-list check, for realism; the list is circular, so the loop
+never breaks early.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>traverse_baseline.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">struct</span> <span class="n">node</span> <span class="o">*</span><span class="n">head</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">nodes</span><span class="p">[</span><span class="n">start</span><span class="p">];</span>
+</span><span class="line"><span class="kt">uint64_t</span> <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"><span class="k">for</span> <span class="p">(</span><span class="kt">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">num_hops</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">        <span class="kt">uint64_t</span> <span class="n">value</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">head</span> <span class="o">==</span> <span class="nb">NULL</span><span class="p">)</span>
+</span><span class="line">                <span class="k">break</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">value</span> <span class="o">=</span> <span class="n">head</span><span class="o">-&gt;</span><span class="n">value</span><span class="p">;</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">work</span><span class="p">(</span><span class="n">value</span><span class="p">);</span>
+</span><span class="line">        <span class="n">head</span> <span class="o">=</span> <span class="n">head</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">;</span>
+</span><span class="line">        <span class="n">head</span> <span class="o">=</span> <span class="n">frob_ptr</span><span class="p">(</span><span class="n">head</span><span class="p">,</span> <span class="n">value</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>There’s clearly a dependency chain between each read of <code>head-&gt;next</code>.
+I thought it might be interesting to see what happens when we add work
+outside that dependency chain, by letting <code>work()</code> be more than an
+inline no-op function, but the results will show that’s not necessary
+for the implementations presented in this post.  The call to
+<code>frob_ptr</code> lets us introduce work in the dependency chain, which more
+closely represents realistic use cases.  For example, when using
+hazard pointers to protect a binary search tree traversal, we must
+perform a small amount of work to determine whether we want to go down
+the left or the right subtree.</p>
+
+<p>A hazard pointer-ed implementation of this loop would probably unroll
+the loop body twice, to more easily implement hand-over-hand locking.
+That’s why I also include an unrolled version of this inner loop in
+the microbenchmark: we avoid discovering that inserting hazard pointer
+protection improves performance because it’s also associated with
+unrolling, and gives us an idea of how much variation we can expect from
+small code generation changes.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>traverse_unrolled.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">struct</span> <span class="n">node</span> <span class="o">*</span><span class="n">head</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">nodes</span><span class="p">[</span><span class="n">start</span><span class="p">];</span>
+</span><span class="line"><span class="kt">uint64_t</span> <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"><span class="k">for</span> <span class="p">(</span><span class="kt">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">num_hops</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">        <span class="kt">uint64_t</span> <span class="n">value</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">head</span> <span class="o">==</span> <span class="nb">NULL</span><span class="p">)</span>
+</span><span class="line">                <span class="k">break</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">value</span> <span class="o">=</span> <span class="n">head</span><span class="o">-&gt;</span><span class="n">value</span><span class="p">;</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">work</span><span class="p">(</span><span class="n">value</span><span class="p">);</span>
+</span><span class="line">        <span class="n">head</span> <span class="o">=</span> <span class="n">head</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">;</span>
+</span><span class="line">        <span class="n">head</span> <span class="o">=</span> <span class="n">frob_ptr</span><span class="p">(</span><span class="n">head</span><span class="p">,</span> <span class="n">value</span><span class="p">);</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">head</span> <span class="o">==</span> <span class="nb">NULL</span> <span class="o">||</span> <span class="o">++</span><span class="n">i</span> <span class="o">&gt;=</span> <span class="n">num_hops</span><span class="p">)</span>
+</span><span class="line">                <span class="k">break</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">value</span> <span class="o">=</span> <span class="n">head</span><span class="o">-&gt;</span><span class="n">value</span><span class="p">;</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">work</span><span class="p">(</span><span class="n">value</span><span class="p">);</span>
+</span><span class="line">        <span class="n">head</span> <span class="o">=</span> <span class="n">head</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">;</span>
+</span><span class="line">        <span class="n">head</span> <span class="o">=</span> <span class="n">frob_ptr</span><span class="p">(</span><span class="n">head</span><span class="p">,</span> <span class="n">value</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The hazard pointer inner loops are just like the above, except that
+<code>head = head-&gt;next</code> is replaced with a call to an inline function.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>traverse_hp.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">static</span> <span class="kr">inline</span> <span class="nf">__attribute__</span><span class="p">((</span><span class="n">__always_inline__</span><span class="p">,</span> <span class="n">__flatten__</span><span class="p">))</span> <span class="kt">uint64_t</span>
+</span><span class="line"><span class="n">traverse_hp_generic</span><span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="p">(</span><span class="o">*</span><span class="n">hp_read</span><span class="p">)(</span><span class="k">struct</span> <span class="n">hp_record</span> <span class="o">*</span><span class="p">,</span> <span class="kt">void</span> <span class="o">**</span><span class="p">),</span>
+</span><span class="line">    <span class="kt">size_t</span> <span class="n">num_hops</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">start</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="k">static</span> <span class="k">struct</span> <span class="n">hp_record</span> <span class="n">backing</span><span class="p">[</span><span class="mi">2</span><span class="p">];</span>
+</span><span class="line">        <span class="k">struct</span> <span class="n">hp_record</span> <span class="o">*</span><span class="n">records</span> <span class="o">=</span> <span class="n">backing</span><span class="p">;</span>
+</span><span class="line">        <span class="k">struct</span> <span class="n">node</span> <span class="o">*</span><span class="n">head</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">nodes</span><span class="p">[</span><span class="n">start</span><span class="p">];</span>
+</span><span class="line">        <span class="kt">uint64_t</span> <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="cm">/* Let&#39;s pretend we published these records. */</span>
+</span><span class="line">        <span class="k">asm</span> <span class="k">volatile</span><span class="p">(</span><span class="s">&quot;&quot;</span> <span class="o">:</span> <span class="s">&quot;+r&quot;</span><span class="p">(</span><span class="n">records</span><span class="p">)</span> <span class="o">::</span> <span class="s">&quot;memory&quot;</span><span class="p">);</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">for</span> <span class="p">(</span><span class="kt">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">num_hops</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="kt">uint64_t</span> <span class="n">value</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">                <span class="k">if</span> <span class="p">(</span><span class="n">head</span> <span class="o">==</span> <span class="nb">NULL</span><span class="p">)</span>
+</span><span class="line">                        <span class="k">break</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">                <span class="n">value</span> <span class="o">=</span> <span class="n">head</span><span class="o">-&gt;</span><span class="n">value</span><span class="p">;</span>
+</span><span class="line">                <span class="n">acc</span> <span class="o">^=</span> <span class="n">work</span><span class="p">(</span><span class="n">value</span><span class="p">);</span>
+</span><span class="line">                <span class="n">head</span> <span class="o">=</span> <span class="n">hp_read</span><span class="p">(</span><span class="o">&amp;</span><span class="n">records</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="p">(</span><span class="kt">void</span> <span class="o">**</span><span class="p">)</span><span class="o">&amp;</span><span class="n">head</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">);</span>
+</span><span class="line">                <span class="n">head</span> <span class="o">=</span> <span class="n">frob_ptr</span><span class="p">(</span><span class="n">head</span><span class="p">,</span> <span class="n">value</span><span class="p">);</span>
+</span><span class="line">
+</span><span class="line">                <span class="k">if</span> <span class="p">(</span><span class="n">head</span> <span class="o">==</span> <span class="nb">NULL</span> <span class="o">||</span> <span class="o">++</span><span class="n">i</span> <span class="o">&gt;=</span> <span class="n">num_hops</span><span class="p">)</span>
+</span><span class="line">                        <span class="k">break</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">                <span class="n">value</span> <span class="o">=</span> <span class="n">head</span><span class="o">-&gt;</span><span class="n">value</span><span class="p">;</span>
+</span><span class="line">                <span class="n">acc</span> <span class="o">^=</span> <span class="n">work</span><span class="p">(</span><span class="n">value</span><span class="p">);</span>
+</span><span class="line">                <span class="n">head</span> <span class="o">=</span> <span class="n">hp_read</span><span class="p">(</span><span class="o">&amp;</span><span class="n">records</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="p">(</span><span class="kt">void</span> <span class="o">**</span><span class="p">)</span><span class="o">&amp;</span><span class="n">head</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">);</span>
+</span><span class="line">                <span class="n">head</span> <span class="o">=</span> <span class="n">frob_ptr</span><span class="p">(</span><span class="n">head</span><span class="p">,</span> <span class="n">value</span><span class="p">);</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The dependency chain is pretty obvious; we can measure the total
+latency for 1000 traversals by running the loop 1000 times.  I’m using
+a large iteration count to absorb noise from the timing harness
+(roughly 50 cycles per call), as well as any boundary effect around
+the first and last few loop iterations.</p>
+
+<p>All the cycle measurements here are from my unloaded E5-4617, running
+at 2.9 GHz without turboboost.  First, let’s see what happens with a
+pure traversal, where <code>work</code> and <code>frob_ptr</code> are inline no-op functions
+that simply return their first argument.  This microbenchmark is far
+from realistic (if I found an inner loop that was <em>only</em> traversing a
+linked list, I’d consider a different data structure), but helps
+establish an upper bound on the overhead from different hazard pointer
+read sides.  I would usually show a faceted graph of the latency
+distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen"><a href="#fn:did-not-randomize-codegen" class="footnote">8</a></sup>
+it’s not clear there’s any additional information to be found in the graphs,
+compared to the tables below.</p>
+
+<p>The next table shows the cycle counts for following 1000 pointers in a
+circular linked list, with various hazard pointer schemes and <em>no work to find the next node</em>, on an unloaded E5-4617 @ 2.9 GHz, without turboboost.</p>
+
+<pre><code>| Method * 1000 iterations  | p00.1 latency | median latency | p99.9 latency |
+|---------------------------|---------------|----------------|---------------|
+|  noop                     |            52 |             56 |            56 |
+|  baseline                 |          4056 |           4060 |          4080 |
+|  unrolled                 |          4056 |           4060 |          4080 |
+|  hp_read_explicit         |         22152 |          22376 |         27240 |
+|  hp_read_membarrier       |          5080 |           5092 |          5164 |
+|  hp_read_movs             |         10060 |          10076 |         10348 |
+|  hp_read_movs_spec        |          8568 |           8568 |          8572 |
+|  hp_read_wf               |          7168 |           7296 |          7504 |
+|  hp_read_swf              |          4152 |           4188 |          4256 |
+</code></pre>
+
+<p>The table above reports quantiles the total runtime for 1000
+traversals, after one million repetitions.</p>
+
+<p>We’re looking at a baseline of 4 cycles/node traversal (the L1 cache
+latency), regardless of unrolling.  The only implementation with an
+actual fence or atomic operation, <code>hp_read_explicit</code> fares pretty
+badly, at more than 5x the latency.  Replacing that fence with a
+compiler barrier in <code>hp_read_membarrier</code> reduces the overhead to ~1
+cycle per pointer dereference.  Our first wait-free implementation,
+<code>hp_read_movs</code> (based on a raw <code>MOVSQ</code>) doesn’t do too great, with a
+~6 cycle (150%) overhead for each pointer dereference.  However,
+speculation (<code>hp_read_movs_spec</code>) does help shave that to ~4.5 cycles
+(110%).  The portable wait-free implementation <code>hp_read_wf</code> does
+slightly better, and its single-cleanup version <code>hp_read_swf</code> takes
+the crown, by adding less than 0.2 cycle/dereference.</p>
+
+<p>These results are stable and repeatable, but are fragile in a way:
+except for <code>hp_read_explicit</code>, which is massively slowed down by its
+atomic operation, and for <code>hp_read_movs</code>, which inserts a known latency bump in the hot path, the other slowdowns mostly reflect contention for
+execution resources.  In real life, such contention mostly occurs in
+heavily tuned code, and the actual execution units (ports) in high
+demand will vary from one inner loop to the other.</p>
+
+<p>Let’s see what happens when we insert a ~4-cycle latency slowdown
+(three for the multiplication, and one more for the increment) in the
+hot path, by redefining <code>frob_ptr</code>.  The result of the integer
+multiplication by 0 is always 0, but adds a (non speculated) data
+dependency on the node value and the multiplication to the pointer
+chasing dependency chain.  Only four cycles of work to decide which
+pointer to traverse is on the low end of my practical experience, but
+suffices to equalise away most of the difference between the hazard
+pointer methods.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>frob_ptr.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">static</span> <span class="kr">inline</span> <span class="kt">void</span> <span class="o">*</span>
+</span><span class="line"><span class="nf">frob_ptr</span><span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="n">ptr</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">value</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">uintptr_t</span> <span class="n">y</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="cm">/* Make sure we get an actual MUL. */</span>
+</span><span class="line">        <span class="k">asm</span><span class="p">(</span><span class="s">&quot;&quot;</span> <span class="o">:</span> <span class="s">&quot;+r&quot;</span><span class="p">(</span><span class="n">y</span><span class="p">));</span>
+</span><span class="line">        <span class="k">return</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="n">ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">value</span> <span class="o">*</span> <span class="n">y</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Let’s again look at the quantiles for the cycle count for one million
+loops of 1000 traversals, on an unloaded E5-4617 @ 2.9 GHz.</p>
+
+<pre><code>| Method * 1000 iterations  | p00.1 latency | median latency | p99.9 latency |
+|---------------------------|---------------|----------------|---------------|
+|  noop                     |            52 |             56 |            56 |
+|  baseline                 |         10260 |          10320 |         10572 |
+|  unrolled                 |          9056 |           9060 |          9180 |
+|  hp_read_explicit         |         22752 |          22984 |         27868 |
+|  hp_read_membarrier       |         10052 |          10084 |         10264 |
+|  hp_read_movs             |         12084 |          12112 |         15896 |
+|  hp_read_movs_spec        |          9888 |           9940 |         10152 |
+|  hp_read_wf               |          9616 |           9669 |          9880 |
+|  hp_read_swf              |         10096 |          10116 |         10260 |
+</code></pre>
+
+<p>The difference between <code>unrolled</code> in this table and in the previous
+one shows we actually added around 5 cycles of latency per iteration
+with the multiplication in <code>frob_ptr</code>.  That dominates the overhead we
+estimated earlier for all the hazard pointer schemes except for the
+remarkably slow <code>hp_read_explicit</code> and <code>hp_read_movs</code>.  It’s thus not
+surprising that all hazard pointer implementations but the latter
+two are on par with the un-protected traversal loops (within 1.1 cycle
+per pointer dereference, comparable to the impact of unrolling a loop
+without unlocking any further rewrite).</p>
+
+<p>The relative speed of the methods has changed, compared
+to the previous table.  The speculative wait-free implementation
+<code>hp_read_movs_spec</code> was slower than <code>hp_read_membarrier</code> and much
+slower than <code>hp_read_swf</code>; it’s now slightly faster than both.
+The simple portable wait-free implementation <code>hp_read_wf</code> was slower than
+<code>hp_read_membarrier</code> and <code>hp_read_swf</code>; it’s now the fastest implementation.</p>
+
+<p>I wouldn’t read too much into the relative rankings of
+<code>hp_read_membarrier</code>, <code>hp_read_movs_spec</code>, <code>hp_read_wf</code>, and
+<code>hp_read_swf</code>.  They only differ by fractions of a cycle per
+dereference, and the exact values are a function of the
+specific mix of micro-ops in the inner loop, and of the
+near-unpredictable impact of instruction ordering on the chip’s
+scheduling hardware.  What really matters is that they all show a
+negligible latency overhead once the pointer chasing loop does <em>some</em>
+work to find the next node.</p>
+
+<h2 id="whats-the-best-hazard-pointer-implementation">What’s the best hazard pointer implementation?</h2>
+
+<p>I hope I’ve made a convincing case that hazard pointers can be
+wait-free <em>and efficient</em> on the read-side, as long as we have access
+to something like <code>membarrier</code> or <code>FlushProcessWriteBuffers</code> on the
+slow cleanup (reclamation) path.  If we were to look at the
+microbenchmarks alone, one would probably simply implement <code>hp_read_swf</code>.</p>
+
+<p>However, the real world is more complex that microbenchmarks.  When I
+have to extrapolate from microbenchmarks, I usually worry about the
+hidden impact of instruction bytes or cold branches, since
+microbenchmarks tend to fail at surfacing these things.  I’m not as
+worried for <code>hp_read_movs_spec</code>, and <code>hp_read_swf</code>: they both compile
+down to roughly as many instructions as the incumbent (<code>hp_read_membarrier</code>),
+and their forward untaken branch would be handled fine by a static predictor.</p>
+
+<p>What I would take into account is the ability to transparently use
+<code>hp_read_movs_spec</code> in code that already uses <code>hp_read_membarrier</code>,
+and the added requirements of <code>hp_read_swf</code> on cleanup threads.  In
+addition to relying on <code>membarrier</code> for correctness, <code>hp_read_swf</code>
+needs a pointer tagging scheme to distinguish target pointers from pinned ones, a way for cleanup threads to read stale pointers without
+crashing, and also needs mutual exclusion around the scanning of (sets
+of) hazard pointer records.  These addtional requirements don’t seem
+impractical, but I can imagine code bases where they would constitute
+hard blockers (e.g., library code, or when protecting arbitrary integer ids).</p>
+
+<p>TL;DR: Use <code>hp_read_swf</code> if you know what you’re doing or want more wait-free speed holes; otherwise, <code>hp_read_movs_spec</code> is an all-around solid wait-free option on <code>x86</code> and <code>amd64</code>.</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes">
@@ -811,8 +1159,14 @@ and <code>SIGBUS</code> in dedicated cleanup threads.</p>
     <li id="fn:or-hw-level">
       <p>Let’s also hope efforts like <a href="https://www.cl.cam.ac.uk/research/security/ctsrd/cheri/">CHERI</a> don’t have to break lock-free code. <a href="#fnref:or-hw-level" class="reversefootnote">&#8617;</a></p>
     </li>
+    <li id="fn:beware-accidental-success">
+      <p>I tend to implement lock-free algorithms with a heavy dose of inline assembly, or <a href="http://concurrencykit.org/">Concurrency Kit</a>’s wrappers: it’s far too easy to run into subtle undefined behaviour.  For example, comparing a pointer after it has been freed is undefined behaviour in C and C++, even if we don’t access the pointee.  Even if we compare as <code>uintptr_t</code>, it’s apparently debatable whether the code is well defined when the comparison happens to succeed because the pointee was freed, then recycled in an allocation and published to <code>cell</code> again. <a href="#fnref:beware-accidental-success" class="reversefootnote">&#8617;</a></p>
+    </li>
     <li id="fn:travis-says-its-fine">
       <p>That’s what <a href="https://travisdowns.github.io/blog/2020/07/06/concurrency-costs.html">Travis Downs classifies as a Level 1 concurrency cost</a>, which is usually fine for writes, but adds a sizable overhead to simple read-only code. <a href="#fnref:travis-says-its-fine" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:did-not-randomize-codegen">
+      <p>Although I did compare several independent executions and confirmed the reported cycle counts were stable, I did not try to randomise code generation… mostly because I’m not looking for super fine differences as much as close enough runtimes.  Hopefully, aligning functions to 256 bytes leveled some bias away. <a href="#fnref:did-not-randomize-codegen" class="reversefootnote">&#8617;</a></p>
     </li>
   </ol>
 </div>
