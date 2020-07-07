@@ -19,8 +19,8 @@ $separator-line-color: lighten($text-color, 72) !default;
 // Main Link Colors
 $link-color: lighten(#a0522d, 5) !default;
 $link-color-hover: adjust-color($link-color, $lightness: -15) !default;
-$link-color-visited: adjust-color($link-color, $lightness: 25) !default;
-$link-color-active: adjust-color($link-color-hover, $lightness: -15) !default;
+$link-color-visited: $link-color !default;
+$link-color-active: adjust-color($link-color, $lightness: -15) !default;
 
 /* Navigation */
 $nav-bg: #ffffff;
