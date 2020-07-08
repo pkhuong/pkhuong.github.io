@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-07-08T09:36:18-04:00</updated>
+  <updated>2020-07-08T11:24:10-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -16,7 +16,7 @@
   <entry>
     <title type="html"><![CDATA[Flatter wait-free hazard pointers]]></title>
     <link href="https://www.pvk.ca/Blog/2020/07/07/flatter-wait-free-hazard-pointers/"/>
-    <updated>2020-07-07T14:30:18-04:00</updated>
+    <updated>2020-07-07T14:30:19-04:00</updated>
     <id>https://www.pvk.ca/Blog/2020/07/07/flatter-wait-free-hazard-pointers</id>
     <content type="html"><![CDATA[<p>Back in February 2020, Blelloch and Wei submitted this cool preprint: <a href="https://arxiv.org/abs/2002.07053">Concurrent Reference Counting and Resource Management in Wait-free Constant Time</a>.
 Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also"><a href="#fn:but-also" class="footnote">1</a></sup>
@@ -201,9 +201,8 @@ Window has <a href="https://docs.microsoft.com/en-us/windows/win32/api/processth
 on other operating systems, we can probably <a href="https://github.com/pkhuong/barrierd">do something useful with scheduler statistics</a> or ask for a new syscall.</p>
 
 <p>Armed with these new blocking system calls, we can replace the store-load fence in <code>R1</code> with a compiler barrier, and execute a slow <code>membarrier</code>/<code>FlushProcessWriteBuffers</code> after <code>C1</code>.
-The cleanup function will then wait long enough[^arguably-lock-ful] to ensure that any
-read-side operation that had executed before <code>R1</code> at the time we read the limbo list in <code>C1</code> will be visible (e.g., because the operating system knows a preemption interrupt executed at least once on each core).
-[^arguably-lock-ful]: I suppose this means the reclamation path isn’t wait-free, or even lock-free, anymore, in the strict sense of the words. In practice, we’re simply waiting for periodic events that would occur regardless of the syscalls we issue.  People who really know what they’re doing might have fully isolated cores.  If they do, they most likely have a watchdog on their isolated and latency-sensitive tasks, so we can still rely on running some code periodically, potentially after some instrumentation: if an isolated task fails to check in for a short while, the whole box will probably be presumed wedged and taken offline.</p>
+The cleanup function will then wait long enough<sup id="fnref:arguably-lock-ful"><a href="#fn:arguably-lock-ful" class="footnote">10</a></sup> to ensure that any
+read-side operation that had executed before <code>R1</code> at the time we read the limbo list in <code>C1</code> will be visible (e.g., because the operating system knows a preemption interrupt executed at least once on each core).</p>
 
 <p>The pseudocode for this asymmetric strategy follows.</p>
 
@@ -714,7 +713,7 @@ pointers without crashing.  One might think mutual exclusion in the
 cleanup function fixes that, but programs often mix and match
 different reclamation schemes, as well as lock-free and lock-ful code.
 On Linux, we could
-abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;<sup id="fnref:no-guarantees"><a href="#fn:no-guarantees" class="footnote">10</a></sup>
+abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;<sup id="fnref:no-guarantees"><a href="#fn:no-guarantees" class="footnote">11</a></sup>
 in general I suppose we could install signal handlers to catch <code>SIGSEGV</code> and <code>SIGBUS</code>.</p>
 
 <p>Having to help readers forward also loses a nice practical property of
@@ -928,7 +927,7 @@ from realistic (if I found an inner loop that <em>only</em> traversed a
 singly linked list, I’d consider a different data structure), but helps
 establish an upper bound on the overhead from different hazard pointer
 read sides.  I would usually show a faceted graph of the latency
-distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen"><a href="#fn:did-not-randomize-codegen" class="footnote">11</a></sup>
+distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen"><a href="#fn:did-not-randomize-codegen" class="footnote">12</a></sup>
 that I doubt there’s any additional information to be found in the graphs,
 compared to the tables below.</p>
 
@@ -1087,7 +1086,7 @@ hard blockers (e.g., library code, or when protecting arbitrary integers).</p>
       <p>In fact, I’ve often argued that SMR <em>is</em> garbage collection, just not fully tracing GC.  Hazard pointers in particular look a lot like deferred reference counting, <a href="https://web.eecs.umich.edu/~weimerw/2012-4610/reading/bacon-garbage.pdf">a form of tracing GC</a>. <a href="#fnref:it-is-gc" class="reversefootnote">&#8617;</a></p>
     </li>
     <li id="fn:not-obvious">
-      <p>Something that wasn’t necessarily obvious until then. See, for example, <a href="https://arxiv.org/abs/2001.01999">this article presented at PPoPP 2020</a>, which conjectures “making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;” Blelloch was in attendance, so this must have been a fun session. <a href="#fnref:not-obvious" class="reversefootnote">&#8617;</a></p>
+      <p>Something that wasn’t necessarily obvious until then. See, for example, <a href="https://arxiv.org/abs/2001.01999">this article presented at PPoPP 2020</a>, which conjectures that “making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;” Blelloch was in attendance, so this must have been a fun session. <a href="#fnref:not-obvious" class="reversefootnote">&#8617;</a></p>
     </li>
     <li id="fn:stable-alloc">
       <p>Hazard pointer records must still be managed separately, e.g., with a type stable allocator, but we can bootstrap everything else once we have a few records per thread. <a href="#fnref:stable-alloc" class="reversefootnote">&#8617;</a></p>
@@ -1106,6 +1105,9 @@ hard blockers (e.g., library code, or when protecting arbitrary integers).</p>
     </li>
     <li id="fn:travis-says-its-fine">
       <p>That’s what <a href="https://travisdowns.github.io/blog/2020/07/06/concurrency-costs.html">Travis Downs classifies as a Level 1 concurrency cost</a>, which is usually fine for writes, but adds a sizable overhead to simple read-only code. <a href="#fnref:travis-says-its-fine" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:arguably-lock-ful">
+      <p>I suppose this means the reclamation path isn’t wait-free, or even lock-free, anymore, in the strict sense of the words. In practice, we’re simply waiting for periodic events that would occur regardless of the syscalls we issue.  People who really know what they’re doing might have fully isolated cores.  If they do, they most likely have a watchdog on their isolated and latency-sensitive tasks, so we can still rely on running some code periodically, potentially after some instrumentation: if an isolated task fails to check in for a short while, the whole box will probably be presumed wedged and taken offline. <a href="#fnref:arguably-lock-ful" class="reversefootnote">&#8617;</a></p>
     </li>
     <li id="fn:no-guarantees">
       <p>With the caveat that the public documentation for <code>process_vm_readv</code> does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I’m pretty sure the kernel’s build flags prevent GCC/clang from converting it to <code>memcpy</code>. We could rely on the strong “don’t break userspace” culture, but it’s probably a better idea to try and get that guarantee in writing. <a href="#fnref:no-guarantees" class="reversefootnote">&#8617;</a></p>
