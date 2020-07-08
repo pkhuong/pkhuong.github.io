@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-07-08T11:42:56-04:00</updated>
+  <updated>2020-07-08T13:06:15-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -21,7 +21,7 @@
     <content type="html"><![CDATA[<p>Back in February 2020, Blelloch and Wei submitted this cool preprint: <a href="https://arxiv.org/abs/2002.07053">Concurrent Reference Counting and Resource Management in Wait-free Constant Time</a>.
 Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also"><a href="#fn:but-also" class="footnote">1</a></sup>
 <a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">Safe memory reclamation (PDF)</a> is a key component in lock-free algorithms when garbage collection isn’t an option,<sup id="fnref:it-is-gc"><a href="#fn:it-is-gc" class="footnote">2</a></sup>
-and <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">hazard pointers (PDF)</a> let us bound resource leaks much more tightly than, e.g., <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf">epoch reclamation (PDF)</a>.
+and <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">hazard pointers (PDF)</a> let us bound the amount of resources stranded by delayed cleanups much more tightly than, e.g., <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf">epoch reclamation (PDF)</a>.
 However the usual implementation has a <em>loop</em> in its <a href="https://www.iecc.com/gclist/GC-algorithms.html">read barriers (in the garbage collection sense)</a>,
 which can be annoying for code generation and bad for worst-case time bounds.</p>
 
@@ -197,7 +197,7 @@ in all threads that are executing the read-side.</p>
 <p>How long is “enough?”
 Linux has the <a href="https://man7.org/linux/man-pages/man2/membarrier.2.html"><code>membarrier</code> syscall</a>
 to block the calling thread until (more than) long enough has elapsed,
-Window has <a href="https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-flushprocesswritebuffers">the similar <code>FlushProcessWriteBuffers</code></a>, and
+Windows has <a href="https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-flushprocesswritebuffers">the similar <code>FlushProcessWriteBuffers</code></a>, and
 on other operating systems, we can probably <a href="https://github.com/pkhuong/barrierd">do something useful with scheduler statistics</a> or ask for a new syscall.</p>
 
 <p>Armed with these new blocking system calls, we can replace the store-load fence in <code>R1</code> with a compiler barrier, and execute a slow <code>membarrier</code>/<code>FlushProcessWriteBuffers</code> after <code>C1</code>.
