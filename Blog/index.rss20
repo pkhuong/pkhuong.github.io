@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-07-08T08:52:35-04:00</updated>
+  <updated>2020-07-08T09:07:37-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -203,7 +203,7 @@ on other operating systems, we can probably <a href="https://github.com/pkhuong/
 <p>Armed with these new blocking system calls, we can replace the store-load fence in <code>R1</code> with a compiler barrier, and execute a slow <code>membarrier</code>/<code>FlushProcessWriteBuffers</code> after <code>C1</code>.
 The cleanup function will then wait long enough[^arguably-lock-ful] to ensure that any
 read-side operation that had executed before <code>R1</code> at the time we read the limbo list in <code>C1</code> will be visible (e.g., because the operating system knows a preemption interrupt executed at least once on each core).
-[^arguably-lock-ful]: I suppose this means the reclamation path isn’t wait-free, or even lock-free, anymore, in the strict sense of the words. In practice, we’re simply waiting for periodic events that would occur regardless of the syscalls we issue.</p>
+[^arguably-lock-ful]: I suppose this means the reclamation path isn’t wait-free, or even lock-free, anymore, in the strict sense of the words. In practice, we’re simply waiting for periodic events that would occur regardless of the syscalls we issue.  People who really know what they’re doing might have fully isolated cores.  If they do, they most likely have a watchdog on their isolated and latency-sensitive tasks, so we can still rely on running some code periodically, potentially after some instrumentation: if an isolated task fails to check in for a short while, the whole box will probably be presumed wedged and taken offline.</p>
 
 <p>The pseudocode for this asymmetric strategy follows.</p>
 
