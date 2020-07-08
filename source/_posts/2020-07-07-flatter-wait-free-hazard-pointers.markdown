@@ -9,7 +9,7 @@ categories:
 Back in February 2020, Blelloch and Wei submitted this cool preprint: [Concurrent Reference Counting and Resource Management in Wait-free Constant Time](https://arxiv.org/abs/2002.07053).
 Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.[^but-also]
 [Safe memory reclamation (PDF)](http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf) is a key component in lock-free algorithms when garbage collection isn't an option,[^it-is-gc]
-and [hazard pointers (PDF)](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&rep=rep1&type=pdf) let us bound resource leaks much more tightly than, e.g., [epoch reclamation (PDF)](https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf).
+and [hazard pointers (PDF)](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&rep=rep1&type=pdf) let us bound the amount of resources stranded by delayed cleanups much more tightly than, e.g., [epoch reclamation (PDF)](https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf).
 However the usual implementation has a *loop* in its [read barriers (in the garbage collection sense)](https://www.iecc.com/gclist/GC-algorithms.html),
 which can be annoying for code generation and bad for worst-case time bounds.
 
@@ -177,7 +177,7 @@ in all threads that are executing the read-side.
 How long is "enough?"
 Linux has the [`membarrier` syscall](https://man7.org/linux/man-pages/man2/membarrier.2.html)
 to block the calling thread until (more than) long enough has elapsed,
-Window has [the similar `FlushProcessWriteBuffers`](https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-flushprocesswritebuffers), and
+Windows has [the similar `FlushProcessWriteBuffers`](https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-flushprocesswritebuffers), and
 on other operating systems, we can probably [do something useful with scheduler statistics](https://github.com/pkhuong/barrierd) or ask for a new syscall.
 
 Armed with these new blocking system calls, we can replace the store-load fence in `R1` with a compiler barrier, and execute a slow `membarrier`/`FlushProcessWriteBuffers` after `C1`.
@@ -234,15 +234,15 @@ emulates an atomic memory-memory copy.  Given such an atomic copy primitive, the
 
 {% codeblock hp_read_blelloch_wei.py %}
 def hp_read_membarrier(cell, record):
-    cell.atomic_copy(record.pin)
+    record.pin.atomic_copy(cell)
     return record.pin
 {% endcodeblock %}
 
-The "only" problem is that atomic copies don't exist in contemporary hardware.
+The "only" problem is that atomic copies (which would look like locking all other cores out of memory accesses, copying the `cell`'s word-sized contents to `record.pin`, and releasing the lock) don't exist in contemporary hardware.
 
 However, we've already noted that syscalls like `membarrier` mean we can weaken our requirements to interrupt atomicity. In other words, individual non-atomic instructions work since we're assuming precise interrupts... and `x86` and `amd64` do have an instruction for memory-memory copies!
 
-The [`MOVS` instructions](https://www.felixcloutier.com/x86/movs:movsb:movsw:movsd:movsq) are typically only used with a `REP` prefix.  However, they can also be executed without any prefix, to execute one iteration of the copy loop.  Executing a `REP`-free `MOVSQ` instruction copies one quadword (64 bits) from `[RSI]` to `[RDI]`, and increment both registers... and all this stuff happens in one instructions, so will never be split by an interrupt.
+The [`MOVS` instructions](https://www.felixcloutier.com/x86/movs:movsb:movsw:movsd:movsq) are typically only used with a `REP` prefix.  However, they can also be executed without any prefix, to execute one iteration of the copy loop.  Executing a `REP`-free `MOVSQ` instruction copies one quadword (8 bytes) from the memory address in the source register `[RSI]` to the address in the destination register `[RDI]`, and advances both registers by 8 bytes... and all this stuff happens in one instruction, so will never be split by an interrupt.
 That's an *interrupt*-atomic copy, which we can slot in place
 of the software atomic copy in Blelloch and Wei's proposal!
 
@@ -582,6 +582,26 @@ On Linux, we could
 abuse [the `process_vm_readv` syscall](https://man7.org/linux/man-pages/man2/process_vm_readv.2.html);[^no-guarantees]
 in general I suppose we could install signal handlers to catch `SIGSEGV` and `SIGBUS`.
 
+<div id="hp_read_swf-relaxed"></div>
+
+It's even worse for the single-cleanup `hp_read_swf` read sequence:
+there's no ABA protection, so a cleanup helper can pin an
+old value in `record.help.cell_or_pin`.  This could happen if a
+read-side sequence is initiated before `hp_cleanup_swf`'s `membarrier`
+in `C1`, and the associated incomplete record is noticed by the
+helper, at which point the helper is preempted.  The read-side
+sequence completes, and later uses the same record to read from the
+same address... and that's when the helper resumes execution, with a
+`compare_exchange` that succeeds.
+
+The pinned value "helped in" by `hp_cleanup_swf` is still valid---the
+call to `hp_cleanup_swf` hasn't physically destroyed anything yet---so
+the hazard pointer implementation is technically correct.  However,
+this scenario shows that `hp_read_swf` can violate memory ordering and
+causality, and even let long-overwritten values time travel into the future.  The
+simpler read-side code sequence comes at a cost: its load is extremely
+relaxed, much more so than any intuitive mental model might allow.
+
 [^no-guarantees]: With the caveat that the public documentation for `process_vm_readv` does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I'm pretty sure the kernel's build flags prevent GCC/clang from converting it to `memcpy`. We could rely on the strong "don't break userspace" culture, but it's probably a better idea to try and get that guarantee in writing.
 
 Having to help readers forward also loses a nice practical property of
@@ -858,7 +878,7 @@ of) hazard pointer records.  These additional requirements don't seem
 impractical, but I can imagine code bases where they would constitute
 hard blockers (e.g., library code, or when protecting arbitrary integers).
 
-TL;DR: Use [`hp_read_swf` if you know what you're doing](#hp_read_swf) or want more wait-free speed holes.  Otherwise, [`hp_read_movs_spec` is an all-around solid option on `x86` and `amd64`](#hp_read_movs_spec), and still wait-free.
+TL;DR: [Use `hp_read_swf`](#hp_read_swf) if [you *really* know what you're doing](#hp_read_swf-relaxed).  Otherwise, [`hp_read_movs_spec` is a well rounded option on `x86` and `amd64`](#hp_read_movs_spec), and still wait-free.
 
 P.S., [Travis Downs](https://travisdowns.github.io/) notes that mem-mem `PUSH` might be an alternative to `MOVSQ`, but that requires either pointing `RSP` to arbitrary memory, or allocating hazard pointers on the stack (which isn't necessarily a bad idea).  Another idea worthy of investigation!
 
