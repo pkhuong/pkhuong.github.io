@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Flatter wait-free hazard pointers"
-date: 2020-07-07 14:30:21 -0400
+date: 2020-07-07 14:30:22 -0400
 comments: true
 categories:
 ---
@@ -885,7 +885,7 @@ Finally, `hp_read_swf` can let protected values time travel in the future,
 with read sequences returning values so long after they were overwritten
 that the result violates pretty much any memory ordering model.
 
-TL;DR: [Use `hp_read_swf`](#hp_read_swf) if [you *really* know what you're doing](#hp_read_swf-relaxed).  Otherwise, [`hp_read_movs_spec` is a well rounded option on `x86` and `amd64`](#hp_read_movs_spec), and still wait-free.  Finally, [`hp_read_wf` only uses standard operations](#hp_read_wf), but compiles down to more code.
+TL;DR: [Use `hp_read_swf`](#hp_read_swf) if [you *really* know what you're doing](#hp_read_swf-relaxed).  When targeting `x86` and `amd64`, [`hp_read_movs_spec` is a well rounded option](#hp_read_movs_spec), and still wait-free.  Otherwise, [`hp_read_wf` uses standard operations](#hp_read_wf), but compiles down to more code.
 
 P.S., [Travis Downs](https://travisdowns.github.io/) notes that mem-mem `PUSH` might be an alternative to `MOVSQ`, but that requires either pointing `RSP` to arbitrary memory, or allocating hazard pointers on the stack (which isn't necessarily a bad idea).  Another idea worthy of investigation!
 
