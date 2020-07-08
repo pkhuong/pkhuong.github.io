@@ -1192,7 +1192,7 @@ Finally, <code>hp_read_swf</code> can let protected values time travel in the fu
 with read sequences returning values so long after they were overwritten
 that the result violates pretty much any memory ordering model.</p>
 
-<p>TL;DR: <a href="#hp_read_swf">Use <code>hp_read_swf</code></a> if <a href="#hp_read_swf-relaxed">you <em>really</em> know what you’re doing</a>.  Otherwise, <a href="#hp_read_movs_spec"><code>hp_read_movs_spec</code> is a well rounded option on <code>x86</code> and <code>amd64</code></a>, and still wait-free.  Finally, <a href="#hp_read_wf"><code>hp_read_wf</code> only uses standard operations</a>, but compiles down to more code.</p>
+<p>TL;DR: <a href="#hp_read_swf">Use <code>hp_read_swf</code></a> if <a href="#hp_read_swf-relaxed">you <em>really</em> know what you’re doing</a>.  When targeting <code>x86</code> and <code>amd64</code>, <a href="#hp_read_movs_spec"><code>hp_read_movs_spec</code> is a well rounded option</a>, and still wait-free.  Otherwise, <a href="#hp_read_wf"><code>hp_read_wf</code> uses standard operations</a>, but compiles down to more code.</p>
 
 <p>P.S., <a href="https://travisdowns.github.io/">Travis Downs</a> notes that mem-mem <code>PUSH</code> might be an alternative to <code>MOVSQ</code>, but that requires either pointing <code>RSP</code> to arbitrary memory, or allocating hazard pointers on the stack (which isn’t necessarily a bad idea).  Another idea worthy of investigation!</p>
 
