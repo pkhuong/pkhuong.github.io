@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Flatter wait-free hazard pointers"
-date: 2020-07-07 14:30:20 -0400
+date: 2020-07-07 14:30:21 -0400
 comments: true
 categories:
 ---
@@ -386,6 +386,7 @@ before we start reading from the target cell, and to guarantee
 that any helper's write to `record.help.pin_or_gen` is visible
 before we compare `record.help.pin_or_gen` against `gen`:
 
+<div id="hp_read_wf">
 {% codeblock hp_read_wf.py %}
 def hp_read_wf(cell, record):
     gen = gen_sequence
@@ -433,6 +434,7 @@ def hp_cleanup_wf(limbo, records):
         else:
             resource.destroy()
 {% endcodeblock %}
+</div>
 
 The membarrier in `C1` matches the compiler barrier in `RA`: if a
 read-side section executed `R2` before we consumed the limbo list, its
@@ -582,6 +584,8 @@ On Linux, we could
 abuse [the `process_vm_readv` syscall](https://man7.org/linux/man-pages/man2/process_vm_readv.2.html);[^no-guarantees]
 in general I suppose we could install signal handlers to catch `SIGSEGV` and `SIGBUS`.
 
+[^no-guarantees]: With the caveat that the public documentation for `process_vm_readv` does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I'm pretty sure the kernel's build flags prevent GCC/clang from converting it to `memcpy`. We could rely on the strong "don't break userspace" culture, but it's probably a better idea to try and get that guarantee in writing.
+
 <div id="hp_read_swf-relaxed"></div>
 
 It's even worse for the single-cleanup `hp_read_swf` read sequence:
@@ -600,9 +604,9 @@ the hazard pointer implementation is technically correct.  However,
 this scenario shows that `hp_read_swf` can violate memory ordering and
 causality, and even let long-overwritten values time travel into the future.  The
 simpler read-side code sequence comes at a cost: its load is extremely
-relaxed, much more so than any intuitive mental model might allow.
+relaxed, much more so than any intuitive mental model might allow.[^hybrid-swf]
 
-[^no-guarantees]: With the caveat that the public documentation for `process_vm_readv` does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I'm pretty sure the kernel's build flags prevent GCC/clang from converting it to `memcpy`. We could rely on the strong "don't break userspace" culture, but it's probably a better idea to try and get that guarantee in writing.
+[^hybrid-swf]: This problem feels like something we could address with a coarse epoch-based versioning scheme.  It's however not clear to me that the result would be much simpler than `hp_read_wf`, and we'd have to steal even more bits (2 bits, I expect) from `cell_or_pin` to make room for the epoch.
 
 Having to help readers forward also loses a nice practical property of
 hazard pointers: it's always safe to spuriously consider arbitrary
@@ -877,8 +881,11 @@ crashing, and also imposes mutual exclusion around the scanning of (sets
 of) hazard pointer records.  These additional requirements don't seem
 impractical, but I can imagine code bases where they would constitute
 hard blockers (e.g., library code, or when protecting arbitrary integers).
+Finally, `hp_read_swf` can let protected values time travel in the future,
+with read sequences returning values so long after they were overwritten
+that the result violates pretty much any memory ordering model.
 
-TL;DR: [Use `hp_read_swf`](#hp_read_swf) if [you *really* know what you're doing](#hp_read_swf-relaxed).  Otherwise, [`hp_read_movs_spec` is a well rounded option on `x86` and `amd64`](#hp_read_movs_spec), and still wait-free.
+TL;DR: [Use `hp_read_swf`](#hp_read_swf) if [you *really* know what you're doing](#hp_read_swf-relaxed).  Otherwise, [`hp_read_movs_spec` is a well rounded option on `x86` and `amd64`](#hp_read_movs_spec), and still wait-free.  Finally, [`hp_read_wf` only uses standard operations](#hp_read_wf), but compiles down to more code.
 
 P.S., [Travis Downs](https://travisdowns.github.io/) notes that mem-mem `PUSH` might be an alternative to `MOVSQ`, but that requires either pointing `RSP` to arbitrary memory, or allocating hazard pointers on the stack (which isn't necessarily a bad idea).  Another idea worthy of investigation!
 
