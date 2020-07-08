@@ -401,6 +401,7 @@ def hp_read_wf(cell, record):
         guess = record.help.pin_or_gen.load_acquire().as_ptr()
     return guess
 {% endcodeblock %}
+</div>
 
 On the cleanup side, we will consume the limbo list, issue a
 membarrier to catch any read-side critical section that wrote to
@@ -434,7 +435,6 @@ def hp_cleanup_wf(limbo, records):
         else:
             resource.destroy()
 {% endcodeblock %}
-</div>
 
 The membarrier in `C1` matches the compiler barrier in `RA`: if a
 read-side section executed `R2` before we consumed the limbo list, its
