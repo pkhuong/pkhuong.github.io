@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-07-08T16:19:42-04:00</updated>
+  <updated>2020-07-08T16:32:57-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -16,7 +16,7 @@
   <entry>
     <title type="html"><![CDATA[Flatter wait-free hazard pointers]]></title>
     <link href="https://www.pvk.ca/Blog/2020/07/07/flatter-wait-free-hazard-pointers/"/>
-    <updated>2020-07-07T14:30:20-04:00</updated>
+    <updated>2020-07-07T14:30:21-04:00</updated>
     <id>https://www.pvk.ca/Blog/2020/07/07/flatter-wait-free-hazard-pointers</id>
     <content type="html"><![CDATA[<p>Back in February 2020, Blelloch and Wei submitted this cool preprint: <a href="https://arxiv.org/abs/2002.07053">Concurrent Reference Counting and Resource Management in Wait-free Constant Time</a>.
 Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also"><a href="#fn:but-also" class="footnote">1</a></sup>
@@ -452,6 +452,7 @@ before we start reading from the target cell, and to guarantee
 that any helper’s write to <code>record.help.pin_or_gen</code> is visible
 before we compare <code>record.help.pin_or_gen</code> against <code>gen</code>:</p>
 
+<div id="hp_read_wf">
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_wf.py </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
@@ -478,6 +479,7 @@ before we compare <code>record.help.pin_or_gen</code> against <code>gen</code>:<
 </span><span class="line">        <span class="n">guess</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">pin_or_gen</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">()</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">()</span>
 </span><span class="line">    <span class="k">return</span> <span class="n">guess</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
+</div>
 
 <p>On the cleanup side, we will consume the limbo list, issue a
 membarrier to catch any read-side critical section that wrote to
@@ -734,7 +736,7 @@ the hazard pointer implementation is technically correct.  However,
 this scenario shows that <code>hp_read_swf</code> can violate memory ordering and
 causality, and even let long-overwritten values time travel into the future.  The
 simpler read-side code sequence comes at a cost: its load is extremely
-relaxed, much more so than any intuitive mental model might allow.</p>
+relaxed, much more so than any intuitive mental model might allow.<sup id="fnref:hybrid-swf"><a href="#fn:hybrid-swf" class="footnote">12</a></sup></p>
 
 <p>Having to help readers forward also loses a nice practical property of
 hazard pointers: it’s always safe to spuriously consider arbitrary
@@ -947,7 +949,7 @@ from realistic (if I found an inner loop that <em>only</em> traversed a
 singly linked list, I’d consider a different data structure), but helps
 establish an upper bound on the overhead from different hazard pointer
 read sides.  I would usually show a faceted graph of the latency
-distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen"><a href="#fn:did-not-randomize-codegen" class="footnote">12</a></sup>
+distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen"><a href="#fn:did-not-randomize-codegen" class="footnote">13</a></sup>
 that I doubt there’s any additional information to be found in the graphs,
 compared to the tables below.</p>
 
@@ -1088,13 +1090,16 @@ needs a pointer tagging scheme to distinguish target pointers from pinned ones, 
 crashing, and also imposes mutual exclusion around the scanning of (sets
 of) hazard pointer records.  These additional requirements don’t seem
 impractical, but I can imagine code bases where they would constitute
-hard blockers (e.g., library code, or when protecting arbitrary integers).</p>
+hard blockers (e.g., library code, or when protecting arbitrary integers).
+Finally, <code>hp_read_swf</code> can let protected values time travel in the future,
+with read sequences returning values so long after they were overwritten
+that the result violates pretty much any memory ordering model.</p>
 
-<p>TL;DR: <a href="#hp_read_swf">Use <code>hp_read_swf</code></a> if <a href="#hp_read_swf-relaxed">you <em>really</em> know what you’re doing</a>.  Otherwise, <a href="#hp_read_movs_spec"><code>hp_read_movs_spec</code> is a well rounded option on <code>x86</code> and <code>amd64</code></a>, and still wait-free.</p>
+<p>TL;DR: <a href="#hp_read_swf">Use <code>hp_read_swf</code></a> if <a href="#hp_read_swf-relaxed">you <em>really</em> know what you’re doing</a>.  Otherwise, <a href="#hp_read_movs_spec"><code>hp_read_movs_spec</code> is a well rounded option on <code>x86</code> and <code>amd64</code></a>, and still wait-free.  Finally, <a href="#hp_read_wf"><code>hp_read_wf</code> only uses standard operations</a>, but compiles down to more code.</p>
 
 <p>P.S., <a href="https://travisdowns.github.io/">Travis Downs</a> notes that mem-mem <code>PUSH</code> might be an alternative to <code>MOVSQ</code>, but that requires either pointing <code>RSP</code> to arbitrary memory, or allocating hazard pointers on the stack (which isn’t necessarily a bad idea).  Another idea worthy of investigation!</p>
 
-<p><small>Thank you, Travis, for deciphering and validating a much rougher draft when the preprint dropped, and Paul, for helping me clarify this last iteration.</small></p>
+<p><small>Thank you, Travis, for deciphering and validating a much rougher draft when the preprint dropped, and Paul and Jacob, for helping me clarify this last iteration.</small></p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes">
@@ -1131,6 +1136,9 @@ hard blockers (e.g., library code, or when protecting arbitrary integers).</p>
     </li>
     <li id="fn:no-guarantees">
       <p>With the caveat that the public documentation for <code>process_vm_readv</code> does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I’m pretty sure the kernel’s build flags prevent GCC/clang from converting it to <code>memcpy</code>. We could rely on the strong “don’t break userspace” culture, but it’s probably a better idea to try and get that guarantee in writing. <a href="#fnref:no-guarantees" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:hybrid-swf">
+      <p>This problem feels like something we could address with a coarse epoch-based versioning scheme.  It’s however not clear to me that the result would be much simpler than <code>hp_read_wf</code>, and we’d have to steal even more bits (2 bits, I expect) from <code>cell_or_pin</code> to make room for the epoch. <a href="#fnref:hybrid-swf" class="reversefootnote">&#8617;</a></p>
     </li>
     <li id="fn:did-not-randomize-codegen">
       <p>Although I did compare several independent executions and confirmed the reported cycle counts were stable, I did not try to randomise code generation… mostly because I’m not looking for super fine differences as much as close enough runtimes.  Hopefully, aligning functions to 256 bytes leveled some bias away. <a href="#fnref:did-not-randomize-codegen" class="reversefootnote">&#8617;</a></p>
