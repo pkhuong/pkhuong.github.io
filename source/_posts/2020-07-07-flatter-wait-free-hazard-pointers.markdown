@@ -312,7 +312,7 @@ Interrupt-atomic copy, with some help
 
 Blelloch and Wei's wait-free atomic copy primitive builds on the
 usual trick for wait-free algorithms: when a thread would wait for an
-in-progress operations, it helps that operation complete
+operation to complete, it helps that operation make progress
 instead of blocking.
 
 This strategy has the marked advantage of working.  However, it's
