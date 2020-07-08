@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Flatter wait-free hazard pointers"
-date: 2020-07-07 14:30:18 -0400
+date: 2020-07-07 14:30:19 -0400
 comments: true
 categories:
 ---
@@ -21,7 +21,7 @@ Blelloch and Wei's wait-free algorithm eliminates that loop... with a constructi
 I see the real value of the construction in proving that wait-freedom is achievable,[^not-obvious]
 and that the key is atomic memory-memory copies.
 
-[^not-obvious]: Something that wasn't necessarily obvious until then. See, for example, [this article presented at PPoPP 2020](https://arxiv.org/abs/2001.01999), which conjectures "making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;" Blelloch was in attendance, so this must have been a fun session.
+[^not-obvious]: Something that wasn't necessarily obvious until then. See, for example, [this article presented at PPoPP 2020](https://arxiv.org/abs/2001.01999), which conjectures that "making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;" Blelloch was in attendance, so this must have been a fun session.
 
 In this post, I'll show how to flatten down that abstraction tower into something practical with a bit of engineering elbow grease,
 and come up with wait-free alternatives to the usual lock-free hazard pointers
@@ -183,6 +183,7 @@ on other operating systems, we can probably [do something useful with scheduler 
 Armed with these new blocking system calls, we can replace the store-load fence in `R1` with a compiler barrier, and execute a slow `membarrier`/`FlushProcessWriteBuffers` after `C1`.
 The cleanup function will then wait long enough[^arguably-lock-ful] to ensure that any
 read-side operation that had executed before `R1` at the time we read the limbo list in `C1` will be visible (e.g., because the operating system knows a preemption interrupt executed at least once on each core).
+
 [^arguably-lock-ful]: I suppose this means the reclamation path isn't wait-free, or even lock-free, anymore, in the strict sense of the words. In practice, we're simply waiting for periodic events that would occur regardless of the syscalls we issue.  People who really know what they're doing might have fully isolated cores.  If they do, they most likely have a watchdog on their isolated and latency-sensitive tasks, so we can still rely on running some code periodically, potentially after some instrumentation: if an isolated task fails to check in for a short while, the whole box will probably be presumed wedged and taken offline.
 
 The pseudocode for this asymmetric strategy follows.
