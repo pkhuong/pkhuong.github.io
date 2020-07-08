@@ -21,7 +21,7 @@ Blelloch and Wei's wait-free algorithm eliminates that loop... with a constructi
 I see the real value of the construction in proving that wait-freedom is achievable,[^not-obvious]
 and that the key is atomic memory-memory copies.
 
-[^not-obvious]: Something which wasn't necessarily obvious until then. See, for example, [this article presented at PPoPP 2020](https://arxiv.org/abs/2001.01999), which conjectures "making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;" Blelloch was in attendance, so this must have been a fun session.
+[^not-obvious]: Something that wasn't necessarily obvious until then. See, for example, [this article presented at PPoPP 2020](https://arxiv.org/abs/2001.01999), which conjectures "making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;" Blelloch was in attendance, so this must have been a fun session.
 
 In this post, I'll show how to flatten down that abstraction tower into something practical with a bit of engineering elbow grease,
 and come up with wait-free alternatives to the usual lock-free hazard pointers
