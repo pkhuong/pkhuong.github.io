@@ -465,7 +465,7 @@ when CISCy instructions like <code>MOVSQ</code> aren’t available, with an asym
 
 <p>Blelloch and Wei’s wait-free atomic copy primitive builds on the
 usual trick for wait-free algorithms: when a thread would wait for an
-in-progress operations, it helps that operation complete
+operation to complete, it helps that operation make progress
 instead of blocking.</p>
 
 <p>This strategy has the marked advantage of working.  However, it’s
