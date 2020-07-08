@@ -370,15 +370,15 @@ emulates an atomic memory-memory copy.  Given such an atomic copy primitive, the
 <span class="line-number">2</span>
 <span class="line-number">3</span>
 </pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_read_membarrier</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">record</span><span class="p">):</span>
-</span><span class="line">    <span class="n">cell</span><span class="o">.</span><span class="n">atomic_copy</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="p">)</span>
+</span><span class="line">    <span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">atomic_copy</span><span class="p">(</span><span class="n">cell</span><span class="p">)</span>
 </span><span class="line">    <span class="k">return</span> <span class="n">record</span><span class="o">.</span><span class="n">pin</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The “only” problem is that atomic copies don’t exist in contemporary hardware.</p>
+<p>The “only” problem is that atomic copies (which would look like locking all other cores out of memory accesses, copying the <code>cell</code>’s word-sized contents to <code>record.pin</code>, and releasing the lock) don’t exist in contemporary hardware.</p>
 
 <p>However, we’ve already noted that syscalls like <code>membarrier</code> mean we can weaken our requirements to interrupt atomicity. In other words, individual non-atomic instructions work since we’re assuming precise interrupts… and <code>x86</code> and <code>amd64</code> do have an instruction for memory-memory copies!</p>
 
-<p>The <a href="https://www.felixcloutier.com/x86/movs:movsb:movsw:movsd:movsq"><code>MOVS</code> instructions</a> are typically only used with a <code>REP</code> prefix.  However, they can also be executed without any prefix, to execute one iteration of the copy loop.  Executing a <code>REP</code>-free <code>MOVSQ</code> instruction copies one quadword (64 bits) from <code>[RSI]</code> to <code>[RDI]</code>, and increment both registers… and all this stuff happens in one instructions, so will never be split by an interrupt.
+<p>The <a href="https://www.felixcloutier.com/x86/movs:movsb:movsw:movsd:movsq"><code>MOVS</code> instructions</a> are typically only used with a <code>REP</code> prefix.  However, they can also be executed without any prefix, to execute one iteration of the copy loop.  Executing a <code>REP</code>-free <code>MOVSQ</code> instruction copies one quadword (8 bytes) from the memory address in the source register <code>[RSI]</code> to the address in the destination register <code>[RDI]</code>, and advances both registers by 8 bytes… and all this stuff happens in one instruction, so will never be split by an interrupt.
 That’s an <em>interrupt</em>-atomic copy, which we can slot in place
 of the software atomic copy in Blelloch and Wei’s proposal!</p>
 
@@ -814,6 +814,26 @@ On Linux, we could
 abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;<sup id="fnref:no-guarantees"><a href="#fn:no-guarantees" class="footnote">11</a></sup>
 in general I suppose we could install signal handlers to catch <code>SIGSEGV</code> and <code>SIGBUS</code>.</p>
 
+<div id="hp_read_swf-relaxed"></div>
+
+<p>It’s even worse for the single-cleanup <code>hp_read_swf</code> read sequence:
+there’s no ABA protection, so a cleanup helper can pin an
+old value in <code>record.help.cell_or_pin</code>.  This could happen if a
+read-side sequence is initiated before <code>hp_cleanup_swf</code>’s <code>membarrier</code>
+in <code>C1</code>, and the associated incomplete record is noticed by the
+helper, at which point the helper is preempted.  The read-side
+sequence completes, and later uses the same record to read from the
+same address… and that’s when the helper resumes execution, with a
+<code>compare_exchange</code> that succeeds.</p>
+
+<p>The pinned value “helped in” by <code>hp_cleanup_swf</code> is still valid—the
+call to <code>hp_cleanup_swf</code> hasn’t physically destroyed anything yet—so
+the hazard pointer implementation is technically correct.  However,
+this scenario shows that <code>hp_read_swf</code> can violate memory ordering and
+causality, and even let long-overwritten values time travel into the future.  The
+simpler read-side code sequence comes at a cost: its load is extremely
+relaxed, much more so than any intuitive mental model might allow.</p>
+
 <p>Having to help readers forward also loses a nice practical property of
 hazard pointers: it’s always safe to spuriously consider arbitrary
 (readable) memory as a hazard pointer record, it only costs us
@@ -1168,7 +1188,7 @@ of) hazard pointer records.  These additional requirements don’t seem
 impractical, but I can imagine code bases where they would constitute
 hard blockers (e.g., library code, or when protecting arbitrary integers).</p>
 
-<p>TL;DR: Use <a href="#hp_read_swf"><code>hp_read_swf</code> if you know what you’re doing</a> or want more wait-free speed holes.  Otherwise, <a href="#hp_read_movs_spec"><code>hp_read_movs_spec</code> is an all-around solid option on <code>x86</code> and <code>amd64</code></a>, and still wait-free.</p>
+<p>TL;DR: <a href="#hp_read_swf">Use <code>hp_read_swf</code></a> if <a href="#hp_read_swf-relaxed">you <em>really</em> know what you’re doing</a>.  Otherwise, <a href="#hp_read_movs_spec"><code>hp_read_movs_spec</code> is a well rounded option on <code>x86</code> and <code>amd64</code></a>, and still wait-free.</p>
 
 <p>P.S., <a href="https://travisdowns.github.io/">Travis Downs</a> notes that mem-mem <code>PUSH</code> might be an alternative to <code>MOVSQ</code>, but that requires either pointing <code>RSP</code> to arbitrary memory, or allocating hazard pointers on the stack (which isn’t necessarily a bad idea).  Another idea worthy of investigation!</p>
 
