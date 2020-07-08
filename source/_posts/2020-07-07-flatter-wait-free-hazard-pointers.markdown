@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Flatter wait-free hazard pointers"
-date: 2020-07-07 14:30:19 -0400
+date: 2020-07-07 14:30:20 -0400
 comments: true
 categories:
 ---
@@ -882,6 +882,6 @@ TL;DR: [Use `hp_read_swf`](#hp_read_swf) if [you *really* know what you're doing
 
 P.S., [Travis Downs](https://travisdowns.github.io/) notes that mem-mem `PUSH` might be an alternative to `MOVSQ`, but that requires either pointing `RSP` to arbitrary memory, or allocating hazard pointers on the stack (which isn't necessarily a bad idea).  Another idea worthy of investigation!
 
-<small>Thank you, Travis, for deciphering and validating a much rougher draft when the preprint dropped, and Paul, for helping me clarify this last iteration.</small>
+<small>Thank you, Travis, for deciphering and validating a much rougher draft when the preprint dropped, and Paul and Jacob, for helping me clarify this last iteration.</small>
 
 <p><hr style="width: 50%"></p>
