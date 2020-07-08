@@ -578,8 +578,10 @@ pointers without crashing.  One might think mutual exclusion in the
 cleanup function fixes that, but programs often mix and match
 different reclamation schemes, as well as lock-free and lock-ful code.
 On Linux, we could
-abuse [the `process_vm_readv` syscall](https://man7.org/linux/man-pages/man2/process_vm_readv.2.html);
+abuse [the `process_vm_readv` syscall](https://man7.org/linux/man-pages/man2/process_vm_readv.2.html);[^no-guarantees]
 in general I suppose we could install signal handlers to catch `SIGSEGV` and `SIGBUS`.
+
+[^no-guarantees]: With the caveat that the public documentation for `process_vm_readv` does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I'm pretty sure the kernel's build flags prevent GCC/clang from converting it to `memcpy`. We could rely on the strong "don't break userspace" culture, but it's probably a better idea to try and get that guarantee in writing.
 
 Having to help readers forward also loses a nice practical property of
 hazard pointers: it's always safe to spuriously consider arbitrary
