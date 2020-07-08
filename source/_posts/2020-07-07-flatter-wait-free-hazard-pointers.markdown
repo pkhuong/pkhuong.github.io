@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Flatter wait-free hazard pointers"
-date: 2020-07-07 14:30:17 -0400
+date: 2020-07-07 14:30:18 -0400
 comments: true
 categories:
 ---
@@ -15,11 +15,13 @@ which can be annoying for code generation and bad for worst-case time bounds.
 
 [^but-also]: I also tend to read anything by [Guy Blelloch](https://dblp.uni-trier.de/pers/b/Blelloch:Guy_E=.html).
 
-[^it-is-gc]: In fact, I've often argued that SMR *is* garbage collection, just not tracing GC.
+[^it-is-gc]: In fact, I've often argued that SMR *is* garbage collection, just not fully tracing GC.  Hazard pointers in particular look a lot like deferred reference counting, [a form of tracing GC](https://web.eecs.umich.edu/~weimerw/2012-4610/reading/bacon-garbage.pdf).
 
 Blelloch and Wei's wait-free algorithm eliminates that loop... with a construction that stacks [two emulated primitives---atomic copy, itself implemented with strong LL/SC---](https://arxiv.org/abs/1911.09671)on top of what real hardware offers.
-I see the real value of the construction in proving that wait-freedom is achievable,
+I see the real value of the construction in proving that wait-freedom is achievable,[^not-obvious]
 and that the key is atomic memory-memory copies.
+
+[^not-obvious]: Something which wasn't necessarily obvious until then. See, for example, [this article presented at PPoPP 2020](https://arxiv.org/abs/2001.01999), which conjectures "making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;" Blelloch was in attendance, so this must have been a fun session.
 
 In this post, I'll show how to flatten down that abstraction tower into something practical with a bit of engineering elbow grease,
 and come up with wait-free alternatives to the usual lock-free hazard pointers
@@ -48,9 +50,9 @@ and its solutions can even be seen as extremely read-optimised reader/writer loc
 
 The basic idea behind Hazard Pointers is to have
 each thread publish to permanently allocated[^stable-alloc] hazard pointer records (HP records) the set of resources (pointers) it's temporarily borrowing from a lock-free data structure.
-That's enough information for a background thread to snapshot the current limbo list of resources that have been logically deleted but not yet physically released,
+That's enough information for a background thread to snapshot the current list of resources that have been logically deleted but not yet physically released (the limbo list),
 scan all records for all threads,
-and physically release all resources in the snapshot that aren't in any hazard pointer record.
+and physically release all resources in the snapshot that aren't in any HP record.
 
 [^stable-alloc]: Hazard pointer records must still be managed separately, e.g., with a type stable allocator, but we can bootstrap everything else once we have a few records per thread.
 
@@ -63,7 +65,7 @@ Scanning the records thus takes time roughly linear in the number of active thre
 The tricky bit is figuring out how to reliably publish to a HP record without locking.
 Hazard pointers simplify that challenge with three observations:
 1. It's OK to have arbitrary garbage in a record (let's disregard language-level[^or-hw-level] undefined behaviour), since protected values are only ever subtracted from the limbo list: a garbage record simply doesn't protect anything.
-2. It's also OK to leave a false positive in a record: our leakage bounds assume each record keeps a different node (resource) alive, and that's the worst case.
+2. It's also OK to leave a false positive in a record: correctness arguments for hazard pointers already assume each record keeps a different node (resource) alive, and that's the worst case.
 3. 1 and 2 mean it doesn't matter what pinned value we read in a record whose last update was started after we snapshotted the limbo list: resources in the limbo list are unreachable, so freshly pinned resources can't refer to anything in the snapshot.
 
 [^or-hw-level]: Let's also hope efforts like [CHERI](https://www.cl.cam.ac.uk/research/security/ctsrd/cheri/) don't have to break lock-free code.
@@ -71,17 +73,22 @@ Hazard pointers simplify that challenge with three observations:
 This is where the clever bit of hazard pointers comes in:
 we must make sure that any resource (pointer to a node, etc.) we borrow from a lock-free data structure is immediately protected by a HP record.
 We can't make two things happen atomically without locking.
-Instead, we'll *guess* what resource we will borrow,
+Instead, we'll *guess*[^guessing-is-fine] what resource we will borrow,
 publish that guess,
 and then actually borrow the resource.
 If we guessed correctly, we can immediately use the borrowed resource;
 if we were wrong, we must try again.
 
+[^guessing-is-fine]: The scheme is correct with any actual guess; we could even use a random number generator. However, performance is ideal (the loop exits) when we "guess" by reading current value of the pointer we want to borrow safely.
+
 On an ideal [sequentially consistent](https://en.wikipedia.org/wiki/Sequential_consistency) machine,
-the pseudocode looks like the following.
+the pseudocode looks like the following.  The `cell` argument points to the resource we wish to acquire
+(e.g., it's a reference to the `next` field in a linked list node), and `record` is the hazard pointer
+record that will protect the value borrowed from `cell`.
 
 {% codeblock hp_read_sc.py %}
 def hp_read_sc(cell, record):
+    "Reads the resource (pointer) in `cell`, and protects it through `record`."
     while True:
         guess = cell.load()
         record.pin = guess
@@ -174,8 +181,10 @@ Window has [the similar `FlushProcessWriteBuffers`](https://docs.microsoft.com/e
 on other operating systems, we can probably [do something useful with scheduler statistics](https://github.com/pkhuong/barrierd) or ask for a new syscall.
 
 Armed with these new blocking system calls, we can replace the store-load fence in `R1` with a compiler barrier, and execute a slow `membarrier`/`FlushProcessWriteBuffers` after `C1`.
-The cleanup function will then wait long enough to ensure that any
+The cleanup function will then wait long enough[^arguably-lock-ful] to ensure that any
 read-side operation that had executed before `R1` at the time we read the limbo list in `C1` will be visible (e.g., because the operating system knows a preemption interrupt executed at least once on each core).
+[^arguably-lock-ful]: I suppose this means the reclamation path isn't wait-free, or even lock-free, anymore, in the strict sense of the words. In practice, we're simply waiting for periodic events that would occur regardless of the syscalls we issue.
+
 The pseudocode for this asymmetric strategy follows.
 
 {% codeblock hp_read_membarrier.py %}
@@ -211,6 +220,8 @@ similarly to the key idea in [Concurrency Kit's atomic-free SPMC event count](ht
 we can use non-interlocked read-modify-write instructions,
 since any interrupt (please don't mention imprecise interrupts) will happen before or after any such instruction,
 and never in the middle of an instruction.
+
+Let's use that to simplify wait-free hazard pointers.
 
 Wait-free hazard pointers with interrupt-atomic instructions
 ------------------------------------------------------------
@@ -293,7 +304,7 @@ slow:
 We'll see that, in reasonable circumstances, this wait-free
 code sequence is faster than the usual membarrier-based lock-free
 read side.  But first, let's see how we can achieve wait-freedom
-without CISCy instructions, with an asymmetric "helping" scheme.
+when CISCy instructions like `MOVSQ` aren't available, with an asymmetric "helping" scheme.
 
 Interrupt-atomic copy, with some help
 -------------------------------------
@@ -847,5 +858,7 @@ hard blockers (e.g., library code, or when protecting arbitrary integers).
 TL;DR: Use [`hp_read_swf` if you know what you're doing](#hp_read_swf) or want more wait-free speed holes.  Otherwise, [`hp_read_movs_spec` is an all-around solid option on `x86` and `amd64`](#hp_read_movs_spec), and still wait-free.
 
 P.S., [Travis Downs](https://travisdowns.github.io/) notes that mem-mem `PUSH` might be an alternative to `MOVSQ`, but that requires either pointing `RSP` to arbitrary memory, or allocating hazard pointers on the stack (which isn't necessarily a bad idea).  Another idea worthy of investigation!
+
+<small>Thank you, Travis, for deciphering and validating a much rougher draft when the preprint dropped, and Paul, for helping me clarify this last iteration.</small>
 
 <p><hr style="width: 50%"></p>
