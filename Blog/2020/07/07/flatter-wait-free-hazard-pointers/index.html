@@ -811,7 +811,7 @@ pointers without crashing.  One might think mutual exclusion in the
 cleanup function fixes that, but programs often mix and match
 different reclamation schemes, as well as lock-free and lock-ful code.
 On Linux, we could
-abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;
+abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;<sup id="fnref:no-guarantees"><a href="#fn:no-guarantees" class="footnote">10</a></sup>
 in general I suppose we could install signal handlers to catch <code>SIGSEGV</code> and <code>SIGBUS</code>.</p>
 
 <p>Having to help readers forward also loses a nice practical property of
@@ -1025,7 +1025,7 @@ from realistic (if I found an inner loop that <em>only</em> traversed a
 singly linked list, I’d consider a different data structure), but helps
 establish an upper bound on the overhead from different hazard pointer
 read sides.  I would usually show a faceted graph of the latency
-distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen"><a href="#fn:did-not-randomize-codegen" class="footnote">10</a></sup>
+distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen"><a href="#fn:did-not-randomize-codegen" class="footnote">11</a></sup>
 that I doubt there’s any additional information to be found in the graphs,
 compared to the tables below.</p>
 
@@ -1203,6 +1203,9 @@ hard blockers (e.g., library code, or when protecting arbitrary integers).</p>
     </li>
     <li id="fn:travis-says-its-fine">
       <p>That’s what <a href="https://travisdowns.github.io/blog/2020/07/06/concurrency-costs.html">Travis Downs classifies as a Level 1 concurrency cost</a>, which is usually fine for writes, but adds a sizable overhead to simple read-only code. <a href="#fnref:travis-says-its-fine" class="reversefootnote">&#8617;</a></p>
+    </li>
+    <li id="fn:no-guarantees">
+      <p>With the caveat that the public documentation for <code>process_vm_readv</code> does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I’m pretty sure the kernel’s build flags prevent GCC/clang from converting it to <code>memcpy</code>. We could rely on the strong “don’t break userspace” culture, but it’s probably a better idea to try and get that guarantee in writing. <a href="#fnref:no-guarantees" class="reversefootnote">&#8617;</a></p>
     </li>
     <li id="fn:did-not-randomize-codegen">
       <p>Although I did compare several independent executions and confirmed the reported cycle counts were stable, I did not try to randomise code generation… mostly because I’m not looking for super fine differences as much as close enough runtimes.  Hopefully, aligning functions to 256 bytes leveled some bias away. <a href="#fnref:did-not-randomize-codegen" class="reversefootnote">&#8617;</a></p>
