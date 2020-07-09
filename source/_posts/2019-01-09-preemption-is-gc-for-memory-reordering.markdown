@@ -797,7 +797,7 @@ three 9s (as fast as membarrier \\(99.91-99.96\%\\) of the time,
 
 <!-- # ggplot(loaded[loaded$method != 'IPI' & loaded$method != 'mprotect' & loaded$latency < 100, ], aes(x=latency, color=method)) + geom_density() + labs(title="Distribution of preemption-based global barrier latency on a loaded system", colour="Method") + xlab("Latency (ms)") + ylab("Density") + coord_cartesian(xlim=c(0, 100)) -->
 
-<a href="/images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-preemption-large.png">
+<a id="loaded-preemption-latency" href="/images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-preemption-large.png">
 {% img center /images/2019-01-09-preemption-is-gc-for-memory-reordering/loaded-global-preemption.png %}
 </a>
 

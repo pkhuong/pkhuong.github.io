@@ -1,10 +1,12 @@
 ---
 layout: post
 title: "Flatter wait-free hazard pointers"
-date: 2020-07-07 14:30:22 -0400
+date: 2020-07-07 14:30:24 -0400
 comments: true
 categories:
 ---
+
+<small>2020-07-09: we can fix [time-travel in `hp_read_swf`](#hp_read_swf-relaxed) without changing the fast path. See [the addendum](#addendum-2020-07-09).</small>
 
 Back in February 2020, Blelloch and Wei submitted this cool preprint: [Concurrent Reference Counting and Resource Management in Wait-free Constant Time](https://arxiv.org/abs/2002.07053).
 Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.[^but-also]
@@ -462,7 +464,7 @@ for each record, only one cleanup at a time could be in flight?
 Interrupt-atomic copy, with at most one helper
 ----------------------------------------------
 
-Once we may assume mutual exclusion between cleanup loops, we don't
+Once we may assume mutual exclusion between cleanup loops--more specifically, the "help" loop, the only part that writes to records--we don't
 have to worry about ABA protection anymore.  Hazard pointer records
 can lose some weight.
 
@@ -488,7 +490,7 @@ def hp_read_swf(cell, record):
     guess = cell.load_acquire()  # R2
     record.pin.store_relaxed(guess)
     compiler_barrier()  # RB
-    if record.help.cell_or_pin < 0:
+    if record.help.cell_or_pin < 0:  # < cell.as_int() may compile to less code
         guess = (-record.help.cell_or_pin.load_acquire()).as_ptr()
     return guess
 {% endcodeblock %}
@@ -508,18 +510,18 @@ def hp_cleanup_swf(limbo, records):
                 # XXX: How do we know this is safe?!
                 value = -cell.as_ptr().load_acquire().as_int()
                 record.help.cell_or_pin.compare_exchange(cell, value)
-        os.membarrier()  # C2
-        pinned = set()
-        for record in records:
-            helped = record.help.cell_or_pin.load_relaxed()
-            if helped < 0:
-                pinned.add((-helped).as_ptr())
-            pinned.add(record.pin.load_relaxed())
-        for resource in to_reclaim:
-            if resource in pinned:
-                limbo.add(resource)
-            else:
-                resource.destroy()
+    os.membarrier()  # C2
+    pinned = set()
+    for record in records:
+        helped = record.help.cell_or_pin.load_relaxed()
+        if helped < 0:
+            pinned.add((-helped).as_ptr())
+        pinned.add(record.pin.load_relaxed())
+    for resource in to_reclaim:
+        if resource in pinned:
+            limbo.add(resource)
+        else:
+            resource.destroy()
 {% endcodeblock %}
 
 <a href="https://sequencediagram.org/index.html#initialData=C4S2BsFMAIGUQHYHMoFoDGUCGCCuAHaAdyzFQDMAnSGACywC8tKATafAe0WEkoCg++ZqHQghCYNABKkLC158WWYFgBGWAM4wAspAC2HSgE9BwkKPGSA6pTC8A9AGFsefAJt3KTlwVQA+XQNjAC5oAFV8JR5odEhwcGgANyxwXEg+GTlef0DDI1CABVxVcBANWmgVSiRISVj4vlzjfw8eL2dZV1CAcUo1aFK9VQ4BsuA+AF4JgDFIBFjpAEFoe2hHAEYpjNl5SgAeVCb86R2YuITk1PTM3Zz9PMLi0vL2RARINku0xvvjA9aHB0cARQgAZDhyM7xAD6hmh+EQfAB7R8+DuQWOjkWsCh4FhlHhiGg5EMJFYkxmcwWUgAQis1gAmLY3XgHI6hMJaXH4wkIaAgcj84AAcg00CwrwQPwxLVsbW8nRB0AA8qotJREh9Je9Pik0ho+EA">
@@ -883,12 +885,100 @@ impractical, but I can imagine code bases where they would constitute
 hard blockers (e.g., library code, or when protecting arbitrary integers).
 Finally, `hp_read_swf` can let protected values time travel in the future,
 with read sequences returning values so long after they were overwritten
-that the result violates pretty much any memory ordering model.
+that the result violates pretty much any memory ordering model... unless
+you implement the addendum below.
 
-TL;DR: [Use `hp_read_swf`](#hp_read_swf) if [you *really* know what you're doing](#hp_read_swf-relaxed).  When targeting `x86` and `amd64`, [`hp_read_movs_spec` is a well rounded option](#hp_read_movs_spec), and still wait-free.  Otherwise, [`hp_read_wf` uses standard operations](#hp_read_wf), but compiles down to more code.
+TL;DR: [Use `hp_read_swf`](#hp_read_swf) if you're willing to sacrifice wait-freedom on the reclamation path [and remember to implement the cleanup function with time travel protection](#addendum-2020-07-09).  When targeting `x86` and `amd64`, [`hp_read_movs_spec` is a well rounded option](#hp_read_movs_spec), and still wait-free.  Otherwise, [`hp_read_wf` uses standard operations](#hp_read_wf), but compiles down to more code.
 
 P.S., [Travis Downs](https://travisdowns.github.io/) notes that mem-mem `PUSH` might be an alternative to `MOVSQ`, but that requires either pointing `RSP` to arbitrary memory, or allocating hazard pointers on the stack (which isn't necessarily a bad idea).  Another idea worthy of investigation!
 
 <small>Thank you, Travis, for deciphering and validating a much rougher draft when the preprint dropped, and Paul and Jacob, for helping me clarify this last iteration.</small>
+
+<div id="addendum-2020-07-09"></div>
+
+Addendum 2020-07-09: fix time travel in `hp_read_swf`
+-----------------------------------------------------
+
+There is one huge practical issue with
+[`hp_read_swf`, our simple and wait-free hazard pointer read sequence](#hp_read_swf)
+that sacrifices lock-free reclamation to avoid x86-specific instructions:
+[when the cleanup loop must help a record forward, it can fill in old values in ways that violate causality](#hp_read_swf-relaxed).
+
+I noted that the reason for this hole is the lack of ABA protection in
+HP records... and [`hp_read_wf` is what we'd get if we were to add full ABA protection](#hp_read_wf).
+
+However, given mutual exclusion around the "help" loop in the cleanup
+function, we don't need full ABA protection.  What we really need to
+know is whether a given in-flight record we're about to CAS forward is
+the same in-flight record for which we read the cell's calue, or was
+overwritten by a read-side section.  We can encode that by
+stealing one more bit from the target `cell` address in `cell_or_pin`.
+
+We already steal the sign bit to distinguish the address of the `cell`
+to read (positive), from pinned values (negative).  The split make
+sense because 64 bit architectures tend to reserve high (negative)
+addresses for kernel space.  I doubt we'll see full 64 bit
+address spaces for a while, so it seems safe to steal the next bit
+(bit 62) to tag `cell` addresses.
+
+At a high level, we'll change the `hp_cleanup_swf` to tag
+`cell_or_pin` before reading the value pointed by `cell`, and only CAS in the
+new pinned value if the cell is still tagged.  We only have to update
+the `for record in records` block.
+
+{% codeblock hp_cleanup_swf_no_time_travel.py %}
+def hp_cleanup_swf_no_time_travel(limbo, records):
+    with cleanup_lock:
+        to_reclaim = limbo.consume_snapshot_acquire()
+        os.membarrier()  # C1
+        for record in records:
+            cell = record.help.cell_or_pin.load_relaxed()
+            if cell <= 0:
+                continue
+            # We assume valid addresses do not have that bit set.
+            if (cell & (1 << 62)) != 0:
+                continue
+            tagged = cell | (1 << 62)
+            if record.help.cell_or_pin.compare_exchange(cell, tagged):
+                # Compare exchange should act as a store-load barrier.
+                # XXX: How do we know this load is safe?!
+                value = -cell.as_ptr().load_acquire().as_int()
+                record.help.cell_or_pin.compare_exchange(tagged, value)
+    os.membarrier()  # C2
+    pinned = set()
+    for record in records:
+        helped = record.help.cell_or_pin.load_relaxed()
+        if helped < 0:
+            pinned.add((-helped).as_ptr())
+        pinned.add(record.pin.load_relaxed())
+    for resource in to_reclaim:
+        if resource in pinned:
+            limbo.add(resource)
+        else:
+            resource.destroy()
+{% endcodeblock %}
+
+We doubled the number of atomic operations in the helping loop, but
+that's ok: we're already on a slow path.  We also rely on strong
+`compare_exchange` (compare-and-swap) acting as a store-load fence.
+If that doesn't come for free, we could also tag records in one pass,
+issue a store-load fence, and help stagged records in a
+second pass.
+
+Another practical issue with the `swf`/`wf` cleanup approach is that
+they require *two* membarriers, and
+[OS-provided implementations can be slow, especially under load](/Blog/2019/01/09/preemption-is-gc-for-memory-reordering/#loaded-preemption-latency).
+This is particularly important for the `swf` approach, since mutual
+exclusion means that one slow `membarrier` delays the physical destruction of everything on the limbo list.
+
+I don't think we can get rid of mutual exclusion, and, while
+[we can improve membarrier latency](https://github.com/pkhuong/barrierd),
+reducing the number of membarriers on the reclamation path is always good.
+
+We can software pipeline calls to the cleanup function,
+and use the same `membarrier` for `C1` and `C2` in two consecutive
+cleanup calls.  Overlapping cleanups decreases the worst-case reclaim
+latency from 4 membarriers to 3, and that's not negligible when each
+`membarrier` can block for 30ms.
 
 <p><hr style="width: 50%"></p>
