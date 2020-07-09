@@ -923,8 +923,9 @@ address spaces for a while, so it seems safe to steal the next bit
 
 At a high level, we'll change the `hp_cleanup_swf` to tag
 `cell_or_pin` before reading the value pointed by `cell`, and only CAS in the
-new pinned value if the cell is still tagged.  We only have to update
-the `for record in records` block.
+new pinned value if the cell is still tagged.
+Thanks to mutual exclusion, we know `cell_or_pin` can't be re-tagged by another thread.
+Only the `for record in records` block has to change.
 
 {% codeblock hp_cleanup_swf_no_time_travel.py %}
 def hp_cleanup_swf_no_time_travel(limbo, records):
@@ -959,10 +960,10 @@ def hp_cleanup_swf_no_time_travel(limbo, records):
 {% endcodeblock %}
 
 We doubled the number of atomic operations in the helping loop, but
-that's ok: we're already on a slow path.  We also rely on strong
+that's acceptable on the slow path.  We also rely on strong
 `compare_exchange` (compare-and-swap) acting as a store-load fence.
 If that doesn't come for free, we could also tag records in one pass,
-issue a store-load fence, and help stagged records in a
+issue a store-load fence, and help tagged records in a
 second pass.
 
 Another practical issue with the `swf`/`wf` cleanup approach is that
