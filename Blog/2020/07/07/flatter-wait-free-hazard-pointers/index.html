@@ -1229,8 +1229,9 @@ address spaces for a while, so it seems safe to steal the next bit
 
 <p>At a high level, we’ll change the <code>hp_cleanup_swf</code> to tag
 <code>cell_or_pin</code> before reading the value pointed by <code>cell</code>, and only CAS in the
-new pinned value if the cell is still tagged.  We only have to update
-the <code>for record in records</code> block.</p>
+new pinned value if the cell is still tagged.
+Thanks to mutual exclusion, we know <code>cell_or_pin</code> can’t be re-tagged by another thread.
+Only the <code>for record in records</code> block has to change.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_cleanup_swf_no_time_travel.py </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -1294,10 +1295,10 @@ the <code>for record in records</code> block.</p>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>We doubled the number of atomic operations in the helping loop, but
-that’s ok: we’re already on a slow path.  We also rely on strong
+that’s acceptable on the slow path.  We also rely on strong
 <code>compare_exchange</code> (compare-and-swap) acting as a store-load fence.
 If that doesn’t come for free, we could also tag records in one pass,
-issue a store-load fence, and help stagged records in a
+issue a store-load fence, and help tagged records in a
 second pass.</p>
 
 <p>Another practical issue with the <code>swf</code>/<code>wf</code> cleanup approach is that
