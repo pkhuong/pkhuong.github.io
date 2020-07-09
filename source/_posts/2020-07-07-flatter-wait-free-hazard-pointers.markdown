@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Flatter wait-free hazard pointers"
-date: 2020-07-07 14:30:24 -0400
+date: 2020-07-07 14:30:25 -0400
 comments: true
 categories:
 ---
@@ -608,7 +608,10 @@ causality, and even let long-overwritten values time travel into the future.  Th
 simpler read-side code sequence comes at a cost: its load is extremely
 relaxed, much more so than any intuitive mental model might allow.[^hybrid-swf]
 
-[^hybrid-swf]: This problem feels like something we could address with a coarse epoch-based versioning scheme.  It's however not clear to me that the result would be much simpler than `hp_read_wf`, and we'd have to steal even more bits (2 bits, I expect) from `cell_or_pin` to make room for the epoch.
+[^hybrid-swf]: This problem feels like something we could address with a coarse epoch-based versioning scheme.  It's however not clear to me that the result would be much simpler than `hp_read_wf`, and we'd have to steal even more bits (2 bits, I expect) from `cell_or_pin` to make room for the epoch.  EDIT 2020-07-09: it turns out [we only need to steal one bit](#addendum-2020-07-09).
+
+EDIT 2020-07-09: However, see [this addendum](#addendum-2020-07-09) for a way to fix that race
+without affecting the fast (read) path.
 
 Having to help readers forward also loses a nice practical property of
 hazard pointers: it's always safe to spuriously consider arbitrary
@@ -917,9 +920,13 @@ stealing one more bit from the target `cell` address in `cell_or_pin`.
 We already steal the sign bit to distinguish the address of the `cell`
 to read (positive), from pinned values (negative).  The split make
 sense because 64 bit architectures tend to reserve high (negative)
-addresses for kernel space.  I doubt we'll see full 64 bit
-address spaces for a while, so it seems safe to steal the next bit
-(bit 62) to tag `cell` addresses.
+addresses for kernel space.  I doubt we'll see full 64 bit address
+spaces for a while, so it seems safe to steal the next bit (bit 62) to
+tag `cell` addresses.  The next table summarises the tagging scheme.
+
+    00xxxx: untagged cell address
+    01xxxx: tagged cell address
+    1yyyyy: helped pinned value
 
 At a high level, we'll change the `hp_cleanup_swf` to tag
 `cell_or_pin` before reading the value pointed by `cell`, and only CAS in the
