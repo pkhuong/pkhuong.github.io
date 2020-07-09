@@ -115,7 +115,9 @@ July
   </header>
 
 
-<div class="entry-content" style="font-family: ; font-size: "><p>Back in February 2020, Blelloch and Wei submitted this cool preprint: <a href="https://arxiv.org/abs/2002.07053">Concurrent Reference Counting and Resource Management in Wait-free Constant Time</a>.
+<div class="entry-content" style="font-family: ; font-size: "><p><small>2020-07-09: we can fix <a href="#hp_read_swf-relaxed">time-travel in <code>hp_read_swf</code></a> without changing the fast path. See <a href="#addendum-2020-07-09">the addendum</a>.</small></p>
+
+<p>Back in February 2020, Blelloch and Wei submitted this cool preprint: <a href="https://arxiv.org/abs/2002.07053">Concurrent Reference Counting and Resource Management in Wait-free Constant Time</a>.
 Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also"><a href="#fn:but-also" class="footnote">1</a></sup>
 <a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">Safe memory reclamation (PDF)</a> is a key component in lock-free algorithms when garbage collection isn’t an option,<sup id="fnref:it-is-gc"><a href="#fn:it-is-gc" class="footnote">2</a></sup>
 and <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">hazard pointers (PDF)</a> let us bound the amount of resources stranded by delayed cleanups much more tightly than, e.g., <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf">epoch reclamation (PDF)</a>.
@@ -657,7 +659,7 @@ for each record, only one cleanup at a time could be in flight?</p>
 
 <h2 id="interrupt-atomic-copy-with-at-most-one-helper">Interrupt-atomic copy, with at most one helper</h2>
 
-<p>Once we may assume mutual exclusion between cleanup loops, we don’t
+<p>Once we may assume mutual exclusion between cleanup loops–more specifically, the “help” loop, the only part that writes to records–we don’t
 have to worry about ABA protection anymore.  Hazard pointer records
 can lose some weight.</p>
 
@@ -698,7 +700,7 @@ generation counter to obtain unique sequence values, it’s even simpler.</p>
 </span><span class="line">    <span class="n">guess</span> <span class="o">=</span> <span class="n">cell</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">()</span>  <span class="c1"># R2</span>
 </span><span class="line">    <span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">store_relaxed</span><span class="p">(</span><span class="n">guess</span><span class="p">)</span>
 </span><span class="line">    <span class="n">compiler_barrier</span><span class="p">()</span>  <span class="c1"># RB</span>
-</span><span class="line">    <span class="k">if</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">    <span class="k">if</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>  <span class="c1"># &lt; cell.as_int() may compile to less code</span>
 </span><span class="line">        <span class="n">guess</span> <span class="o">=</span> <span class="p">(</span><span class="o">-</span><span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">())</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">()</span>
 </span><span class="line">    <span class="k">return</span> <span class="n">guess</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
@@ -740,18 +742,18 @@ encoding scheme.</p>
 </span><span class="line">                <span class="c1"># XXX: How do we know this is safe?!</span>
 </span><span class="line">                <span class="n">value</span> <span class="o">=</span> <span class="o">-</span><span class="n">cell</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">()</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">()</span><span class="o">.</span><span class="n">as_int</span><span class="p">()</span>
 </span><span class="line">                <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">compare_exchange</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
-</span><span class="line">        <span class="n">os</span><span class="o">.</span><span class="n">membarrier</span><span class="p">()</span>  <span class="c1"># C2</span>
-</span><span class="line">        <span class="n">pinned</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
-</span><span class="line">        <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
-</span><span class="line">            <span class="n">helped</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span>
-</span><span class="line">            <span class="k">if</span> <span class="n">helped</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
-</span><span class="line">                <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">((</span><span class="o">-</span><span class="n">helped</span><span class="p">)</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">())</span>
-</span><span class="line">            <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">())</span>
-</span><span class="line">        <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">to_reclaim</span><span class="p">:</span>
-</span><span class="line">            <span class="k">if</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">pinned</span><span class="p">:</span>
-</span><span class="line">                <span class="n">limbo</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">resource</span><span class="p">)</span>
-</span><span class="line">            <span class="k">else</span><span class="p">:</span>
-</span><span class="line">                <span class="n">resource</span><span class="o">.</span><span class="n">destroy</span><span class="p">()</span>
+</span><span class="line">    <span class="n">os</span><span class="o">.</span><span class="n">membarrier</span><span class="p">()</span>  <span class="c1"># C2</span>
+</span><span class="line">    <span class="n">pinned</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+</span><span class="line">        <span class="n">helped</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">helped</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">            <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">((</span><span class="o">-</span><span class="n">helped</span><span class="p">)</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">())</span>
+</span><span class="line">        <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">())</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">to_reclaim</span><span class="p">:</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">pinned</span><span class="p">:</span>
+</span><span class="line">            <span class="n">limbo</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">resource</span><span class="p">)</span>
+</span><span class="line">        <span class="k">else</span><span class="p">:</span>
+</span><span class="line">            <span class="n">resource</span><span class="o">.</span><span class="n">destroy</span><span class="p">()</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p><a href="https://sequencediagram.org/index.html#initialData=C4S2BsFMAIGUQHYHMoFoDGUCGCCuAHaAdyzFQDMAnSGACywC8tKATafAe0WEkoCg++ZqHQghCYNABKkLC158WWYFgBGWAM4wAspAC2HSgE9BwkKPGSA6pTC8A9AGFsefAJt3KTlwVQA+XQNjAC5oAFV8JR5odEhwcGgANyxwXEg+GTlef0DDI1CABVxVcBANWmgVSiRISVj4vlzjfw8eL2dZV1CAcUo1aFK9VQ4BsuA+AF4JgDFIBFjpAEFoe2hHAEYpjNl5SgAeVCb86R2YuITk1PTM3Zz9PMLi0vL2RARINku0xvvjA9aHB0cARQgAZDhyM7xAD6hmh+EQfAB7R8+DuQWOjkWsCh4FhlHhiGg5EMJFYkxmcwWUgAQis1gAmLY3XgHI6hMJaXH4wkIaAgcj84AAcg00CwrwQPwxLVsbW8nRB0AA8qotJREh9Je9Pik0ho+EA">
@@ -1190,13 +1192,129 @@ impractical, but I can imagine code bases where they would constitute
 hard blockers (e.g., library code, or when protecting arbitrary integers).
 Finally, <code>hp_read_swf</code> can let protected values time travel in the future,
 with read sequences returning values so long after they were overwritten
-that the result violates pretty much any memory ordering model.</p>
+that the result violates pretty much any memory ordering model… unless
+you implement the addendum below.</p>
 
-<p>TL;DR: <a href="#hp_read_swf">Use <code>hp_read_swf</code></a> if <a href="#hp_read_swf-relaxed">you <em>really</em> know what you’re doing</a>.  When targeting <code>x86</code> and <code>amd64</code>, <a href="#hp_read_movs_spec"><code>hp_read_movs_spec</code> is a well rounded option</a>, and still wait-free.  Otherwise, <a href="#hp_read_wf"><code>hp_read_wf</code> uses standard operations</a>, but compiles down to more code.</p>
+<p>TL;DR: <a href="#hp_read_swf">Use <code>hp_read_swf</code></a> if you’re willing to sacrifice wait-freedom on the reclamation path <a href="#addendum-2020-07-09">and remember to implement the cleanup function with time travel protection</a>.  When targeting <code>x86</code> and <code>amd64</code>, <a href="#hp_read_movs_spec"><code>hp_read_movs_spec</code> is a well rounded option</a>, and still wait-free.  Otherwise, <a href="#hp_read_wf"><code>hp_read_wf</code> uses standard operations</a>, but compiles down to more code.</p>
 
 <p>P.S., <a href="https://travisdowns.github.io/">Travis Downs</a> notes that mem-mem <code>PUSH</code> might be an alternative to <code>MOVSQ</code>, but that requires either pointing <code>RSP</code> to arbitrary memory, or allocating hazard pointers on the stack (which isn’t necessarily a bad idea).  Another idea worthy of investigation!</p>
 
 <p><small>Thank you, Travis, for deciphering and validating a much rougher draft when the preprint dropped, and Paul and Jacob, for helping me clarify this last iteration.</small></p>
+
+<div id="addendum-2020-07-09"></div>
+
+<h2 id="addendum-2020-07-09-fix-time-travel-in-hp_read_swf">Addendum 2020-07-09: fix time travel in <code>hp_read_swf</code></h2>
+
+<p>There is one huge practical issue with
+<a href="#hp_read_swf"><code>hp_read_swf</code>, our simple and wait-free hazard pointer read sequence</a>
+that sacrifices lock-free reclamation to avoid x86-specific instructions:
+<a href="#hp_read_swf-relaxed">when the cleanup loop must help a record forward, it can fill in old values in ways that violate causality</a>.</p>
+
+<p>I noted that the reason for this hole is the lack of ABA protection in
+HP records… and <a href="#hp_read_wf"><code>hp_read_wf</code> is what we’d get if we were to add full ABA protection</a>.</p>
+
+<p>However, given mutual exclusion around the “help” loop in the cleanup
+function, we don’t need full ABA protection.  What we really need to
+know is whether a given in-flight record we’re about to CAS forward is
+the same in-flight record for which we read the cell’s calue, or was
+overwritten by a read-side section.  We can encode that by
+stealing one more bit from the target <code>cell</code> address in <code>cell_or_pin</code>.</p>
+
+<p>We already steal the sign bit to distinguish the address of the <code>cell</code>
+to read (positive), from pinned values (negative).  The split make
+sense because 64 bit architectures tend to reserve high (negative)
+addresses for kernel space.  I doubt we’ll see full 64 bit
+address spaces for a while, so it seems safe to steal the next bit
+(bit 62) to tag <code>cell</code> addresses.</p>
+
+<p>At a high level, we’ll change the <code>hp_cleanup_swf</code> to tag
+<code>cell_or_pin</code> before reading the value pointed by <code>cell</code>, and only CAS in the
+new pinned value if the cell is still tagged.  We only have to update
+the <code>for record in records</code> block.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_cleanup_swf_no_time_travel.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hp_cleanup_swf_no_time_travel</span><span class="p">(</span><span class="n">limbo</span><span class="p">,</span> <span class="n">records</span><span class="p">):</span>
+</span><span class="line">    <span class="k">with</span> <span class="n">cleanup_lock</span><span class="p">:</span>
+</span><span class="line">        <span class="n">to_reclaim</span> <span class="o">=</span> <span class="n">limbo</span><span class="o">.</span><span class="n">consume_snapshot_acquire</span><span class="p">()</span>
+</span><span class="line">        <span class="n">os</span><span class="o">.</span><span class="n">membarrier</span><span class="p">()</span>  <span class="c1"># C1</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+</span><span class="line">            <span class="n">cell</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span>
+</span><span class="line">            <span class="k">if</span> <span class="n">cell</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">                <span class="k">continue</span>
+</span><span class="line">            <span class="c1"># We assume valid addresses do not have that bit set.</span>
+</span><span class="line">            <span class="k">if</span> <span class="p">(</span><span class="n">cell</span> <span class="o">&amp;</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">62</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">                <span class="k">continue</span>
+</span><span class="line">            <span class="n">tagged</span> <span class="o">=</span> <span class="n">cell</span> <span class="o">|</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">62</span><span class="p">)</span>
+</span><span class="line">            <span class="k">if</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">compare_exchange</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">tagged</span><span class="p">):</span>
+</span><span class="line">                <span class="c1"># Compare exchange should act as a store-load barrier.</span>
+</span><span class="line">                <span class="c1"># XXX: How do we know this load is safe?!</span>
+</span><span class="line">                <span class="n">value</span> <span class="o">=</span> <span class="o">-</span><span class="n">cell</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">()</span><span class="o">.</span><span class="n">load_acquire</span><span class="p">()</span><span class="o">.</span><span class="n">as_int</span><span class="p">()</span>
+</span><span class="line">                <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">compare_exchange</span><span class="p">(</span><span class="n">tagged</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+</span><span class="line">    <span class="n">os</span><span class="o">.</span><span class="n">membarrier</span><span class="p">()</span>  <span class="c1"># C2</span>
+</span><span class="line">    <span class="n">pinned</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+</span><span class="line">        <span class="n">helped</span> <span class="o">=</span> <span class="n">record</span><span class="o">.</span><span class="n">help</span><span class="o">.</span><span class="n">cell_or_pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">()</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">helped</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">            <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">((</span><span class="o">-</span><span class="n">helped</span><span class="p">)</span><span class="o">.</span><span class="n">as_ptr</span><span class="p">())</span>
+</span><span class="line">        <span class="n">pinned</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">pin</span><span class="o">.</span><span class="n">load_relaxed</span><span class="p">())</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">to_reclaim</span><span class="p">:</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">pinned</span><span class="p">:</span>
+</span><span class="line">            <span class="n">limbo</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">resource</span><span class="p">)</span>
+</span><span class="line">        <span class="k">else</span><span class="p">:</span>
+</span><span class="line">            <span class="n">resource</span><span class="o">.</span><span class="n">destroy</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We doubled the number of atomic operations in the helping loop, but
+that’s ok: we’re already on a slow path.  We also rely on strong
+<code>compare_exchange</code> (compare-and-swap) acting as a store-load fence.
+If that doesn’t come for free, we could also tag records in one pass,
+issue a store-load fence, and help stagged records in a
+second pass.</p>
+
+<p>Another practical issue with the <code>swf</code>/<code>wf</code> cleanup approach is that
+they require <em>two</em> membarriers, and
+<a href="/Blog/2019/01/09/preemption-is-gc-for-memory-reordering/#loaded-preemption-latency">OS-provided implementations can be slow, especially under load</a>.
+This is particularly important for the <code>swf</code> approach, since mutual
+exclusion means that one slow <code>membarrier</code> delays the physical destruction of everything on the limbo list.</p>
+
+<p>I don’t think we can get rid of mutual exclusion, and, while
+<a href="https://github.com/pkhuong/barrierd">we can improve membarrier latency</a>,
+reducing the number of membarriers on the reclamation path is always good.</p>
+
+<p>We can software pipeline calls to the cleanup function,
+and use the same <code>membarrier</code> for <code>C1</code> and <code>C2</code> in two consecutive
+cleanup calls.  Overlapping cleanups decreases the worst-case reclaim
+latency from 4 membarriers to 3, and that’s not negligible when each
+<code>membarrier</code> can block for 30ms.</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes">
