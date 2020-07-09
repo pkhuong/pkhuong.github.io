@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-07-09T12:19:41-04:00</updated>
+  <updated>2020-07-09T18:52:33-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -16,7 +16,7 @@
   <entry>
     <title type="html"><![CDATA[Flatter wait-free hazard pointers]]></title>
     <link href="https://www.pvk.ca/Blog/2020/07/07/flatter-wait-free-hazard-pointers/"/>
-    <updated>2020-07-07T14:30:24-04:00</updated>
+    <updated>2020-07-07T14:30:25-04:00</updated>
     <id>https://www.pvk.ca/Blog/2020/07/07/flatter-wait-free-hazard-pointers</id>
     <content type="html"><![CDATA[<p><small>2020-07-09: we can fix <a href="#hp_read_swf-relaxed">time-travel in <code>hp_read_swf</code></a> without changing the fast path. See <a href="#addendum-2020-07-09">the addendum</a>.</small></p>
 
@@ -740,6 +740,9 @@ causality, and even let long-overwritten values time travel into the future.  Th
 simpler read-side code sequence comes at a cost: its load is extremely
 relaxed, much more so than any intuitive mental model might allow.<sup id="fnref:hybrid-swf"><a href="#fn:hybrid-swf" class="footnote">12</a></sup></p>
 
+<p>EDIT 2020-07-09: However, see <a href="#addendum-2020-07-09">this addendum</a> for a way to fix that race
+without affecting the fast (read) path.</p>
+
 <p>Having to help readers forward also loses a nice practical property of
 hazard pointers: it’s always safe to spuriously consider arbitrary
 (readable) memory as a hazard pointer record, it only costs us
@@ -1126,9 +1129,14 @@ stealing one more bit from the target <code>cell</code> address in <code>cell_or
 <p>We already steal the sign bit to distinguish the address of the <code>cell</code>
 to read (positive), from pinned values (negative).  The split make
 sense because 64 bit architectures tend to reserve high (negative)
-addresses for kernel space.  I doubt we’ll see full 64 bit
-address spaces for a while, so it seems safe to steal the next bit
-(bit 62) to tag <code>cell</code> addresses.</p>
+addresses for kernel space.  I doubt we’ll see full 64 bit address
+spaces for a while, so it seems safe to steal the next bit (bit 62) to
+tag <code>cell</code> addresses.  The next table summarises the tagging scheme.</p>
+
+<pre><code>00xxxx: untagged cell address
+01xxxx: tagged cell address
+1yyyyy: helped pinned value
+</code></pre>
 
 <p>At a high level, we’ll change the <code>hp_cleanup_swf</code> to tag
 <code>cell_or_pin</code> before reading the value pointed by <code>cell</code>, and only CAS in the
@@ -1257,7 +1265,7 @@ latency from 4 membarriers to 3, and that’s not negligible when each
       <p>With the caveat that the public documentation for <code>process_vm_readv</code> does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I’m pretty sure the kernel’s build flags prevent GCC/clang from converting it to <code>memcpy</code>. We could rely on the strong “don’t break userspace” culture, but it’s probably a better idea to try and get that guarantee in writing. <a href="#fnref:no-guarantees" class="reversefootnote">&#8617;</a></p>
     </li>
     <li id="fn:hybrid-swf">
-      <p>This problem feels like something we could address with a coarse epoch-based versioning scheme.  It’s however not clear to me that the result would be much simpler than <code>hp_read_wf</code>, and we’d have to steal even more bits (2 bits, I expect) from <code>cell_or_pin</code> to make room for the epoch. <a href="#fnref:hybrid-swf" class="reversefootnote">&#8617;</a></p>
+      <p>This problem feels like something we could address with a coarse epoch-based versioning scheme.  It’s however not clear to me that the result would be much simpler than <code>hp_read_wf</code>, and we’d have to steal even more bits (2 bits, I expect) from <code>cell_or_pin</code> to make room for the epoch.  EDIT 2020-07-09: it turns out <a href="#addendum-2020-07-09">we only need to steal one bit</a>. <a href="#fnref:hybrid-swf" class="reversefootnote">&#8617;</a></p>
     </li>
     <li id="fn:did-not-randomize-codegen">
       <p>Although I did compare several independent executions and confirmed the reported cycle counts were stable, I did not try to randomise code generation… mostly because I’m not looking for super fine differences as much as close enough runtimes.  Hopefully, aligning functions to 256 bytes leveled some bias away. <a href="#fnref:did-not-randomize-codegen" class="reversefootnote">&#8617;</a></p>
