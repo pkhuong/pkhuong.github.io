@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Flatter wait-free hazard pointers"
-date: 2020-07-07 14:30:25 -0400
+date: 2020-07-07 14:30:26 -0400
 comments: true
 categories:
 ---
@@ -19,7 +19,7 @@ which can be annoying for code generation and bad for worst-case time bounds.
 
 [^it-is-gc]: In fact, I've often argued that SMR *is* garbage collection, just not fully tracing GC.  Hazard pointers in particular look a lot like deferred reference counting, [a form of tracing GC](https://web.eecs.umich.edu/~weimerw/2012-4610/reading/bacon-garbage.pdf).
 
-Blelloch and Wei's wait-free algorithm eliminates that loop... with a construction that stacks [two emulated primitives---atomic copy, itself implemented with strong LL/SC---](https://arxiv.org/abs/1911.09671)on top of what real hardware offers.
+Blelloch and Wei's wait-free algorithm eliminates that loop... with a construction that stacks [two emulated primitives---strong LL/SC, and atomic copy, implemented with the former---](https://arxiv.org/abs/1911.09671)on top of what real hardware offers.
 I see the real value of the construction in proving that wait-freedom is achievable,[^not-obvious]
 and that the key is atomic memory-memory copies.
 
@@ -45,10 +45,12 @@ The introduction includes a concise explanation of the safe memory reclamation (
 
 In other words, a solution to the SMR problem lets us know when it's safe to
 *physically release* resources that used to be owned by a linked data structure,
-once all links to these resources have been removed from that data structure (after "logical deletion").
+once all links to these resources have been removed from that data structure ([after "logical deletion"](http://concurrencykit.org/presentations/ebr.pdf#page=8)).
 The problem makes intuitive sense for dynamically managed memory,
 but it applies equally well to any resource (e.g., file descriptors),
-and its solutions can even be seen as extremely read-optimised reader/writer locks.
+and its solutions can even be seen as extremely read-optimised reader/writer locks.[^RCU]
+
+[^RCU]: The SMR problem is essentially the same problem as determining when it's safe to return from `rcu_synchronize` or execute a `rcu_call` callback.  Hence, the same [reader-writer lock analogy](https://www.usenix.org/legacy/publications/library/proceedings/usenix03/tech/freenix03/full_papers/arcangeli/arcangeli.pdf#page=5) holds.
 
 The basic idea behind Hazard Pointers is to have
 each thread publish to permanently allocated[^stable-alloc] hazard pointer records (HP records) the set of resources (pointers) it's temporarily borrowing from a lock-free data structure.
@@ -139,6 +141,18 @@ We must make sure all the values in the limbo list we grab in `C1`
 were added to the list (and thus logically deleted) before we read any
 of the records in `C2`, with the  acquire read in `C1`
 matching the store-load fence in `R1`.
+
+It's important to note that the cleanup loop does not implement
+anything like an atomic snapshot of all the records.  The reclamation
+logic is correct as long as we scan the correct value for records that
+have had the same pinned value since before `C1`: we assume that a
+resource only enters the limbo list once *all* its persistent
+references have been cleared (in particular, this means circular
+backreferences must be broken before scheduling a node for
+destruction), so any newly pinned value cannot refer to any resource
+awaiting destruction in the limbo list.[^DEBRA-plus]
+
+[^DEBRA-plus]: In [Reclaiming Memory for Lock-Free Data Structures: There has to be a Better Way](http://www.cs.utoronto.ca/~tabrown/debra/fullpaper.pdf), Trevor Brown argues this requirement is a serious flaw in all hazard pointer schemes.  I think it mostly means applications should be careful to coarsen the definition of resource in order to ensure the resulting condensed heap graph is a DAG.  In extreme cases, we end up proxy collecting an epoch, but we can usually do much better.
 
 The following sequence diagrams shows how the fencing guarantees that any
 iteration of `hp_read_explicit` will fail if it starts before `C1`
@@ -283,7 +297,7 @@ predictable control dependency.  In very low level pseudo code, this
 def hp_read_movs_spec(cell, record):
     guess = cell.load_relaxed()
     x86.movs(record.pin, cell)  # R1
-    if guess == record.pin:
+    if guess == record.pin:  # Likely
         return guess
     return record.pin
 {% endcodeblock %}
@@ -312,36 +326,56 @@ when CISCy instructions like `MOVSQ` aren't available, with an asymmetric "helpi
 Interrupt-atomic copy, with some help
 -------------------------------------
 
-Blelloch and Wei's wait-free atomic copy primitive builds on the
-usual trick for wait-free algorithms: when a thread would wait for an
-operation to complete, it helps that operation make progress
-instead of blocking.
+Blelloch and Wei's wait-free atomic copy primitive builds on the usual
+trick for wait-free algorithms: when a thread would wait for an
+operation to complete, it helps that operation make progress instead
+of blocking.  In this specific case, a thread initiates an atomic copy
+by acquiring a fresh hazard pointer record, setting that descriptor's
+`pin` field to \\(\bot\\), publishing the address it wants to
+copy from, and then performing the actual copy.  When another thread
+enters the cleanup loop and wishes to read the record's `pin` field , it may either find a value, or
+\\(\bot\\); in the latter case, the cleanup thread has to help the
+hazard pointer descriptor forward, by attempting to update the
+descriptor's `pin` field.
 
 This strategy has the marked advantage of working.  However, it's
 also symmetric between the common case (the thread that initiated
-the operation quickly completes it), and the worst case (another
+the operation quickly completes it), and the worst case (a cleanup
 thread notices the initiating thread got stuck and moves the
-operation along).  We pessimised the common case in order to eliminate blocking in the worst case, a frequent and unfortunate pattern in wait-free algorithms.
+operation along).
+This forces the common case to use atomic operations, similarly to the way cleanup threads would.
+We pessimised the common case in order to eliminate blocking in the worst case, a frequent and unfortunate pattern in wait-free algorithms.
 
-The source of the symmetry is our specification of an atomic copy
-from one source field to one destination field, which must
+The source of that symmetry is our specification of an atomic copy
+from the source field to a single destination `pin` field, which must
 be written exactly once by the thread that initiated the copy
 (the hazard pointer reader), or any concurrent helper (the cleanup loop).
 
 We can relax that requirement, since we know that the hazard pointer
 scanning loop can handle spurious or garbage pinned values.  Rather
-than forcing both the fast path and the slow path to write to the same
+than forcing both the read sequence (fast path) and the cleanup loop (slow path) to write to the same
 `pin` field, we will give each HP record *two* pin fields: a
 single-writer one for the fast path, and a multi-writer one for all
-helpers.
+helpers (all threads in cleanup code).
+
+The read-side sequence will have to first write to the HP record to
+publish the cell it's reading from, read and publish the cell's pinned
+value, and then check if a cleanup thread helped the record along.  If
+the record was helped, the read-side sequence must use the value
+written by the helping cleanup thread.  This means cleanup threads can
+detect when a HP record is missing its pinned value, and help it along
+with the cell's current value.  Cleanup threads may later observe two
+pinned values (both the reader and a cleanup thread wrote a pinned
+value); in that case, both values are conservatively protected from
+physical destruction.
 
 Until now a hazard pointer record has only had one field, the "pinned"
 value.  We must add some complexity to make this asymmetric helping
-scheme work: in order for helpers to be able to help, we must publish
-the cell we are reading, and we need somewhere for helpers to write
-the pinned value they read.  We also need some sort of ABA protection
-to make sure slow helpers don't overwrite a fresher pinned value
-with a stale one, when the *helper* gets stuck (preempted).
+scheme work: in order for cleanup threads to be able to help, we must publish
+the cell we are reading, and we need somewhere for cleanup threads to write
+the pinned value they read.  We also need some sort of [ABA protection](https://en.wikipedia.org/wiki/ABA_problem)
+to make sure slow cleanup threads don't overwrite a fresher pinned value
+with a stale one, when the *cleanup thread* gets stuck (preempted).
 
 Concretely, the HP record still has a `pin` field, which is only
 written by the reader that owns the record, and read by cleanup
@@ -368,9 +402,10 @@ struct hp_record_wf {
 
 At this point, any cleanup thread should be able to notice that the
 `help.pin_or_gen` is a generation value, and find a valid cell address
-in `help.cell`.  That's enough to read the cell's value, and publish to
-the address it just read with an atomic compare-and-swap (CAS) of
-`pin_or_gen`: if the CAS fails, another helper got there first, or
+in `help.cell`.  That's all the information a cleanup threads needs to 
+attempt to help the record move forward.  It can read the cell's value, and publish
+the pinned value it just read with an atomic compare-and-swap (CAS) of
+`pin_or_gen`; if the CAS fails, another cleanup thread got there first, or
 the reader has already moved on to a new target cell.  In the latter
 case, any in-flight hazard pointer read sequence started before we
 started reclaiming the limbo list, and it doesn't matter what pinned
@@ -378,14 +413,15 @@ value we extract from the record.
 
 Having populated the `help` subrecord, a reader can now publish a
 value in `pin`, and then look for a pinned value in
-`help.pin_or_gen`: if a helper published a pinned value there, the
+`help.pin_or_gen`: if a cleanup thread published a pinned value there, the
 reader must use it, and not the potentially stale (already destroyed)
 value the reader wrote to `pin`.
 
-On the read side, we can rely on two compiler barriers to let
+On the read side, we obtain plain wait-freedom, with standard operations.
+All we need are two compiler barriers to let
 membarriers guarantee writes to the `help` subrecord are visible
 before we start reading from the target cell, and to guarantee
-that any helper's write to `record.help.pin_or_gen` is visible
+that any cleanup thread's write to `record.help.pin_or_gen` is visible
 before we compare `record.help.pin_or_gen` against `gen`:
 
 <div id="hp_read_wf">
@@ -399,7 +435,7 @@ def hp_read_wf(cell, record):
     guess = cell.load_acquire()  # R2
     record.pin.store_relaxed(guess)
     compiler_barrier()  # RB
-    if record.help.pin_or_gen != gen:
+    if record.help.pin_or_gen.load_relaxed() != gen:  # Unlikely
         guess = record.help.pin_or_gen.load_acquire().as_ptr()
     return guess
 {% endcodeblock %}
@@ -420,6 +456,7 @@ def hp_cleanup_wf(limbo, records):
     os.membarrier()  # C1
     for record in records:
         gen = record.help.pin_or_gen.load_acquire()
+        # Help this record by populating its helped value.
         if gen < 0:
             # XXX: How do we know this is safe?!
             value = record.help.cell.load_relaxed().load_acquire()
@@ -443,7 +480,7 @@ read-side section executed `R2` before we consumed the limbo list, its
 writes to `record.help` must be visible.  The second membarrier in
 `C2` matches the compiler barrier in `RB`: if the read-side section
 has written to `record.pin`, that write must be visible, otherwise,
-the helper's write to `help.pin_or_gen` must be visible to the reader.
+the cleanup threads's write to `help.pin_or_gen` must be visible to the reader.
 Finally, when scanning for pinned values, we can't determine whether
 the reader used its own value or the one we published, so we must
 conservatively add both to the pinned set.
@@ -490,7 +527,7 @@ def hp_read_swf(cell, record):
     guess = cell.load_acquire()  # R2
     record.pin.store_relaxed(guess)
     compiler_barrier()  # RB
-    if record.help.cell_or_pin < 0:  # < cell.as_int() may compile to less code
+    if record.help.cell_or_pin < 0:  # Unlikely; < cell.as_int() also works.
         guess = (-record.help.cell_or_pin.load_acquire()).as_ptr()
     return guess
 {% endcodeblock %}
@@ -590,7 +627,7 @@ in general I suppose we could install signal handlers to catch `SIGSEGV` and `SI
 
 <div id="hp_read_swf-relaxed"></div>
 
-It's even worse for the single-cleanup `hp_read_swf` read sequence:
+The stale read problem is even worse for the single-cleanup `hp_read_swf` read sequence:
 there's no ABA protection, so a cleanup helper can pin an
 old value in `record.help.cell_or_pin`.  This could happen if a
 read-side sequence is initiated before `hp_cleanup_swf`'s `membarrier`
@@ -835,7 +872,7 @@ loops of 1000 pointer dereferences, on an unloaded E5-4617 @ 2.9 GHz.
 
 The difference between `unrolled` in this table and in the previous
 one shows we actually added around 5 cycles of latency per iteration
-with the multiplication in `frob_ptr`.  That dominates the overhead we
+with the multiplication in `frob_ptr`.  This dominates the overhead we
 estimated earlier for all the hazard pointer schemes except for the
 remarkably slow `hp_read_explicit` and `hp_read_movs`.  It's thus not
 surprising that all hazard pointer implementations but the latter
@@ -869,7 +906,7 @@ to something like `membarrier` or `FlushProcessWriteBuffers` on the
 slow cleanup (reclamation) path.  If one were to look at the
 microbenchmarks alone, one would probably pick `hp_read_swf`.
 
-However, the real world is more complex that microbenchmarks.  When I
+However, the real world is more complex than microbenchmarks.  When I
 have to extrapolate from microbenchmarks, I usually worry about the
 hidden impact of instruction bytes or cold branches, since
 microbenchmarks tend to fail at surfacing these things.  I'm not as
@@ -913,7 +950,7 @@ HP records... and [`hp_read_wf` is what we'd get if we were to add full ABA prot
 However, given mutual exclusion around the "help" loop in the cleanup
 function, we don't need full ABA protection.  What we really need to
 know is whether a given in-flight record we're about to CAS forward is
-the same in-flight record for which we read the cell's calue, or was
+the same in-flight record for which we read the cell's value, or was
 overwritten by a read-side section.  We can encode that by
 stealing one more bit from the target `cell` address in `cell_or_pin`.
 
@@ -924,9 +961,9 @@ addresses for kernel space.  I doubt we'll see full 64 bit address
 spaces for a while, so it seems safe to steal the next bit (bit 62) to
 tag `cell` addresses.  The next table summarises the tagging scheme.
 
-    00xxxx: untagged cell address
-    01xxxx: tagged cell address
-    1yyyyy: helped pinned value
+    0b00xxxx: untagged cell address
+    0b01xxxx: tagged cell address
+    0b1yyyyy: helped pinned value
 
 At a high level, we'll change the `hp_cleanup_swf` to tag
 `cell_or_pin` before reading the value pointed by `cell`, and only CAS in the
