@@ -219,16 +219,10 @@ and calculate. Once we fix the underlying success rate \(p = \hat{p}\),
 the conditional probability of observing \(a\) successes and \(b\)
 failures is</p>
 
-<table>
-  <tbody>
-    <tr>
-      <td>\[P((a, b)</td>
-      <td>p = \hat{p}) \sim \hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b},\]</td>
-    </tr>
-  </tbody>
-</table>
-
-<p>where the right-hand side is a proportion<sup id="fnref:1"><a href="#fn:1" class="footnote">1</a></sup>, rather than a
+<p><span>
+\[P((a, b) | p = \hat{p}) \sim \hat{p}^{a} \cdot (1 - \hat{p})^{b},\]
+</span>
+where the right-hand side is a proportion<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote">1</a></sup>, rather than a
 probability.</p>
 
 <p>We can now apply 
@@ -240,40 +234,23 @@ prior distribution on the underlying rate \(p\). For simplicity,
 I’ll go with the uniform \(U[0, 1]\), i.e., every success rate is
 equally plausible, at first. We find</p>
 
-<table>
-  <tbody>
-    <tr>
-      <td>\[P(p = \hat{p}</td>
-      <td>(a, b)) = \frac{P((a, b)</td>
-      <td>p = \hat{p}) P(p = \hat{p})}{P(a, b)}.\]</td>
-    </tr>
-  </tbody>
-</table>
+<p><span>
+\[P(p = \hat{p} | (a, b)) = \frac{P((a, b) | p = \hat{p}) P(p = \hat{p})}{P(a, b)}.\]
+</span></p>
 
 <p>We already picked the uniform prior, 
-\(P(p = \hat{p}) = 1\,\forall \hat{p}\in [0,1],\)
+\(P(p = \hat{p}) = 1,\quad\forall\, \hat{p}\in [0,1],\)
 and the denominator is a constant with respect to \(\hat{p}\).
 The expression simplifies to</p>
 
-<table>
-  <tbody>
-    <tr>
-      <td>\[P(p = \hat{p}</td>
-      <td>(a, b)) \sim \hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b},\]</td>
-    </tr>
-  </tbody>
-</table>
+<p><span>
+\[P(p = \hat{p} | (a, b)) \sim \hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b},\]
+</span>
+or, if we normalise to obtain a probability,</p>
 
-<p>or, if we normalise to obtain a probability,</p>
-
-<table>
-  <tbody>
-    <tr>
-      <td>\[P(p = \hat{p}</td>
-      <td>(a, b)) = \frac{\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}}{\int\sb{0}\sp{1} \hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\, d\hat{p}} = \textrm{Beta}(a+1, b+1).\]</td>
-    </tr>
-  </tbody>
-</table>
+<p><span>
+\[P(p = \hat{p} | (a, b)) = \frac{\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}}{\int\sb{0}\sp{1} \hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\, d\hat{p}} = \textrm{Beta}(a+1, b+1).\]
+</span></p>
 
 <p>A bit of calculation, and we find that our credibility estimate for
 the underlying success rate follows a
@@ -323,7 +300,9 @@ trick to handle extremely small or large magnitudes is to work in the
 log domain. Rather than computing
 \(\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\), we shall compute</p>
 
-<p>\[\log\left[\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\right] = a \log\hat{p} + b \log (1 - \hat{p}).\]</p>
+<p><span>
+\[\log\left[\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\right] = a \log\hat{p} + b \log (1 - \hat{p}).\]
+</span></p>
 
 <pre><code>CL-USER&gt; (+ (* 901 (log 0.4d0)) (* 101 (log (- 1 0.4d0))))
 -877.1713374189787d0
@@ -448,7 +427,7 @@ reporting is censored in all sorts of ways, so…)</p>
 <p>There are ways to recover a classical confidence interval, given \(n\) observations from a Bernoulli. However,
 they’re pretty convoluted, and, as 
 <a href="https://bayes.wustl.edu/etj/articles/confidence.pdf">Jaynes argues in his note on confidence intervals</a>, the classical
-approach gives values that are roughly the same<sup id="fnref:2"><a href="#fn:2" class="footnote">2</a></sup> as the Bayesian
+approach gives values that are roughly the same<sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote">2</a></sup> as the Bayesian
 approach… so I’ll just use the Bayesian credibility interval instead.</p>
 
 <p><em>See <a href="https://stats.stackexchange.com/questions/2272/whats-the-difference-between-a-confidence-interval-and-a-credible-interval/2287#2287">this stackexchange post</a> 
@@ -501,7 +480,9 @@ criterion be satisfied <em>even once in the infinite sequence of
 observations</em> if the Bernoulli’s unknown success rate is exactly equal
 to \(p\). That criterion is</p>
 
-<p>\[{n \choose a} p\sp{a} (1-p)\sp{n-a} \leq \frac{\varepsilon}{n+1},\]</p>
+<p><span>
+\[{n \choose a} p\sp{a} (1-p)\sp{n-a} \leq \frac{\varepsilon}{n+1},\]
+</span></p>
 
 <p>where \(n\) is the number of observations, \(a\) the number of
 successes, \(p\) the threshold success rate, and \(\varepsilon\)
@@ -564,15 +545,20 @@ the proportion function for the Beta distribution: we’re multiplying
 very small and very large values. We’ll apply the same fix: work in
 the log domain and exploit \(\log\)’s monotonicity.</p>
 
-<p>\[{n \choose a} p\sp{a} (1-p)\sp{n-a} \leq \frac{\varepsilon}{n+1}\]</p>
+<p><span>
+\[{n \choose a} p\sp{a} (1-p)\sp{n-a} \leq \frac{\varepsilon}{n+1}\]
+</span></p>
 
 <p>becomes</p>
 
-<p>\[\log {n \choose a} + a \log p + (n-a)\log (1-p) \leq \log\varepsilon -\log(n+1),\]</p>
+<p><span>
+\[\log {n \choose a} + a \log p + (n-a)\log (1-p) \leq \log\varepsilon -\log(n+1),\]
+</span>
+or, after some more expansions, and with \(b = n - a\),</p>
 
-<p>or, after some more expansions, and with \(b = n - a\),</p>
-
-<p>\[\log n! - \log a! - \log b! + a \log p + b \log(1 - p) + \log(n+1) \leq \log\varepsilon.\]</p>
+<p><span>
+\[\log n! - \log a! - \log b! + a \log p + b \log(1 - p) + \log(n+1) \leq \log\varepsilon.\]
+</span></p>
 
 <p>The new obstacle is computing the factorial \(x!\), or the
 log-factorial \(\log x!\). We shouldn’t compute the
@@ -580,17 +566,23 @@ factorial iteratively: otherwise, we could spend more time in the stopping crite
 <a href="https://www-fourier.ujf-grenoble.fr/~marin/une_autre_crypto/articles_et_extraits_livres/Robbin_H.-A_remark_on_Stirling%5C's_Formula.pdf">Robbins has another useful result</a>
 for us:</p>
 
-<p>\[\sqrt{2\pi} n\sp{n + 1/2} \exp(-n) \exp\left(\frac{1}{12n+1}\right) &lt; n! &lt; \sqrt{2\pi} n\sp{n + 1/2} \exp(-n) \exp\left(\frac{1}{12n}\right),\]</p>
+<p><span>
+\[\sqrt{2\pi} n\sp{n + 1/2} \exp(-n) \exp\left(\frac{1}{12n+1}\right) &lt; n! &lt; \sqrt{2\pi} n\sp{n + 1/2} \exp(-n) \exp\left(\frac{1}{12n}\right),\]
+</span></p>
 
 <p>or, in the log domain,</p>
 
-<p>\[\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n + \frac{1}{12n+1} &lt; \log n! &lt; \log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n}.\]</p>
+<p><span>
+\[\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n + \frac{1}{12n+1} &lt; \log n! &lt; \log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n}.\]
+</span></p>
 
 <p>This double inequality gives us a way to over-approximate 
 \(\log {n \choose a} = \log \frac{n!}{a! b!} = \log n! - \log a! - \log b!,\)
 where \(b = n - a\):</p>
 
-<p>\[\log {n \choose a} &lt; -\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n} - \left(a + \frac{1}{2}\right)\log a +a - \frac{1}{12a+1}  - \left(b + \frac{1}{2}\right)\log b +b - \frac{1}{12b+1},\]</p>
+<p><span>
+\[\log {n \choose a} &lt; -\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n} - \left(a + \frac{1}{2}\right)\log a +a - \frac{1}{12a+1}  - \left(b + \frac{1}{2}\right)\log b +b - \frac{1}{12b+1},\]
+</span></p>
 
 <p>where the right-most expression in Robbins’s double inequality
 replaces \(\log n!\), which must be over-approximated, and the
@@ -846,19 +838,25 @@ on \(\log x\).</p>
 <p>I could go ahead and use the building blocks above (ULP nudging for
 directed rounding) to directly implement Robbins’s criterion,</p>
 
-<p>\[\log {n \choose a} + a \log p + b\log (1-p) + \log(n+1) \leq \log\varepsilon,\]</p>
+<p><span>
+\[\log {n \choose a} + a \log p + b\log (1-p) + \log(n+1) \leq \log\varepsilon,\]
+</span></p>
 
 <p>with Robbins’s factorial approximation,</p>
 
-<p>\[\log {n \choose a} &lt; -\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n} - \left(a + \frac{1}{2}\right)\log a +a - \frac{1}{12a+1}  - \left(b + \frac{1}{2}\right)\log b +b - \frac{1}{12b+1}.\]</p>
+<p><span>
+\[\log {n \choose a} &lt; -\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n} - \left(a + \frac{1}{2}\right)\log a +a - \frac{1}{12a+1}  - \left(b + \frac{1}{2}\right)\log b +b - \frac{1}{12b+1}.\]
+</span></p>
 
 <p>However, even in the log domain, there’s a lot of cancellation: we’re
 taking the difference of relatively large numbers to find a small
 result. It’s possible to avoid that by re-associating some of the
 terms above, e.g., for \(a\):</p>
 
-<p>\[-\left(a + \frac{1}{2}\right) \log a + a - a \log p = 
-   -\frac{\log a}{2} + a (-\log a + 1 - \log p).\]</p>
+<p><span>
+\[-\left(a + \frac{1}{2}\right) \log a + a - a \log p = 
+   -\frac{\log a}{2} + a (-\log a + 1 - \log p).\]
+</span></p>
 
 <p>Instead, I’ll just brute force things (again) with 
 <a href="https://en.wikipedia.org/wiki/Kahan_summation_algorithm">Kahan summation</a>.
@@ -1200,7 +1198,7 @@ Sequence Method’s stopping criterion is straightforward.</p>
 <p>The other, much harder, part is computing credible (Bayesian)
 intervals for the Beta distribution. I won’t go over the code,
 but the <a href="https://github.com/pkhuong/csm/blob/47ecdd8f676a213dfb47ad0a329090a4c22b3125/csm.lisp#L465">basic strategy</a> is to invert the CDF, a monotonic function,
-by <a href="https://en.wikipedia.org/wiki/Bisection_method">bisection</a><sup id="fnref:3"><a href="#fn:3" class="footnote">3</a></sup>, and to assume we’re looking for improbable 
+by <a href="https://en.wikipedia.org/wiki/Bisection_method">bisection</a><sup id="fnref:3" role="doc-noteref"><a href="#fn:3" class="footnote">3</a></sup>, and to assume we’re looking for improbable 
 (\(\mathrm{cdf} &lt; 0.5\)) thresholds. This assumption lets us pick a
 <a href="http://dlmf.nist.gov/8.17#ii">simple hypergeometric series</a> that is
 normally useless, but
@@ -1681,16 +1679,16 @@ richer in information than the final output.</p>
 
 <p><small>Thank you Jacob, Ruchir, Barkley, and Joonas for all the
 editing and restructuring comments.</small></p>
-<div class="footnotes">
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:1">
-      <p>Proportions are unscaled probabilities that don’t have to sum or integrate to 1. Using proportions instead of probabilities tends to make calculations simpler, and we can always get a probability back by rescaling a proportion by the inverse of its integral. <a href="#fnref:1" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:1" role="doc-endnote">
+      <p>Proportions are unscaled probabilities that don’t have to sum or integrate to 1. Using proportions instead of probabilities tends to make calculations simpler, and we can always get a probability back by rescaling a proportion by the inverse of its integral. <a href="#fnref:1" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:2">
-      <p>Instead of a \(\mathrm{Beta}(a+1, b+1)\), they tend to bound with a \(\mathrm{Beta}(a, b)\). The difference is marginal for double-digit \(n\). <a href="#fnref:2" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:2" role="doc-endnote">
+      <p>Instead of a \(\mathrm{Beta}(a+1, b+1)\), they tend to bound with a \(\mathrm{Beta}(a, b)\). The difference is marginal for double-digit \(n\). <a href="#fnref:2" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:3">
-      <p>I used the bisection method instead of more sophisticated ones with better convergence, like <a href="https://en.wikipedia.org/wiki/Newton%27s_method">Newton’s  method</a> or the derivative-free <a href="https://en.wikipedia.org/wiki/Secant_method">Secant method</a>, because bisection already adds one bit of precision per iteration, only needs a predicate that returns “too high” or “too low,” and is easily tweaked to be conservative when the predicate declines to return an answer. <a href="#fnref:3" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:3" role="doc-endnote">
+      <p>I used the bisection method instead of more sophisticated ones with better convergence, like <a href="https://en.wikipedia.org/wiki/Newton%27s_method">Newton’s  method</a> or the derivative-free <a href="https://en.wikipedia.org/wiki/Secant_method">Secant method</a>, because bisection already adds one bit of precision per iteration, only needs a predicate that returns “too high” or “too low,” and is easily tweaked to be conservative when the predicate declines to return an answer. <a href="#fnref:3" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
