@@ -109,8 +109,9 @@ and calculate. Once we fix the underlying success rate \\(p = \hat{p}\\),
 the conditional probability of observing \\(a\\) successes and \\(b\\)
 failures is
 
-\\[P((a, b) | p = \hat{p}) \sim \hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b},\\]
-
+<span>
+\\[P((a, b) | p = \hat{p}) \sim \hat{p}^{a} \cdot (1 - \hat{p})^{b},\\]
+</span>
 where the right-hand side is a proportion[^1], rather than a
 probability. 
 
@@ -125,18 +126,23 @@ prior distribution on the underlying rate \\(p\\). For simplicity,
 I'll go with the uniform \\(U[0, 1]\\), i.e., every success rate is
 equally plausible, at first. We find
 
+<span>
 \\[P(p = \hat{p} | (a, b)) = \frac{P((a, b) | p = \hat{p}) P(p = \hat{p})}{P(a, b)}.\\]
+</span>
 
 We already picked the uniform prior, 
-\\(P(p = \hat{p}) = 1\,\forall \hat{p}\in [0,1],\\)
+\\(P(p = \hat{p}) = 1,\quad\forall\, \hat{p}\in [0,1],\\)
 and the denominator is a constant with respect to \\(\hat{p}\\).
 The expression simplifies to
 
+<span>
 \\[P(p = \hat{p} | (a, b)) \sim \hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b},\\]
-
+</span>
 or, if we normalise to obtain a probability,
 
+<span>
 \\[P(p = \hat{p} | (a, b)) = \frac{\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}}{\int\sb{0}\sp{1} \hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\, d\hat{p}} = \textrm{Beta}(a+1, b+1).\\]
+</span>
 
 A bit of calculation, and we find that our credibility estimate for
 the underlying success rate follows a
@@ -185,7 +191,9 @@ trick to handle extremely small or large magnitudes is to work in the
 log domain. Rather than computing
 \\(\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\\), we shall compute
 
+<span>
 \\[\log\left[\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\right] = a \log\hat{p} + b \log (1 - \hat{p}).\\]
+</span>
 
     CL-USER> (+ (* 901 (log 0.4d0)) (* 101 (log (- 1 0.4d0))))
     -877.1713374189787d0
@@ -363,7 +371,9 @@ criterion be satisfied *even once in the infinite sequence of
 observations* if the Bernoulli's unknown success rate is exactly equal
 to \\(p\\). That criterion is
 
+<span>
 \\[{n \choose a} p\sp{a} (1-p)\sp{n-a} \leq \frac{\varepsilon}{n+1},\\]
+</span>
 
 where \\(n\\) is the number of observations, \\(a\\) the number of
 successes, \\(p\\) the threshold success rate, and \\(\varepsilon\\)
@@ -425,15 +435,20 @@ the proportion function for the Beta distribution: we're multiplying
 very small and very large values. We'll apply the same fix: work in
 the log domain and exploit \\(\log\\)'s monotonicity.
 
+<span>
 \\[{n \choose a} p\sp{a} (1-p)\sp{n-a} \leq \frac{\varepsilon}{n+1}\\]
+</span>
 
 becomes
 
+<span>
 \\[\log {n \choose a} + a \log p + (n-a)\log (1-p) \leq \log\varepsilon -\log(n+1),\\]
-
+</span>
 or, after some more expansions, and with \\(b = n - a\\),
 
+<span>
 \\[\log n! - \log a! - \log b! + a \log p + b \log(1 - p) + \log(n+1) \leq \log\varepsilon.\\]
+</span>
 
 The new obstacle is computing the factorial \\(x!\\), or the
 log-factorial \\(\log x!\\). We shouldn't compute the
@@ -441,17 +456,23 @@ factorial iteratively: otherwise, we could spend more time in the stopping crite
 [Robbins has another useful result](https://www-fourier.ujf-grenoble.fr/~marin/une_autre_crypto/articles_et_extraits_livres/Robbin_H.-A_remark_on_Stirling%5C's_Formula.pdf)
 for us:
 
+<span>
 \\[\sqrt{2\pi} n\sp{n + 1/2} \exp(-n) \exp\left(\frac{1}{12n+1}\right) < n! < \sqrt{2\pi} n\sp{n + 1/2} \exp(-n) \exp\left(\frac{1}{12n}\right),\\]
+</span>
 
 or, in the log domain,
 
+<span>
 \\[\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n + \frac{1}{12n+1} < \log n! < \log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n}.\\]
+</span>
 
 This double inequality gives us a way to over-approximate 
 \\(\log {n \choose a} = \log \frac{n!}{a! b!} = \log n! - \log a! - \log b!,\\)
 where \\(b = n - a\\):
 
+<span>
 \\[\log {n \choose a} < -\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n} - \left(a + \frac{1}{2}\right)\log a +a - \frac{1}{12a+1}  - \left(b + \frac{1}{2}\right)\log b +b - \frac{1}{12b+1},\\]
+</span>
 
 where the right-most expression in Robbins's double inequality
 replaces \\(\log n!\\), which must be over-approximated, and the
@@ -635,19 +656,25 @@ on \\(\log x\\).
 I could go ahead and use the building blocks above (ULP nudging for
 directed rounding) to directly implement Robbins's criterion,
 
+<span>
 \\[\log {n \choose a} + a \log p + b\log (1-p) + \log(n+1) \leq \log\varepsilon,\\]
+</span>
 
 with Robbins's factorial approximation,
 
+<span>
 \\[\log {n \choose a} < -\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n} - \left(a + \frac{1}{2}\right)\log a +a - \frac{1}{12a+1}  - \left(b + \frac{1}{2}\right)\log b +b - \frac{1}{12b+1}.\\]
+</span>
 
 However, even in the log domain, there's a lot of cancellation: we're
 taking the difference of relatively large numbers to find a small
 result. It's possible to avoid that by re-associating some of the
 terms above, e.g., for \\(a\\):
 
+<span>
 \\[-\left(a + \frac{1}{2}\right) \log a + a - a \log p = 
    -\frac{\log a}{2} + a (-\log a + 1 - \log p).\\]
+</span>
 
 Instead, I'll just brute force things (again) with 
 [Kahan summation](https://en.wikipedia.org/wiki/Kahan_summation_algorithm).

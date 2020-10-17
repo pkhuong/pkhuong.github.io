@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "UMASH: a fast and universal enough hash"
-date: 2020-08-24 00:00:15 +0000
+date: 2020-08-24 00:00:15 -0400
 comments: true
 categories:
 ---
