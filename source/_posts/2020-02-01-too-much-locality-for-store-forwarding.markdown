@@ -3,7 +3,7 @@ layout: post
 title: "Too much locality... for stores to forward"
 date: 2020-02-01 17:29:21 -0500
 comments: true
-categories: 
+categories: PerfAnalysis
 ---
 
 <small>Apologies for the failed [Cake reference](https://www.youtube.com/watch?v=K3DRkVjuqmc).<br/>

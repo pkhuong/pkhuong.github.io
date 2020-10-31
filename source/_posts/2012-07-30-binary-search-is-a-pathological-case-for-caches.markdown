@@ -3,7 +3,7 @@ layout: post
 title: "Binary search is a pathological case for caches"
 date: 2012-07-30 1:30
 comments: true
-categories: 
+categories: PerfAnalysis
 ---
 
 Programmers tend to like round numbers, i.e. powers of two. So do

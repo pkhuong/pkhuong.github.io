@@ -3,7 +3,7 @@ layout: post
 title: Check for borrows in bitwise operations
 date: 2020-05-02 17:24:39 -0400
 comments: true
-categories:
+categories: Puzzle
 ---
 
 <small>2020-05-03: Had to add a complement step in the ULEB

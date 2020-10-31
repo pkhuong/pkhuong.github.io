@@ -3,7 +3,7 @@ layout: post
 title: "A multiset of observations with constant-time sample mean and variance"
 date: 2019-11-30 23:51:41 -0500
 comments: true
-categories: 
+categories: LazyKnapsack
 ---
 
 <small>_Fixed notation issues in the "Faster multiset updates" section. Thank you Joonas._</small>

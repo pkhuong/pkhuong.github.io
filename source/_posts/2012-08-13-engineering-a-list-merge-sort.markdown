@@ -3,7 +3,7 @@ layout: post
 title: "Engineering a list merge sort"
 date: 2012-08-13 2:50
 comments: true
-categories:
+categories: PerfStats
 ---
 
 Back in November 2011, [Takeru Ohta](https://github.com/sile/)

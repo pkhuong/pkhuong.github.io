@@ -3,7 +3,7 @@ layout: post
 title: "All you need is call/cc"
 date: 2013-09-19 1:30
 comments: true
-categories: 
+categories: Puzzle
 ---
 I was going to post this as a comment on
 [r/lisp](http://www.reddit.com/r/lisp/comments/1mkqvj/why_monads_have_not_taken_the_common_lisp_world/ccb5sor),

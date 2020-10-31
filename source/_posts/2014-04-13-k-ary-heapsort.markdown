@@ -3,7 +3,7 @@ layout: post
 title: "K-ary heapsort: more comparisons, less memory traffic"
 date: 2014-04-13 12:25
 comments: true
-categories: appnexus
+categories: PerfAnalysis
 ---
 
 _This post first appeared on [AppNexus's tech blog](http://techblog.appnexus.com/2014/k-ary-heapsort-more-comparisons-less-memory-traffic/)._

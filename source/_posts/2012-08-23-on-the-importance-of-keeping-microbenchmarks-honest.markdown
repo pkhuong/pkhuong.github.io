@@ -3,7 +3,7 @@ layout: post
 title: "On the importance of keeping microbenchmarks honest"
 date: 2012-08-23 13:01
 comments: true
-categories: 
+categories: PerfAnalysis
 ---
 
 [A recent post](http://tapoueh.org/blog/2012/08/20-performance-the-easiest-way.html) tried to extract information from a microbenchmark, but the author

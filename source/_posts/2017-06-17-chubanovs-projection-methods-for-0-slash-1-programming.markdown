@@ -3,7 +3,7 @@ layout: post
 title: "Chubanov's projection methods for 0/1 programming"
 date: 2017-06-17 15:24:00 -0400
 comments: true
-categories: 
+categories: LinearProgramming
 ---
 
 I've long felt that compilers (and symbolic processing in general)

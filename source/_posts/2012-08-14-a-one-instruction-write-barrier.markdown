@@ -3,7 +3,7 @@ layout: post
 title: "A one-instruction write barrier"
 date: 2012-08-14 21:25
 comments: true
-categories: 
+categories: Puzzle
 ---
 [Hölzle's two-instruction write barrier [PDF]](http://www.hoelzle.org/publications/write-barrier.pdf)
 for garbage collectors looks like

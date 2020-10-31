@@ -3,7 +3,7 @@ layout: post
 title: "How bad can 1GB pages be?"
 date: 2014-02-18 00:06
 comments: true
-categories: appnexus
+categories: PerfAnalysis
 ---
 
 I joined the ad server team at [AppNexus](http://www.appnexus.com/)

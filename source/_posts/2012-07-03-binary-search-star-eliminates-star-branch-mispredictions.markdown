@@ -3,7 +3,7 @@ layout: post
 title: "Binary search *eliminates* branch mispredictions"
 date: 2012-07-03 18:30
 comments: true
-categories: 
+categories: PerfAnalysis
 ---
 
 Searching in a short, sorted vector is a fairly common task.  Lots of

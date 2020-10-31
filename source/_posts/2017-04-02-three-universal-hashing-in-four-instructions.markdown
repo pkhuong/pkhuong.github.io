@@ -3,7 +3,7 @@ layout: post
 title: "Three-universal hashing in four instructions"
 date: 2017-04-02 18:10:10 -0400
 comments: true
-categories: 
+categories: Puzzle
 ---
 
 … with one caveat: the hash functions only generate one bit.

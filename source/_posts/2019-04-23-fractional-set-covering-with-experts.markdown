@@ -3,7 +3,7 @@ layout: post
 title: "Fractional set covering with experts"
 date: 2019-04-23 18:05:09 -0400
 comments: true
-categories: 
+categories: LinearProgramming
 ---
 
 Last winter break, I played with one of the annual

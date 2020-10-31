@@ -3,7 +3,7 @@ layout: post
 title: "Restartable sequences with the polysemic null segment selector"
 date: 2018-08-25 21:57:06 -0400
 comments: true
-categories: 
+categories: AsymmetricSynchronisation
 ---
 
 Implementing [non-blocking algorithms](https://en.wikipedia.org/wiki/Non-blocking_algorithm) is one of the few things that are

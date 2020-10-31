@@ -3,7 +3,7 @@ layout: post
 title: "Lazy Linear Knapsack"
 date: 2020-01-20 23:10:19 -0500
 comments: true
-categories: 
+categories: LazyKnapsack
 ---
 
 The [continuous knapsack problem](https://en.wikipedia.org/wiki/Continuous_knapsack_problem) may be the simplest non-trivial linear

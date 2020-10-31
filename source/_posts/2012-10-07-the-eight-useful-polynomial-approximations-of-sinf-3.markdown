@@ -3,7 +3,7 @@ layout: post
 title: "The eight useful polynomial approximations of `sinf(3)'"
 date: 2012-10-07 23:35
 comments: true
-categories: 
+categories: Approximation
 ---
 
 I just spent a few CPU-months to generate

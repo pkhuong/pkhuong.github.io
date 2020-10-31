@@ -3,7 +3,7 @@ layout: post
 title: "The Confidence Sequence Method: a computer-age test for statistical SLOs"
 date: 2018-07-06 18:02:40 -0400
 comments: true
-categories: 
+categories: PerfAnalysis
 ---
 
 _This post goes over [some code that I pushed to github today](https://github.com/pkhuong/csm). All the snippets below should be [in the repo](https://github.com/pkhuong/csm/blob/master/csm.lisp),

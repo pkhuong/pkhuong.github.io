@@ -3,7 +3,7 @@ layout: post
 title: "Fitting polynomials by generating linear constraints"
 date: 2012-05-24 17:35
 comments: true
-categories: 
+categories: Approximation
 ---
 
 <small>(There were some slight edits since the original publication.

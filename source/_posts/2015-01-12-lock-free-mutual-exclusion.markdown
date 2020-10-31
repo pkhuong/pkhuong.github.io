@@ -3,7 +3,7 @@ layout: post
 title: "Lock-free sequence locks"
 date: 2015-01-13 2:30
 comments: true
-categories: 
+categories: AsymmetricSynchronisation
 ---
 
 Specialised locking schemes and lock-free data structures are a big

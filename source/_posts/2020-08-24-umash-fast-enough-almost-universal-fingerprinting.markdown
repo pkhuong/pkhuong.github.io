@@ -3,7 +3,7 @@ layout: post
 title: "UMASH: a fast and universal enough hash"
 date: 2020-08-24 00:00:15 -0400
 comments: true
-categories:
+categories: Fingerprint
 ---
 
 <small>Originally posted on the [Backtrace I/O tech blog](https://engineering.backtrace.io/2020-08-24-umash-fast-enough-almost-universal-fingerprinting/).</small>

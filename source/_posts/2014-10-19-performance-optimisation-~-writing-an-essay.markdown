@@ -3,7 +3,7 @@ layout: post
 title: "Performance tuning ~ writing an essay"
 date: 2014-10-19 20:05
 comments: true
-categories: appnexus
+categories: PerfAnalysis
 ---
 
 <a href="#trust-no-one">Skip to the meaty bits.</a>

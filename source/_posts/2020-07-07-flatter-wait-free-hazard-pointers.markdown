@@ -3,7 +3,7 @@ layout: post
 title: "Flatter wait-free hazard pointers"
 date: 2020-07-07 14:30:26 -0400
 comments: true
-categories:
+categories: AsymmetricSynchronisation
 ---
 
 <small>2020-07-09: we can fix [time-travel in `hp_read_swf`](#hp_read_swf-relaxed) without changing the fast path. See [the addendum](#addendum-2020-07-09).</small>

@@ -3,7 +3,7 @@ layout: post
 title: "Bitsets match regular expressions, compactly"
 date: 2013-06-23 02:40
 comments: true
-categories: 
+categories: Puzzle
 ---
 
 This post describes how graph and automata theory can help compile a

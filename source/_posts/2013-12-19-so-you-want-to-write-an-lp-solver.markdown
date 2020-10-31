@@ -3,7 +3,7 @@ layout: post
 title: "So you want to write an LP solver (a.k.a. My Little LP: Cholesky Is Magic)"
 date: 2013-12-19 23:08
 comments: true
-categories: 
+categories: LinearProgramming
 ---
 *In which a [Lisp hacker exhibits his ignorance of applied mathematics](http://www.evanmiller.org/mathematical-hacker.html) ;)*
 

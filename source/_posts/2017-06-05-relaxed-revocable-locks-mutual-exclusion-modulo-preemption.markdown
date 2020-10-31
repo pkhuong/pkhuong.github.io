@@ -4,7 +4,7 @@ title: "Relaxed revocable locks: mutual exclusion modulo preemption"
 date: 2017-06-05 00:25:59 -0400
 publish: false
 comments: true
-categories: 
+categories: AsymmetricSynchronisation
 ---
 
 _Update: there's a way to detect "running" status even across cores.

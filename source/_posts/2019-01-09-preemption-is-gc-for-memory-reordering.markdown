@@ -3,7 +3,7 @@ layout: post
 title: "Preemption is GC for memory reordering"
 date: 2019-01-09 16:29:37 -0500
 comments: true
-categories: 
+categories: AsymmetricSynchronisation
 ---
 
 I previously [noted how preemption makes lock-free programming harder in userspace than in the kernel](/Blog/2018/08/25/restartable-sequences-with-the-polysemic-null-segment-selector/).
