@@ -88,7 +88,7 @@ can now find the coefficients \\(a_0,a_1,\ldots,a_n\\) of
 <div markdown="0">
 $$\sum_{j=0}^n a_j x_0^j = f(x_0) + \epsilon$$
 $$\sum_{j=0}^n a_j x_1^j = f(x_1) - \epsilon$$
-<p><center>etc. for each \\(x_i\\).</center></p>
+<p><center>etc. for each \(x_i\).</center></p>
 </div>
 
 There are \\(n+2\\) variables (the \\(n+1\\) coefficients \\(a_j\\)

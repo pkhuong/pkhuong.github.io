@@ -198,7 +198,9 @@ With probability \\(1 - \alpha\\), we'll consume from `S` and `D`
 at the same rate \\(\pm \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}}\\).
 We can let \\(\alpha = 10\sp{-10}\\) and pre-allocate a buffer of size 
 
+<span>
 \\[|S| \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}} < \sqrt{\frac{23.03 |S| (|S| + |D|)}{2 |D|}}.\\]
+</span>
 
 In the worst case, \\(|S| = |D|\\), and we can preallocate a buffer of
 size \\(\sqrt{23.03 |D|} < 4.8 \sqrt{|D|}\\) and only need to grow
@@ -277,3 +279,5 @@ probability that I'll need a larger buffer is so low that I just need
 to handle it, however inefficiently.  In a replicated system, where
 each node picks an independent hash function, I would even consider
 crashing when the buffer is too small!
+
+<p><hr style="width: 50%"></p>

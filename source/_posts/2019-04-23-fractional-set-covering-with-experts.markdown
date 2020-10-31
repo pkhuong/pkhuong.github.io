@@ -515,3 +515,5 @@ In another post, I'll show how using the same surrogate dual optimisation
 algorithm to mimick [Lagrangian decomposition](https://link.springer.com/article/10.1007/BF02592954)
 [instead of Lagrangian relaxation](https://perso.ensta-paristech.fr/~diam/ro/online/Monique.Guignard-top11201.pdf)
 guarantees an iteration count in \\(\mathcal{O}\left(\frac{\lg \\#\mathrm{nonzero}}{\varepsilon\sp{2}}\right)\\) independently of luck or the specific linear constraints.
+
+<p><hr style="width: 50%"></p>

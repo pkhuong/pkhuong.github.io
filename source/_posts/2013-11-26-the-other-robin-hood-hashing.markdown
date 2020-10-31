@@ -34,15 +34,12 @@ uncorrelated addresses (and writes that bump entries out), we might as
 well go for simpler strategies with awesome worst-case bounds, like
 2-left or cuckoo hashing.  Then again, I'm not convinced that these
 schemes are useful in software either: we can do a lot of probing
-in the time it takes to read a second random address [*].  In
+in the time it takes to read a second random address[^mlp].  In
 hardware, the trade-offs seem completely different; I wouldn't be
 surprised if two 128 KB SRAM chips were cheaper than a single 256 KB
 chip.
 
-[*] We could hope for memory-level parallelism… but, in my experience,
-TLB misses are where (uncached) hash lookups hurt, and those don't
-seem to be resolved in parallel.  In cache, linear probing eliminates
-bank conflicts and is really quick.
+[^mlp]:We could hope for memory-level parallelism… but, in my experience, TLB misses are where (uncached) hash lookups hurt, and those don't seem to be resolved in parallel.  In cache, linear probing eliminates bank conflicts and is really quick.
 
 When I looked into Robin Hood hashing, I was interested in a
 degenerate variant in which probing sequences are linear.  This
@@ -74,3 +71,5 @@ twist on double hashing; newer ones may instead describe the linear
 probing variant.  Robin Hood double hashing seems obsolete, and the
 linear probing variant isn't what Celis described.  It may be more
 appropriate to refer to the latter as "Robin Hood linear probing."
+
+<p><hr style="width: 50%"></p>

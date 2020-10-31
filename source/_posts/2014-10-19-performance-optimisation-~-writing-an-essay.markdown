@@ -6,7 +6,7 @@ comments: true
 categories: appnexus
 ---
 
-<a href="#trust-no-one"">Skip to the meaty bits.</a>
+<a href="#trust-no-one">Skip to the meaty bits.</a>
 
 My work at [AppNexus](http://www.appnexus.com/) mostly involves
 performance optimisation, at any level from microarchitecture-driven

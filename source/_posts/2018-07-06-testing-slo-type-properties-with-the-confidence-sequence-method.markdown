@@ -1327,3 +1327,5 @@ richer in information than the final output.
 
 <small>Thank you Jacob, Ruchir, Barkley, and Joonas for all the
 editing and restructuring comments.</small>
+
+<p><hr style="width: 50%"></p>

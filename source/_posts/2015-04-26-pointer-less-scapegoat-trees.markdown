@@ -229,3 +229,5 @@ I don't know!  Can anyone offer insights or suggest new paths to explore?
 [^1]: I think jumping the van Emde Boa[s] is a thing, but they at least went for the minor version, the van Emde Boas layout ;)
 
 [^2]: The maximal distance between the interpolation point and the actual location appears to scale logarithmically with the number of elements.  We perform a binary search over a logarithmic-size range, treating empty entries as \\(\infty\\).
+
+<p><hr style="width: 50%"></p>

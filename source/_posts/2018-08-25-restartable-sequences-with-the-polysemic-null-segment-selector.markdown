@@ -402,3 +402,5 @@ knowledge to build new tools by breaking the ones we already have ([#Mickens](ht
 hack might be of interest to someone else, and to Gabe for snarkily
 reminding us `Rseq` is another Linux/Silicon Valley
 re-invention.</small>
+
+<p><hr style="width: 50%"></p>

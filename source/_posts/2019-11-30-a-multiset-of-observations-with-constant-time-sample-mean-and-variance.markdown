@@ -721,3 +721,5 @@ I'm pretty sure the code works, and [it's up in this gist](https://gist.github.c
 I'll be re-implementing it in C++
 because that's the language used by the project that lead me to this problem;
 feel free to steal that gist.
+
+<p><hr style="width: 50%"></p>

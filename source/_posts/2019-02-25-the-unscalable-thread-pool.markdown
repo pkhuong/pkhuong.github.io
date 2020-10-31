@@ -267,3 +267,5 @@ data-oriented programming, I suppose I'm arguing for data-oriented
 state machines.
 
 [^queue]: One thread pool per state in the sense that no state can fully starve out another of CPU time. The concrete implementation may definitely let a shared set of workers pull from all the queues.
+
+<p><hr style="width: 50%"></p>
