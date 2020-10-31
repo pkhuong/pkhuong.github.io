@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-10-31T09:48:01-04:00</updated>
+  <updated>2020-10-31T18:30:38-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -12,6 +12,486 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Nearly double the PH bits for one more CLMUL]]></title>
+    <link href="https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/"/>
+    <updated>2020-10-31T18:30:05-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul</id>
+    <content type="html"><![CDATA[<p>The core of <a href="https://github.com/backtrace-labs/umash">UMASH</a> is a
+hybrid <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.105.9929&amp;rep=rep1&amp;type=pdf#page=3">PH</a>/<a href="https://eprint.iacr.org/2004/319.pdf#page=4">(E)NH</a>
+block compression function.
+That function is fast
+(it needs one multiplication for each 16-byte “chunk” in a block),
+but relatively weak:
+even with a 128-bit output, the worst-case probability of collision is
+\(2^{-64}\).</p>
+
+<p>For a <a href="https://en.wikipedia.org/wiki/Fingerprint_(computing)">fingerprinting</a>
+application, we want collision probability less than \(\approx 2^{-70},\)
+so that’s already too weak,
+before we even consider merging a variable-length string of compressed
+block values.</p>
+
+<p>The <a href="https://pvk.ca/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/">initial UMASH proposal</a>
+compresses each block with two independent compression functions.
+Krovetz showed that we could do so while reusing most of the key material
+(random parameters), with a <a href="http://krovetz.net/csus/papers/thesis.pdf#page=50">Toeplitz extension</a>,
+and I simply recycled the proof for UMASH’s hybrid compressor.</p>
+
+<p>That’s good for the memory footprint of the random parameters, but
+doesn’t help performance: we still have to do double the work to get
+double the hash bits.</p>
+
+<p>Earlier this month, <a href="https://github.com/jbapple">Jim Apple</a> pointed me at
+a <a href="https://link.springer.com/chapter/10.1007/978-3-662-46706-0_25">promising alternative that double the hash bit with only one more multiplication</a>.
+The construction adds finite field operations that aren’t particularly
+efficient in software, on top of the additional 64x64 -&gt; 128
+(carryless) multiplication, so isn’t a slam dunk win over a
+straightforward Toeplitz extension.
+However, Jim felt like we could “spend” some of the bits we don’t need
+for fingerprinting (\(2^{-128}\) collision probability is overkill
+when we only need \(2^{-70}\) in order to make do with faster operations.</p>
+
+<p>Turns out he was right! We can use carryless multiplications by sparse
+constants (i.e., concretely, xor-shift and one more shift) without any
+reducing polynomial, <em>on independent 64-bit halves</em>… and still
+collide with probability at most \(2^{-126}\).</p>
+
+<p>The proof is fairly simple, but relies on a bit of notation for clarity.
+Let’s start by re-stating UMASH’s hybrid PH/ENH block compressor in
+that notation.</p>
+
+<h2 id="how-does-umash-currently-work">How does UMASH currently work?</h2>
+
+<p>The current block compressor in UMASH splits a 256-byte block \(m\)
+in 16 chunks \(m_i\, i\in [0, 15]\) of 128 bits each, and processes
+all but the last chunk with a PH loop,</p>
+
+<p>\[ \bigoplus_{i=0}^{14} \mathtt{PH}(k_i, m_i), \]</p>
+
+<p>where</p>
+
+<p>\[ \mathtt{PH}(k_i, m_i) = (k_i \bmod 2^{64}) \oplus (m_i \bmod 2^{64})) \odot (\lfloor k_i / 2^{64} \rfloor \oplus \lfloor m_i / 2^{64} \rfloor) \]</p>
+
+<p>and each \(k_i\) is a randomly generated 128-bit parameter.</p>
+
+<p>The compression loop in UMASH handles the last chunk, along with a
+size tag (to protect against extension attacks) with
+<a href="https://eprint.iacr.org/2004/319.pdf#page=4">ENH</a>:</p>
+
+<p>\[ \mathtt{ENH}(k, x, y) = ((k + x) \bmod 2^{64}) \cdot (\lfloor k / 2^{64}\rfloor + \lfloor x / 2^{64} \rfloor \bmod 2^{64}) + y \mod 2^{128}. \]</p>
+
+<p>The core operation in ENH is a full (64x64 -&gt; 128) integer
+multiplication, and that has lower latency than PH’s carryless
+multiplication on x86-64.  That’s why UMASH switches to ENH for the
+last chunk.  We use ENH for only one chunk because combining multiple
+NH values calls for 128-bit additions, and that’s slower than PH’s
+xors.  Once we have mixed the last chunk and the size tag with ENH,
+the result is simply xored in with the previous chunks’ PH values:</p>
+
+<p>\[ \left(\bigoplus_{i=0}^{14} \mathtt{PH}(k_i, m_i)\right)  \oplus \mathtt{ENH}(m_{15}, k_{15}, \mathit{tag}). \]</p>
+
+<p>This function is annoying to analyse directly, because we end up
+having to manipulate different proofs of almost-universality.  Let’s
+abstract this a bit, and reduce the ENH/PH to the bare minimum we need
+to find our collision bounds.</p>
+
+<p>Let’s split our message blocks in \(n\) (\(n = 16\) for
+UMASH) “chunks”, and apply an independently sampled mixing function
+to each chunk.  Let’s say we have two messages \(m\) and
+\(m^\prime\) with chunks \(m_i\) and \(m^\prime_i\), for \(i\in
+[0, n)\), and let \(h_i\) be the result of mixing chunk \(m_i,\)
+and \(h^\prime_i\) that of mixing \(m^\prime_i.\)</p>
+
+<p>We’ll assume that the first chunk is mixed with a
+\(2^{-w}\)-almost-universal (\(2^{-64}\) for UMASH) hash function:
+if \(m_0 \neq m^\prime_0,\) \(\mathrm{P}[h_0 = h^\prime_0] \leq 2^{-w},\)
+(where the probability is taken over the set of randomly chosen
+parameters for the mixer).
+Otherwise, \(m_0 = m^\prime_0 \Rightarrow h_i = h^\prime_i\).</p>
+
+<p>This first chunks stands for the ENH iteration in UMASH.</p>
+
+<p>Every other chunk will instead be mixed with a
+\(2^{-w}\)-XOR-almost-universal hash function:
+if \(m_i \neq m^\prime_i\) (\(0 &lt; i &lt; n\)),
+\(\mathrm{P}[h_i \oplus h^\prime_i = y] \leq 2^{-w}\)
+for any \(y,\)
+where the probability is taken over the randomly chosen
+parameter for the mixer.</p>
+
+<p>This stronger condition represents the PH iterations in UMASH.</p>
+
+<p>We hash a full block by xoring all the mixed chunks together:</p>
+
+<p>\[ H = \bigoplus_{i = 0}^{n - 1} h_i, \]</p>
+
+<p>and</p>
+
+<p>\[ H^\prime = \bigoplus_{i = 0}^{n - 1} h^\prime_i. \]</p>
+
+<p>We want to bound the probability that \(H = H^\prime \Leftrightarrow
+H \oplus H^\prime = 0,\) assuming that the messages differ
+(i.e., there is at least one index \(i\) such that
+\(m_i \neq m^\prime_i\)).</p>
+
+<p>If the two messages only differ in \(m_0 \neq n^\prime_0\) (i.e.,
+\(m_i = m^\prime_i,\,\forall i \in [1, n)\)),</p>
+
+<p>\[ \bigoplus_{i = 1}^{n - 1} h_i = \bigoplus_{i = 1}^{n - 1} h^\prime_i, \]</p>
+
+<p>and thus \(H = H^\prime \Leftrightarrow h_0 = h^\prime_0\).</p>
+
+<p>By hypothesis, the 0th chunks are mixed with a
+\(2^{-w}\)-almost-universal hash, so this happens with probability
+at most \(2^{-w}\).</p>
+
+<p>Otherwise, assume that \(m_j \neq m^\prime_j\), for some \(j \in
+[1, n)\).</p>
+
+<p>We can rearrange the expression</p>
+
+<p>\[ H \oplus H^\prime = h_j \oplus h^\prime_j \oplus \left(\bigoplus_{i\in [0, n) \setminus \{ j \}} h_i \oplus h^\prime_i\right). \]</p>
+
+<p>Let’s conservatively replace that unwieldly sum with an adversarially
+chosen value \(y\):</p>
+
+<p>\[ H \oplus H^\prime = h_j \oplus h^\prime_j \oplus y, \]</p>
+
+<p>and thus \(H = H^\prime\) iff \(h_j \oplus h^\prime_j = y;\)
+by hypothesis, the \(j\)th chunk (every chunk but the 0th),
+is mixed with a \(2^{-w}\)-almost-XOR-universal hash, and
+this thus happens with probability at most \(2^{-w}\).</p>
+
+<p>In both cases, we find a collision probability at most \(2^{-w},\)
+with a simple analysis despite combining mixing functions from
+different families over different rings.</p>
+
+<h2 id="wringing-more-bits-out-of-the-same-mixers">Wringing more bits out of the same mixers</h2>
+
+<p>We combine strong mixers (each is \(2^{-w}\)-almost-universal),
+and only get a \(2^{-w}\)-almost-universal output.
+It seems like we should be able to do better when two or
+more chunks differ.</p>
+
+<p>As <a href="https://link.springer.com/chapter/10.1007/978-3-662-46706-0_25">Nandi</a>
+points outs, we can apply erasure codes to derive additional
+chunks from the original messages’ contents.  We only need
+one more chunk, so we can simply xor together all the message’s
+chunks:</p>
+
+<p>\[m_n = \bigoplus_{i=0}^{n - 1} m_i,\]</p>
+
+<p>and similarly for \(m^\prime_n\).
+If \(m\) and \(m^\prime\) differ in only one chunk, \(m_n \neq
+m^\prime_n\).  It’s definitely possible for \(m_n = m^\prime_n\)
+when \(m \neq m^\prime\), but only if two or more chunks \(m_j \neq
+m^\prime_j\) and \(m_k \neq m^\prime_k\).</p>
+
+<p>We will also mix \(m_n\) and \(m^\prime_n\) with another
+\(2^{-w}\)-almost-XOR-universal hash function to yield \(h_n\) and
+\(h^\prime_n\).</p>
+
+<p>We’ll xor the result \(h_n\) and \(h^\prime_n\) with the second
+(still undefined) hash function \(H_2\) and \(H^\prime_2\); if
+\(m_n \neq m^\prime_n\), the final xored values are equal with
+probability at most\(2^{-w}\), regardless of \(H_2\) and
+\(H^\prime_2\ldots\) and, importantly, independently of \(H \neq
+H^\prime\).</p>
+
+<p>When the two messages \(m\) and \(m^\prime\) only differ in a
+single (initial) chunk, mixing a <a href="https://en.wikipedia.org/wiki/Longitudinal_redundancy_check">LRC checksum</a>
+gives us an independent hash function, which
+squares the collision probability to \(2^{-2w}\).</p>
+
+<p>Now to the interesting bit: we must define a second hash function for
+chunks 0 to \(n - 1\), such that \(H_2\) and \(H^\prime_2\) collide
+independently enough of \(H\) and \(H^\prime\).
+That’s a tall order, but we do have one additional assumption to work
+with: we only care about collisions in this second hash function if the
+additional checksum chunks are equal, which means that the two messages
+differ in two or more chunks (or they’re fully equal).</p>
+
+<p>For each index \(0 &lt; i &lt; n\), we’ll fix a <em>public</em> linear (with
+xor as the addition) function \(\overline{xs}_i(x)\), with three
+properties:</p>
+
+<ol>
+  <li>\(f(x) = x \oplus \overline{xs}_i(x)\) is invertible for \(i &gt; 0\)</li>
+  <li>\(\overline{xs}_i \neq \overline{xs}_j,\quad \forall i \neq j\)</li>
+  <li>\(\overline{xs}_i\) is <em>almost</em> invertible: it has a small
+(low rank) null space.</li>
+</ol>
+
+<p>For regularity, we will also define \(\overline{xs}_0(x) = x\).</p>
+
+<p>Concretely, let \(\overline{xs}_1(x) = x \mathtt{«} 1\), where the
+bitshift is computed for the two 64-bit halves independently, and
+\(\overline{xs}_i(x) = (x  \mathtt{«} 1) \oplus (x \mathtt{«} i)\)
+for \(i &gt; 1\), again with all the bitshifts computed independently
+over the two 64-bit halves.</p>
+
+<p>To see that these satisfy our requirements, we can model the function as
+carryless multiplication by distinct “even” constants (the least
+significant bit is 0) on each 64-bit half:</p>
+
+<ol>
+  <li>once we xor in \(x\), we get a multiplication by an odd constant,
+and that’s invertible.</li>
+  <li>the constants are different for each \(i\), so the functions are
+different.</li>
+  <li>while the least significant bit 0, the second least significant bit
+is always 1, so we only lose one bit of information per 64-bit half
+when we try to “invert” the multiplications.  The null space contains
+four points for each \(\overline{xs}\).</li>
+</ol>
+
+<p>To recapitulate, we defined the first hash function as</p>
+
+<p>\[ H = \bigoplus_{i = 0}^{n - 1} h_i, \]</p>
+
+<p>the (xor) sum of the mixed value \(h_i\) for each chunk \(m_i\) in
+the message block \(m\), and similarly for \(H^\prime\) and
+\(h^\prime_i\).</p>
+
+<p>We’ll let the second hash function be</p>
+
+<p>\[ H_2 \oplus h_n = \left(\bigoplus_{i = 0}^{n - 1} \overline{xs}_i(h_i)\right) \oplus h_n, \]</p>
+
+<p>and</p>
+
+<p>\[ H^\prime_2 \oplus h^\prime_n = \left(\bigoplus_{i = 0}^{n - 1} \overline{xs}_i(h^\prime_i)\right) \oplus h^\prime_n. \]</p>
+
+<p>We can finally get down to business and find some collision bounds.
+We’ve already shown that both \(H = H^\prime\) <em>and</em> \(H_2 \oplus_n =
+H^\prime_2 \oplus h^\prime_n\) collide simultaneously with probability at most \(2^{-2w}\)
+when the checksum chunks differ, i.e., when \(m_n \neq m^\prime_n\).</p>
+
+<p>Let’s now focus on the case when \(m \neq m^\prime\), but \(m_n =
+m^\prime_n\).</p>
+
+<p>In that case, we know that at least two chunks \(0 \leq i &lt; j &lt; n\)
+differ, i.e., \(m_i \neq m^\prime_i\) and \(m_j \neq m^\prime_j\).</p>
+
+<p>If only two chunks \(i\) and \(j\) differ, and one of them is the
+\(i = 0\)th chunk, we want to bound the probability that:</p>
+
+<p>\[ h_0 \oplus h_j = h^\prime_0 \oplus h^\prime_j \]</p>
+
+<p>and</p>
+
+<p>\[ h_0 \oplus \overline{xs}_j(h_j) = h^\prime_0 \oplus \overline{xs}_j(h^\prime_j) = 0 \]</p>
+
+<p>Letting \(\Delta_i = h_i \oplus h^\prime_i\), we can reformulate the
+two conditions as</p>
+
+<p>\[ \Delta_0 = \Delta_j \]
+and
+\[ \Delta_0 = \overline{xs}_j(\Delta_j). \]</p>
+
+<p>Taking the xor of the two conditions yields</p>
+
+<p>\[ \Delta_j \oplus \overline{xs}_j(\Delta_j) = 0, \]</p>
+
+<p>which is only satisfied for \(\Delta_j = 0\), since \(f(x) = x
+\oplus \overline{xs}_j(x)\) is an invertible linear function,
+and thus also forces \(\Delta_0 = 0\).</p>
+
+<p>By hypothesis, \(\mathrm{P}[\Delta_j = 0] \leq 2^{-w}\) and
+\(\mathrm{P}[\Delta_0 = 0] \leq 2^{-w}\) as well.  These two
+probabilities are independent, so we get a probability that both
+hash collide at mos \(2^{-2w}\) (\(2^{-128}\).</p>
+
+<p>In the other case, we have messages that differ in at least two chunks
+\(0 &lt; i &lt; j &lt; n\): \(m_i \neq m^\prime_i\) and \(m_j \neq
+m^\prime_j\).</p>
+
+<p>We can simplify the collision conditions to</p>
+
+<p>\[ h_i \oplus h_j = h^\prime_i \oplus h^\prime_j \oplus y \]</p>
+
+<p>and</p>
+
+<p>\[ \overline{xs}_i(h_i) \oplus \overline{xs}_j(h_j) = \overline{xs}_i(h^\prime_i) \oplus \overline{xs}_j(h^\prime_j) ^ z, \]</p>
+
+<p>for \(y\) and \(z\) generated arbitrarily (adversarially), but
+without knowing the mixers that generated \(h_i, h_j, h^\prime_i,
+h^\prime_j\).</p>
+
+<p>Again, let \(\Delta_i = h_i \oplus h^\prime_i\) and \(\Delta_j = h_j \oplus h^\prime_j\), and reformulate the conditions into</p>
+
+<p>\[ \Delta_i \oplus \Delta_j = y \]
+and
+\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z. \]</p>
+
+<p>Unfortunately, \(\overline{xs}_i\) isn’t invertible.  However, it is
+<em>almost</em> invertible: modulo \(\overline{xs}_i\)’s null space \(N = \{0, 2^{63}, 2^{127}, 2^{63} \oplus 2^{127} \},\)
+there exists an inverse function \(xs^{-1}_i\) such that \(xs^{-1}_i(\overline{xs}_i(x)) \in x + N\), and that inverse function itself
+is injective.</p>
+
+<p>Concretely, we defined \(\overline{xs}_i\) as carryless
+multiplications by constants with the least significant bit set to 0,
+and the next bit equal to 1.  \(xs^{-1}_i\) is a multiplication by
+the multiplicative inverse of \(\overline{xs}_i\)’s constant,
+shifted right by 1 bit (the inverse exists because the shifted
+constant is odd).</p>
+
+<p>With this inverse modulo a null space, we can reformulate</p>
+
+<p>\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z \]</p>
+
+<p>as</p>
+
+<p>\[ xs^{-1}_i(\overline{xs}_i(\Delta_i)) \oplus xs^{-1}_i(\overline{xs}_j(\Delta_j)) = xs^{-1}(z) \oplus N, \]</p>
+
+<p>which we can simplify by letting the null space \(N\) sum to itself
+(\(N \oplus N = N\) since it’s a subspace):</p>
+
+<p>\[ \Delta_i \oplus xs^{-1}_i(\overline{xs}_j(\Delta_j)) = z^\prime \oplus N, \]</p>
+
+<p>where \(z^\prime\) is another adversarially generated value.</p>
+
+<p>We’ll xor that with</p>
+
+<p>\[ \Delta_i \oplus \Delta_j = y \]</p>
+
+<p>and find</p>
+
+<p>\[ \Delta_j \oplus xs^{-1}_i(\overline{xs}_j(\Delta_j)) = y \oplus z \oplus N. \]</p>
+
+<p>I’ll assert that the function \(g(x) = x \oplus
+xs^{-1}_i(\overline{xs}_j(x))\) is invertible without proof in the
+general case.</p>
+
+<p>In our concrete case, we can simply remember that
+\(\overline{xs}_j\) is a carryless multiplication by an even
+constant, and \(xs^{-1}_i\) another carryless multiplication by a
+constant.  Composing the two yields a carryless multiplication by an
+even constant, and xoring \(x\) in means \(g(x)\) is equivalent to
+a carryless multiplication by an odd constant, and thus invertible.</p>
+
+<p>We thus find that the two hashes can only collide if
+\(\Delta_j \in g^{-1}(y \oplus z \oplus N), \)
+which happens with probability at most \(|N| 2^{-w}\).</p>
+
+<p>In our case, \(|N| = 4\) and \(w = 64\), so this happens with
+probability at most \(2^{-62}\).</p>
+
+<p>Finally, for any given \(\Delta_j\), there is at most one
+\(\Delta_i\) that satisfies</p>
+
+<p>\[ \Delta_i \oplus \Delta_j = y,\]</p>
+
+<p>and so <em>both</em> hashes collide with probability at most \(|N| 2^{-2w}\)
+(\(2^{-126}\)) for UMASH.</p>
+
+<h2 id="what-does-this-look-like-in-code">What does this look like in code?</h2>
+
+<p>The base <a href="https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L336">UMASH block compressor</a>
+mixes all but the last of the message block’s 16-byte chunks with
+<code>PH</code>: xor the chunk with the corresponding bytes in the parameter
+array, computes a carryless multiplication of the xored chunks’ half
+with the other half.  The last chunk goes through <a href="https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L358">ENH</a>,
+a little bit of mixing to improve the hash’s distribution (remember,
+we only rely on \(\varepsilon\)-almost-universality),
+and everything is xored in the accumulator.</p>
+
+<p>The collision proofs above preserved the same structure for the first hash.</p>
+
+<p>The second hash reuses so much work from the first that it mostly
+makes sense to consider a combined loop that computes both (regular
+UMASH and this new xor-shifted variant) block compression functions at
+the same time.</p>
+
+<p>The first change for this combined loop is that we need to xor
+together all 16-bytes chunk in the message, and mix the resulting
+checksum with a fresh <code>PH</code> function.  That’s equivalent to xoring
+everything in a new accumulator (or two accumulators when working with
+256-bit vectors) initialised with the <code>PH</code> parameters, and <code>CLMUL</code>ing
+the two halves together at the end.</p>
+
+<p>We also have to apply the \(\overline{xs}_i\) quasi-xor-shift
+functions to each \(h_i\).  The trick is to accumulate the shifted
+values in two variables: one is the regular UMASH accumulator without
+\(h_0\) (i.e., \(h_1 \oplus h_2 \ldots\)), and the other shifts
+the current accumulator before xoring in a new value, i.e.,
+\(\mathtt{acc}^\prime = (\mathtt{acc} \mathtt{«} 1) \oplus h_i\),
+where the left shift on parallel 64-bit halves simply adds <code>acc</code>
+to itself.</p>
+
+<p>This additional shifted accumulator includes another special case to
+skip the one \(\overline{xs}_1(x) = x \mathtt{«} 1\); that’s not a
+big deal for the code, since we already have to special case the last
+iteration for the <code>ENH</code> mixer.</p>
+
+<p>Armed with \(\mathtt{UMASH} = \bigoplus_{i=1}^{n - 1} h_i\) and
+\(\mathtt{acc} = \bigoplus_{i=2}^{n - 1} h_i \mathtt{«} (i - 1),\)
+we have
+\[\bigoplus_{i=1}^{n - 1} \overline{xs}_i(h_i) = (\mathtt{UMASH} \oplus \mathtt{acc}) \mathtt{«} 1.\]</p>
+
+<p>We just have to xor in the <code>PH</code>-mixed checksum \(h_n\), and finally
+\(h_0\) (which is already in GPRs).</p>
+
+<p>We added two vector xors and one addition for each chunk in a block,
+and, at the end, one CLMUL plus a couple more xors and adds again.</p>
+
+<p>This should most definitely be faster than computing two UMASH at the
+same time, which incurred two vector xors and a CLMUL (or full integer
+multiplication) for each chunk: even when CLMUL can pipeline one
+instruction per cycle, vector additions can dispatch to cheaper
+execution units, so the combined throughput is still higher.</p>
+
+<h2 id="one-last-thing-what-if-we-have-blocks-of-different-length">One last thing: what if we have blocks of different length?</h2>
+
+<p>We already know that UMASH is relatively safe when one block is
+shorter than the other, and we simply xor together fewer mixed chunks.
+Without loss of generality, we can assume the longer block has \(n\)
+chunks; that block’s final <code>ENH</code> is independent of the shorter block’s
+UMASH, and any specific value occurs with probability at most
+\(2^{-63}\) (multiplication by zero occurs at that rate).</p>
+
+<p>A similar argument seems more complex to defend for the shifted UMASH.</p>
+
+<p>Luckily, we can tweak the <a href="https://en.wikipedia.org/wiki/Longitudinal_redundancy_check">LRC checksum</a>
+we use to generate an additional chunk in the block: rather than xoring
+together the raw message chunks, we’ll xor them <em>after</em> xoring them
+with the <code>PH</code> key, i.e.,</p>
+
+<p>\[m_n = \bigoplus_{i=0}^{n - 1} m_i \oplus k_i, \]</p>
+
+<p>where \(k_i\) are the PH parameters for each chunk.</p>
+
+<p>This is a no-op with respect to collision probabilities, when
+checksumming blocks of the same size.  Implementations might however
+benefit from the ability to use a fused <code>xor</code> with load from memory<sup id="fnref:latency" role="doc-noteref"><a href="#fn:latency" class="footnote">1</a></sup> to
+compute \(m_i \oplus k_i\), and feed that both into the checksum and
+into CLMUL for <code>PH</code>.</p>
+
+<p>Unless we’re extremely unlucky (\(m_{n - 1} = k_{n - 1}\), with
+probability \(2^{-2w}\)), the long block’s LRC will differ from the
+shorter block’s.  As long as we always xor in the same <code>PH</code> parameters
+when mixing the artificial LRC, the secondary hashes collide with
+probability at most \(2^{-64}\).</p>
+
+<p>With a small tweak to the checksum function, we can easily guarantee
+that blocks with a different number of chunks collide with probability
+at most \(2^{-127}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" class="footnote">2</a></sup></p>
+
+<p><hr style="width: 50%" /></p>
+
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:latency" role="doc-endnote">
+      <p>This might also come with a small latency hit, which is unfortunate since PH-ing \(m_n\) is likely to be on the critical path… but one cycle doesn’t seem that bad. <a href="#fnref:latency" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:tag" role="doc-endnote">
+      <p>The algorithm to expand any input message to a sequence of full 16-byte chunks is fixed.  That’s why we incorporate a size tag in ENH; that makes it impossible for two messages of different lengths to collide when they are otherwise identical after expansion. <a href="#fnref:tag" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[UMASH: a fast and universal enough hash]]></title>
@@ -3288,192 +3768,6 @@ Python module.</p>
     </li>
     <li id="fn:failure-in-ci" role="doc-endnote">
       <p>The database is a directory of files full of binary data.  The specific meaning of these bytes depends on the Hypothesis version and on the test code, so the database should probably not be checked in.  Important examples (e.g., for regression testing) should instead be made persistent with <code>@example</code> decorators.  Hypothesis does guarantee that tese files are always valid (i.e., any sequence of bytes in the database will result in an example that can be generated by the version of Hypothesis and of the test code that reads it), so we don’t have to invalidate the cache when we update the test harness. <a href="#fnref:failure-in-ci" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-  </ol>
-</div>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Too much locality... for stores to forward]]></title>
-    <link href="https://www.pvk.ca/Blog/2020/02/01/too-much-locality-for-store-forwarding/"/>
-    <updated>2020-02-01T17:29:21-05:00</updated>
-    <id>https://www.pvk.ca/Blog/2020/02/01/too-much-locality-for-store-forwarding</id>
-    <content type="html"><![CDATA[<p><small>Apologies for the failed <a href="https://www.youtube.com/watch?v=K3DRkVjuqmc">Cake reference</a>.<br />
-2020-02-02: Refer to Travis Downs’s investigation into this pathological case for forwarding.</small></p>
-
-<p>I’ve been responsible for <a href="https://backtrace.io/">Backtrace.io</a>’s crash analytic database<sup id="fnref:started-work" role="doc-noteref"><a href="#fn:started-work" class="footnote">1</a></sup> for a couple months now.
-I have focused my recent efforts on improving query times for in-memory grouped aggregations, i.e.,
-the archetypal MapReduce use-case where we generate key-value pairs, and <a href="https://en.wikipedia.org/wiki/Fold_(higher-order_function)">fold</a> over the values
-for each key in some <a href="https://en.wikipedia.org/wiki/Semigroup">(semi)</a><a href="https://en.wikipedia.org/wiki/Group_(mathematics)">group</a>.
-We have a cute cache-efficient data structure for this type of workload;
-the inner loop simply inserts in a small hash table with <a href="/Blog/more_numerical_experiments_in_hashing.html">Robin Hood linear probing</a>,
-in order to guarantee entries in the table are ordered by hash value.  This
-ordering lets us easily dump the entries in sorted order, and <a href="https://www2.eecs.berkeley.edu/Pubs/TechRpts/1993/6309.html">block</a> the merge loop for an arbitrary number of sorted arrays
-into a unified, larger, ordered hash table (which we can, again, dump to a sorted array).<sup id="fnref:more-later" role="doc-noteref"><a href="#fn:more-later" class="footnote">2</a></sup></p>
-
-<h1 id="observation">Observation</h1>
-
-<p>As I updated more operators to use this data structure, I noticed that we were spending a lot of time in its inner loop.
-In fact, <a href="http://www.brendangregg.com/linuxperf.html">perf</a> showed that the query server as a whole was spending 4% of its CPU time on one instruction in that loop:</p>
-
-<pre><code> 2.17 |       movdqu     (%rbx),%xmm0
-39.63 |       lea        0x1(%r8),%r14  # that's 40% of the annotated function
-      |       mov        0x20(%rbx),%rax
- 0.15 |       movaps     %xmm0,0xa0(%rsp)
-</code></pre>
-
-<p>The first thing to note is that instruction-level profiling tends to put the blame on the instruction <em>following</em> the one that triggered a sampling interrupt.
-It’s not the <code>lea</code> (which computes <code>r14 &lt;- r8 + 1</code>) that’s slow, but the <code>movdqu</code> just before.
-So, what is that <code>movdqu</code> loading into <code>xmm0</code>?  Maybe it’s just a normal cache miss, something inherent to the workload.</p>
-
-<p>I turned on source locations <a href="http://man7.org/linux/man-pages/man1/perf-report.1.html">(hit <code>s</code> in <code>perf report</code>)</a>, and observed that this instruction was simply copying to the stack an argument that was passed by address.
-The source clearly showed that the argument should be hot in cache: the inner loop was essentially</p>
-
-<pre><code>A1. Generate a new key-value pair
-B1. Mangle that kv pair just a bit to turn it into a hash element
-C1. Insert the new hash element
-A2.
-B2.
-C2.
-</code></pre>
-
-<p>and the <code>movdqu</code> happens in step C, to copy the element that step B just constructed.<sup id="fnref:dont-copy" role="doc-noteref"><a href="#fn:dont-copy" class="footnote">3</a></sup></p>
-
-<p>At this point, an important question suggests itself: does it matter?
-We could simply increase the size of the base case and speed up the rest of the bottom-up recursion… eventually, the latency for the random accesses in the initial hash table will dominate the inner loop.</p>
-
-<p>When I look into the performance of these deep inner loop, my goal isn’t only to do the same thing better.
-The big wins, in my experience, come from the additional design freedom that we get from being able to find new uses for the same code.
-Improved latency, throughput, or memory footprint really shine when the increased optionality from multiple such improvements compounds and lets us consider a much larger design space for the project as a whole.
-That’s why I wanted to make sure this hash table insertion loop worked on as wide a set of parameter as possible: because that will give future me the ability to combine versatile tools.</p>
-
-<h1 id="hypothesis">Hypothesis</h1>
-
-<p>Back to the original question. Why do we spend so many cycles loading data we just wrote to cache?</p>
-
-<p>The answer is in the question and in the title of this post: too little time elapses between the instructions that write data to the cache and the ones that read the same data.<sup id="fnref:but-forwarding" role="doc-noteref"><a href="#fn:but-forwarding" class="footnote">4</a></sup>
-A modern out-of-order machine (e.g., most amd64 chips) can execute multiple instructions at the same time, and will start executing instructions as soon as their operands are ready, even when earlier instructions in program order are still waiting for theirs.
-Machine code is essentially a messy way to encode a <a href="https://fgiesen.wordpress.com/2018/03/05/a-whirlwind-introduction-to-dataflow-graphs/">dataflow graph</a>, 
-which means our job as micro-optimisers is, at a high level, to avoid long dependency chains and make the dataflow graph as wide as possible.
-When that’s too hard, we should distribute as much scheduling slack as possible between nodes in a chain, in order to absorb the knock-on effects of cache misses and other latency spikes.
-If we fail, the chip will often find itself with no instruction ready to execute; stalling the pipeline like that is like slowing down by a factor of 10.</p>
-
-<p>The initial inner loop simply executes steps A, B, and C in order, where step C depends on the result of step B, and step B on that of step A.
-In theory, a chip with a wide enough instruction reordering window could pipeline multiple loop iterations.
-In practice, real hardware can only <a href="http://blog.stuffedcow.net/2013/05/measuring-rob-capacity/">plan on the order of 100-200 instructions ahead</a>, and that mechanism depends on branches being predicted correctly.
-We have to explicitly insert slack in our dataflow schedule, and we must distribute it well enough for instruction reordering to see the gaps.</p>
-
-<p>This specific instance is a particularly bad case for contemporary machines:
-step B populates the entry with regular (64-bit) register writes,
-while step C copies the same bytes with vector reads and writes.
-<a href="https://gist.github.com/travisdowns/bc9af3a0aaca5399824cf182f85b9e9c">Travis Downs looked into this forwarding scenario</a> and found that no other read-after-write setup behaves this badly, on Intel or AMD.
-That’s probably why the <code>movdqu</code> vector load instruction was such an issue.
-If the compiler had emitted the copy with GPR reads and writes,
-that <em>might</em> have been enough for the hardware to hide the latency.
-However, as <a href="https://twitter.com/trav_downs/status/1223766684932222976">Travis points out on Twitter</a>, it’s hard for a compiler to get that right across compilation units.
-In any case, our most reliable (more so than passing this large struct by value and hoping the compiler will avoid mismatched instructions) and powerful tool to fix this at the source level is to schedule operations manually.</p>
-
-<p>The dataflow graph for each loop iteration is currently a pure chain:</p>
-
-<pre><code>         A1
-         |
-         v
-         B1
-         |
-         v
-         C1
-                A2
-                |
-                v
-                B2
-                |
-                v
-                C2
-</code></pre>
-
-<p>How does one add slack to these chains? With bounded queues!</p>
-
-<h1 id="experiment">Experiment</h1>
-
-<p>My first fix was to add a one-element buffer between steps B and C.  The inner loop became</p>
-
-<pre><code>A1. Generate a new key-value pair
-C0. Insert the hash element from the previous iteration
-B1. Mangle the kv pair and stash that in the buffer
-A2.
-C1.
-B2
-etc.
-</code></pre>
-
-<p>which yields a dataflow graph like</p>
-
-<pre><code>        |     A1
-        v     |
-        C0    |
-              |
-              v
-              B1
-              |
-              |     A2
-              v     |
-              C1    |
-                    |
-                    v
-                    B2
-                    |
-</code></pre>
-
-<p>We’ve introduced slack between steps A and B (there’s now step C from the previous iteration between them), and between steps B and C (we shifted step A from the next iteration between them).
-There isn’t such a long delay between the definition of a value and its use that the data is likely to be evicted from L1.
-However, there is more than enough work available between them to keep the pipeline busy with useful work while C waits for B’s result, or B for A’s.
-That was a nice single-digit improvement in query latency for my internal benchmark, just by permuting a loop.</p>
-
-<p>If a one-element buffer helps, we should clearly experiment with the buffer size, and that’s where I found a more impactful speed-up.
-Once we have an array of elements to insert in a hash table, we can focus on a bulk insert of maybe 8 or 10 elements: instead of trying to improve the latency for
-individual writes, we can focus on the throughput for multiple inserts at once.
-That’s good because <a href="http://www.stuartcheshire.org/rants/Latency.html">throughput is an easier problem than latency</a>.
-In the current case, passing the whole buffer to the hash table code made it easier to <a href="https://www2.eecs.berkeley.edu/Pubs/TechRpts/1993/6309.html">pipeline the insert loop in software</a>:
-we can compute hashes ahead of time, and accelerate random accesses to the hash table with <a href="https://software.intel.com/sites/landingpage/IntrinsicsGuide/#text=_mm_prefetch&amp;expand=4391">software prefetching</a>.
-The profile for the new inner loop is flatter, and the hottest part is as follows</p>
-
-<pre><code>      |       mov        0x8(%rsp),%rdx
- 9.91 |       lea        (%r12,%r12,4),%rax
- 0.64 |       prefetcht0 (%rdx,%rax,8)
-17.04 |       cmp        %rcx,0x28(%rsp)
-</code></pre>
-
-<p>Again, the blame for a “slow” instruction hits the following instruction, so it’s not <code>lea</code> (multiplying by 5) or <code>cmp</code> that are slow; it’s the load from the stack and the prefetch.
-The good news is that these instructions do not have any dependent.  It’s all prefetching, and that’s only used for its side effects.
-Moreover, they come from a block of code that was pipelined in software and executes one full iteration ahead of where its side effects might be useful.
-It doesn’t really matter if these instructions are slow: they’re still far from being on the critical path!  This last restructuring yielded a 20% speed-up on a few slow queries.</p>
-
-<p>I described two tools that I use regularly when optimising code for contemporary hardware.
-Finding ways to scatter around scheduling slack is always useful, both in software and in real life planning.<sup id="fnref:unless-people" role="doc-noteref"><a href="#fn:unless-people" class="footnote">5</a></sup>
-One simple way to do so is to add bounded buffers, and to flush buffers as soon as they fill up (or refill when they become empty), instead of waiting until the next write to the buffer.
-However, I think the more powerful transformation is using buffering to expose bulk operations, which tends to open up more opportunities than just doing the same thing in a loop.
-In the case above, we found a 20% speed-up; for someone who visit their <a href="https://help.backtrace.io/en/articles/2765535-triage">Backtrace dashboard</a> a couple times a day, that can add up to an hour or two at the end of the year.</p>
-
-<p>TL;DR: When a function is hot enough to look into, it’s worth asking why it’s called so often, in order to focus on higher level bulk operations.</p>
-
-<p><hr style="width: 50%" /></p>
-<div class="footnotes" role="doc-endnotes">
-  <ol>
-    <li id="fn:started-work" role="doc-endnote">
-      <p>And by that, I mean I started working there a couple months ago (: <a href="#fnref:started-work" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:more-later" role="doc-endnote">
-      <p>I think that’s a meaty idea, and am planning a longer post on that data structure and where it fits in the hash/sort join continuum. <a href="#fnref:more-later" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:dont-copy" role="doc-endnote">
-      <p>Would I have avoided this issue if I had directly passed by value? The resulting code might have been friendlier to store-to-load forwarding than loading a whole 128 bit SSE register, but see the next footnote. <a href="#fnref:dont-copy" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:but-forwarding" role="doc-endnote">
-      <p>Store-to-load forwarding can help improve the performance of this pattern, when we use forwarding patterns that the hardware supports. However, this mechanism can only decrease the penalty of serial dependencies, e.g., by shaving away some or all of the time it takes to store a result to cache and load it back; even when results can feed directly into dependencies, we still have to wait for inputs to be computed. This is fundamentally a scheduling issue. <a href="#fnref:but-forwarding" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:unless-people" role="doc-endnote">
-      <p>Unless you’re writing schedule optimising software and people will look at the result. A final hill climbing pass to make things look artificially tight often makes for an easier sale in that situation. <a href="#fnref:unless-people" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/">A couple of (probabilistic) worst-case bounds for Robin Hood linear probing</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2019/11/30/a-multiset-of-observations-with-constant-time-sample-mean-and-variance/">A multiset of observations with constant-time sample mean and variance</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Sept
+Nov
   
-29th, 
+30th, 
 2019
 
 
 
 
         
-         | <a href="/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/"
+         | <a href="/Blog/2019/11/30/a-multiset-of-observations-with-constant-time-sample-mean-and-variance/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2019/11/30/a-multiset-of-observations-with-constant-time-sample-mean-and-variance/"
 	      >Comments</a>
         
         
@@ -116,284 +116,1058 @@ Sept
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I like to think of Robin Hood hash tables with linear probing as
-arrays sorted on uniformly distributed keys, with gaps.  That makes it
-clearer that we can use these tables to implement algorithms based on
-merging sorted streams in bulk, as well as ones that rely on fast
-point lookups.  A key question with randomised data structures is how
-badly we can expect them to perform.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><small><em>Fixed notation issues in the “Faster multiset updates” section. Thank you Joonas.</em></small></p>
 
-<h2 id="a-bound-on-the-length-of-contiguous-runs-of-entries">A bound on the length of contiguous runs of entries</h2>
+<p>Let’s say you have a <a href="https://en.wikipedia.org/wiki/Multiset">multiset (bag)</a> of “reals” (floats or rationals),
+where each value is a sampled observations.
+It’s easy to augment any implementation of the multiset ADT
+to also return the sample mean of the values in the multiset in constant time:
+track the sum of values in the multiset, as they are individually added and removed.
+This requires one accumulator
+and a counter for the number of observations in the multiset (i.e., constant space),
+and adds a constant time overhead to each update.</p>
 
-<p>There’s a lot of work on the <em>expected</em> time complexity of operations
-on linear probing Robin Hood hash tables.  <a href="https://dblp.uni-trier.de/pers/hd/v/Viola:Alfredo">Alfredo Viola</a>,
-along with a
-<a href="http://algo.inria.fr/flajolet/Publications/FlPoVi98.pdf">few collaborators</a>,
-has <a href="https://cs.uwaterloo.ca/research/tr/1995/50/CS95-50.pdf">long</a>
-been exploring the <a href="http://www2.math.uu.se/~svante/papers/sj297-aofa.pdf">distribution of displacements</a> (i.e., search times)
-for random elements.  The <a href="https://www3.cs.stonybrook.edu/~bender/newpub/BenderHu07-TODS.pdf">packed memory array</a> angle has also been around
-for <a href="https://www.cs.cmu.edu/~jcreed/p251-willard.pdf">a while</a>.<sup id="fnref:waterloo" role="doc-noteref"><a href="#fn:waterloo" class="footnote">1</a></sup></p>
+<p>It’s not as simple when you also need the sample variance of the multiset \(X\), i.e.,</p>
 
-<p>I’m a bit wary of the “random element” aspect of the linear probing
-bounds: while I’m comfortable with an expectation over the hash
-function (i.e., over the uniformly distributed hash values), a program
-could repeatedly ask for the same key, and consistently experience
-worse-than-expected performance.  I’m more interested in bounding the
-worst-case displacement (the distance between the ideal location for
-an element, and where it is actually located) across all values in a
-randomly generated<sup id="fnref:memory-less" role="doc-noteref"><a href="#fn:memory-less" class="footnote">2</a></sup> Robin Hood table, with high enough
-probability.  That probability doesn’t have to be extremely high:
-\(p = 0.9\) or even \(p = 0.5\) is good enough, as long as we can
-either rehash with an independent hash function, or the probability of
-failure drops exponentially enough as the displacement leeway grows.</p>
+<p>\[\frac{1}{n - 1} \sum\sb{x \in X} (x - \hat{x})\sp{2},\]</p>
 
-<p>The people who study hashing with buckets, or hashing as load
-balancing, seem more interested in these probable worst-case bounds:
-as soon as one bucket overflows, it’s game over for that hash table!
-In that context, we wish to determine how much headroom we must
-reserve in each bucket, on top of the expected occupancy, in order to
-make sure failures are rare enough.  That’s a <a href="https://en.wikipedia.org/wiki/Balls_into_bins_problem">balls into bins problem</a>, where
-the \(m\) balls are entries in the hash table, and the \(n\) bins
-its hash buckets.</p>
+<p>where \(n = |X|\) is the sample size and
+\(\hat{x}\) is the sample mean \(\sum\sb{x\in X} x/n,\)
+ideally with constant query time, 
+and constant and update time overhead.</p>
 
-<p><a href="http://www.dblab.ntua.gr/~gtsat/collection/scheduling/Balls%20into%20Bins%20A%20Simple%20and%20Tight%20Anal.pdf">Raab and Steger’s Simple and Tight Analysis</a>
-of the “balls into bins” problem shows that the case where the average occupancy grows
-with \((\log m)\sp{k}\) and \(k &gt; 1\) has potential, when it comes
-to worst-case bounds that shrink quickly enough: we only need headroom
-that grows with \(\sqrt{\log\sp{k+1} m} = \log\sp{(k+1)/2} m\), 
-slightly more than the square root of the average occupancy.</p>
+<p>One could try to apply the textbook equality</p>
 
-<p>The only issue is that the balls-into-bins analysis is asymptotic,
-and, more importantly, doesn’t apply at all to linear probing!</p>
+<p>\[s\sp{2} = \frac{1}{n(n-1)}\left[n\sum\sb{x\in X} x\sp{2} - \left(\sum\sb{x\in X} x\right)\sp{2}\right].\]</p>
 
-<p>One could propose a form of packed memory array, where the sorted set
-is subdivided in chunks such that the expected load per chunk is in
-\(\Theta(\log\sp{k} m)\), and the size of each chunk
-multiplicatively larger (more than \(\log\sp{(k+1)/2}m\))…</p>
+<p>However, as <a href="https://books.google.com/books?id=Zu-HAwAAQBAJ&amp;printsec=frontcover&amp;dq=the+art+of+computer+programming+volume+2&amp;hl=en&amp;newbks=1&amp;newbks_redir=0&amp;sa=X&amp;ved=2ahUKEwja5aGCzpPmAhWjY98KHYCGBksQuwUwAXoECAQQBw#v=onepage&amp;q=welford%20technometrics&amp;f=false">Knuth notes in TAoCP volume 2</a>,
+this expression loses a lot of precision to round-off in floating point:
+in extreme cases, the difference might be negative
+(and we know the variance is never negative).
+More commonly, we’ll lose precision
+when the sampled values are clustered around a large mean.
+For example, the sample standard deviation of <code>1e8</code> and <code>1e8 - 1</code>
+is <code>1</code>, same as for <code>0</code> and <code>1</code>.
+However, the expression above would evaluate that to <code>0.0</code>, even in double precision:
+while <code>1e8</code> is comfortably within range for double floats,
+its square <code>1e16</code> is outside the range where all integers are represented exactly.</p>
 
-<p>Can we instead derive similar bounds with regular linear probing?  It
-turns out that Raab and Steger’s bounds are indeed simple: they
-find the probability of overflow for one bucket, and derive a
-<a href="https://en.wikipedia.org/wiki/Boole%27s_inequality">union bound</a> for the probability of overflow for any bucket by
-multiplying the single-bucket failure probability by the number of
-buckets.  Moreover, the single-bucket case itself is a <a href="https://en.wikipedia.org/wiki/Binomial_distribution">Binomial</a> confidence interval.</p>
+<p>Knuth refers to a <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.302.7503&amp;rep=rep1&amp;type=pdf">better behaved recurrence by Welford</a>, where
+a running sample mean is subtracted from each new observation
+before squaring.
+<a href="https://www.johndcook.com/blog/standard_deviation/">John Cook has a <code>C++</code> implementation</a>
+of the recurrence that adds observations to a sample variance in constant time.
+In Python, this streaming algorithm looks like this.</p>
 
-<p>We can use the same approach for linear probing; I don’t expect a tight
-result, but it might be useful.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>streaming_variance.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">StreamingVariance</span><span class="p">:</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="mi">0</span>  <span class="c"># centered 2nd moment (~variance of the sum of observations)</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">observe</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="n">v</span>
+</span><span class="line">            <span class="k">return</span>
+</span><span class="line">        <span class="n">old_mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">+=</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">old_mean</span><span class="p">)</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">+=</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">old_mean</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">def</span> <span class="nf">get_mean</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">get_variance</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">/</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="mi">0</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Let’s say we want to determine how unlikely it is to observe a clump
-of \(\log\sp{k}n\) entries, where \(n\) is the capacity of the hash
-table.  We can bound the probability of observing such a clump
-starting at index 0 in the backing array, and multiply by the size of
-the array for our union bound (the clump could start anywhere in the array).</p>
+<p>That’s all we need for insert-only multisets,
+but does not handle removals;
+if only we had removals,
+we could always implement updates (replacement)
+as a removal and an insertion.</p>
 
-<p>Given density \(d = m / n\), where \(m\) is the number of
-entries and \(n\) is the size of the array that backs the hash
-table, the probability that any given element falls in a range of size
-\(\log\sp{k}n\) is \(p = d/n \log\sp{k}n\).  The number of entries
-in such a range follows a Binomial distribution \(B(dn, p)\), with
-expected value \(d \log\sp{k}n\).  We want to determine the maximum
-density \(d\) such that 
-\(\mathrm{Pr}[B(dn, p) &gt; \log\sp{k}n] &lt; \frac{\alpha}{dn}\), where
-\(\alpha\) is our overall failure rate. If rehashing is acceptable,
-we can let \(\alpha = 0.5\), and expect to find a
-suitably uniform hash function after half a rehash on average.</p>
+<p>Luckily, <code>StreamingVariance.observe</code> looks invertible.
+It’s shouldn’t be hard to recover the previous sample mean, given <code>v</code>,
+and, given the current and previous sample means,
+we can re-evaluate <code>(v - old_mean) * (v - self.mean)</code> and
+subtract it from <code>self.var_sum</code>.</p>
 
-<p>We know we want \(k &gt; 1\) for the tail to shrink rapidly enough as
-\(n\) grows, but even \(\log\sp{2}n\) doesn’t shrink very rapidly.
-After some trial and error, I settled on a chunk size
-\(s(n) = 5 \log\sb{2}\sp{3/2} n\).  That’s not great for small or medium sized
-tables (e.g., \(s(1024) = 158.1\)), but grows slowly, and reflects
-extreme worst cases; in practice, we can expect the worst case for
-any table to be more reasonable.</p>
+<p>Let \(\hat{x}\sp{\prime}\) be the sample mean after <code>observe(v)</code>.
+We can derive the previous sample mean \(\hat{x}\) from \(v\):</p>
 
-<p>Assuming we have a quantile function for the Binomial distribution, we
-can find the occupancy of our chunk, at \(q = 1 - \frac{\alpha}{n}\). 
-The occupancy is a monotonic function of the density, so we can use,
-e.g., bisection search to find the maximum density such that the
-probability that we saturate our chunk is \(\frac{\alpha}{n}\),
-and thus the probability that any continuous run of entries has size
-at least \(s(n) =  5 \log\sb{2}\sp{3/2} n\) is less than \(\alpha\).</p>
+<p>\[(n - 1)\hat{x} = n\hat{x}\sp{\prime} - v \Leftrightarrow \hat{x} = \hat{x}\sp{\prime} + \frac{\hat{x}\sp{\prime} - v}{n-1}.\]</p>
 
-<p>For \(\alpha = 0.5\), the plot of densities looks like the following.</p>
+<p>This invertibility means that we can undo calls to <code>observe</code> in
+LIFO order.  We can’t handle arbitrary multiset updates, only a
+stack of observation.  That’s still better than nothing.</p>
 
-<p><img class="center" src="/images/2019-09-29-a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/alpha-half.png" /></p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>variance_stack.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">VarianceStack</span><span class="p">:</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="mi">0</span>  <span class="c"># variance of the sum</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">push</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="n">v</span>
+</span><span class="line">            <span class="k">return</span>
+</span><span class="line">        <span class="n">old_mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">+=</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">old_mean</span><span class="p">)</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">+=</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">old_mean</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">pop</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">&gt;</span> <span class="mi">0</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">            <span class="k">return</span>
+</span><span class="line">        <span class="n">next_n</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">-</span> <span class="mi">1</span>
+</span><span class="line">        <span class="n">old_mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="n">old_mean</span> <span class="o">+</span> <span class="p">(</span><span class="n">old_mean</span> <span class="o">-</span> <span class="n">v</span><span class="p">)</span> <span class="o">/</span> <span class="n">next_n</span>
+</span><span class="line">        <span class="c"># var_sum should never be negative, clamp it so.</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">-</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">old_mean</span><span class="p">))</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">-=</span> <span class="mi">1</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">get_mean</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">get_variance</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">/</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="mi">0</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<!-- sizer <- function(x) { 5 * (log(x, 2)^1.5) };
-     max_overflow <- function(sizer, density, n, p) { n <- ceiling(n); run <- floor(sizer(n)); num_starts = max(1, 1 + n - run); qbinom(1 - (p / num_starts), n, density * run / n) / run }
-     density <- sapply(n, function (n) uniroot(function (density) max_overflow(sizer, density, n, 0.5) - 1, c(0, 1))$root)
-     ggplot(data=data.frame(n, density), aes(x = n, y = density)) + geom_line()
-     -->
+<p>Before going any further, let’s test this.</p>
 
-<p>This curve roughly matches the shape of some
-<a href="https://www.pvk.ca/Blog/more_numerical_experiments_in_hashing.html">my older purely numerical experiments with Robin Hood hashing</a>.
-When the table is small (less than \(\approx 1000\)), \(\log n\) is
-a large fraction of \(n\), so the probability of finding a run of
-size \(s(n) = 5 \log\sb{2}\sp{3/2} n\) is low.  When the table is
-much larger, the asymptotic result kicks in, and the probabiliy slowly
-shrinks.  However, even around the worst case \(n \approx 4500\),
-we can exceed \(77\%\) density and only observe a run of length
-\(s(n)\) half the time.</p>
+<h2 id="testing-the-variancestack">Testing the <code>VarianceStack</code></h2>
 
-<p>If we really don’t want to rehash, we can let \(\alpha = 10\sp{-10}\),
-which compresses the curve and shifts it down: the minimum value is
-now slightly above \(50\%\) density, and we can clearly see the
-growth in permissible density as the size of the table grows.</p>
+<p>The best way to test the <code>VarianceStack</code> is to execute a series of
+<code>push</code> and <code>pop</code> calls, and compare the results of <code>get_mean</code> and
+<code>get_variance</code> with batch reference implementations.</p>
 
-<!-- density <- sapply(n, function (n) uniroot(function (density) max_overflow(sizer, density, n, 1e-10) - 1, c(0, 1))$root)
-     ggplot(data=data.frame(n, density), aes(x = n, y = density)) + geom_line()
-     -->
+<p>I could hardcode calls in unit tests.
+However, that quickly hits diminishing returns in terms of
+marginal coverage VS developer time.
+Instead, I’ll be lazy, completely skip unit tests,
+and rely on <a href="https://hypothesis.works/">Hypothesis</a>,
+its <a href="https://hypothesis.readthedocs.io/en/latest/stateful.html">high level “stateful” testing API</a>
+in particular.</p>
 
-<p><img class="center" src="/images/2019-09-29-a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/alpha-marginal.png" /></p>
+<p>We’ll keep track of the values pushed and popped off the observation stack
+in the driver: we must make sure they’re matched in LIFO order,
+and we need the stack’s contents to compute the reference mean and variance.
+We’ll also want to compare the results with reference implementations,
+modulo some numerical noise.  Let’s try to be aggressive and bound
+the number of float values between the reference and the actual results.</p>
 
-<p>In practice, we can dynamically compute the worst-case displacement,
-which is always less than the longest run (i.e., less than \(s(n) = 5
-\log\sb{2}\sp{3/2} n\)).  However, having non-asymptotic bounds lets
-us write size-specialised code and know that its assumptions are
-likely to be satisfied in real life.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>variance_stack_driver.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+<span class="line-number">61</span>
+<span class="line-number">62</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="kn">import</span> <span class="nn">struct</span>
+</span><span class="line"><span class="kn">import</span> <span class="nn">unittest</span>
+</span><span class="line"><span class="kn">import</span> <span class="nn">hypothesis.strategies</span> <span class="kn">as</span> <span class="nn">st</span>
+</span><span class="line"><span class="kn">from</span> <span class="nn">hypothesis.stateful</span> <span class="kn">import</span> <span class="n">RuleBasedStateMachine</span><span class="p">,</span> <span class="n">invariant</span><span class="p">,</span> <span class="n">precondition</span><span class="p">,</span> <span class="n">rule</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">float_bits</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span class="line">    <span class="n">bits</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack</span><span class="p">(</span><span class="s">&#39;=q&#39;</span><span class="p">,</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s">&#39;=d&#39;</span><span class="p">,</span> <span class="n">x</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
+</span><span class="line">    <span class="n">significand</span> <span class="o">=</span> <span class="n">bits</span> <span class="o">%</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">63</span><span class="p">)</span>
+</span><span class="line">    <span class="c"># ~significand = -1 - significand. We need that instead of just</span>
+</span><span class="line">    <span class="c"># -significand to handle signed zeros.</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">significand</span> <span class="k">if</span> <span class="n">bits</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="k">else</span> <span class="o">~</span><span class="n">significand</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="n">FLOAT_DISTANCE</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="mi">10</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">assert_almost_equal</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">max_delta</span><span class="o">=</span><span class="n">FLOAT_DISTANCE</span><span class="p">):</span>
+</span><span class="line">    <span class="k">assert</span> <span class="nb">abs</span><span class="p">(</span><span class="n">float_bits</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">-</span> <span class="n">float_bits</span><span class="p">(</span><span class="n">y</span><span class="p">))</span> <span class="o">&lt;=</span> <span class="n">max_delta</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">(</span><span class="n">VarianceStackDriver</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__init__</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">v</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">allow_nan</span><span class="o">=</span><span class="bp">False</span><span class="p">,</span> <span class="n">allow_infinity</span><span class="o">=</span><span class="bp">False</span><span class="p">))</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">push</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="c"># Don&#39;t generate `pop()` calls when the stack is empty.</span>
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">pop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">reference_mean</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">:</span>
+</span><span class="line">            <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span>
+</span><span class="line">        <span class="k">return</span> <span class="mi">0</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">reference_variance</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
+</span><span class="line">            <span class="k">return</span> <span class="mi">0</span>
+</span><span class="line">        <span class="n">mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">reference_mean</span><span class="p">()</span>
+</span><span class="line">        <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">pow</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">mean</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span> <span class="o">/</span> <span class="n">n</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@invariant</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">mean_matches</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="n">assert_almost_equal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reference_mean</span><span class="p">(),</span> <span class="bp">self</span><span class="o">.</span><span class="n">reference_mean</span><span class="p">())</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@invariant</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">variance_matches</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="n">assert_almost_equal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reference_variance</span><span class="p">(),</span>
+</span><span class="line">                            <span class="bp">self</span><span class="o">.</span><span class="n">reference_variance</span><span class="p">())</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="n">StackTest</span> <span class="o">=</span> <span class="n">VarianceStackDriver</span><span class="o">.</span><span class="n">TestCase</span>
+</span><span class="line">
+</span><span class="line"><span class="k">if</span> <span class="n">__name__</span> <span class="o">==</span> <span class="s">&#39;__main__&#39;</span><span class="p">:</span>
+</span><span class="line">    <span class="n">unittest</span><span class="o">.</span><span class="n">main</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<h2 id="bounding-buffer-sizes-for-operations-on-sorted-hashed-streams">Bounding buffer sizes for operations on sorted hashed streams</h2>
+<p>This initial driver does not even use the <code>VarianceStack</code> yet.
+All it does is push values to the reference stack,
+pop values when the stack has something to pop,
+and check that the reference implementations match themselves after each call:
+I want to first shake out any bug in the test harness itself.</p>
 
-<p>I mentioned at the beginning of this post that we can also manipulate
-Robin Hood hash tables as sorted sets, where the sort keys are
-uniformly distributed hash values.</p>
+<p><a href="https://twitter.com/DRMacIver/status/1095662615223848960">Not surprisingly</a>,
+Hypothesis does find an issue in the reference implementation:</p>
 
-<p>Let’s say we wished to merge the immutable source table <code>S</code> into the
-larger destination table <code>D</code> in-place, without copying all of <code>D</code>.
-For example, from</p>
-
-<pre><code>S = [2, 3, 4]
-D = [1, 6, 7, 9, 10];
+<pre><code>Falsifying example:
+state = VarianceStackDriver()
+state.push(v=0.0)
+state.push(v=2.6815615859885194e+154)
+state.teardown()
 </code></pre>
 
-<p>we want the merged result</p>
+<p>We get a numerical <code>OverflowError</code> in <code>reference_variance</code>: <code>2.68...e154 / 2</code>
+is slightly greater than <code>sqrt(sys.float_info.max) = 1.3407807929942596e+154</code>,
+so taking the square of that value errors out instead of returning infinity.</p>
 
-<pre><code>D' = [1, 2, 3, 4, 6, 7, 9, 10].
+<p>Let’s start by clamping the range of the generated floats.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>variance_stack_driver.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="kn">import</span> <span class="nn">math</span>
+</span><span class="line"><span class="kn">import</span> <span class="nn">sys</span>
+</span><span class="line"><span class="o">...</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="n">MAX_RANGE</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">float_info</span><span class="o">.</span><span class="n">max</span><span class="p">)</span> <span class="o">/</span> <span class="mi">2</span>
+</span><span class="line">
+</span><span class="line"><span class="n">FLOAT_STRATEGY</span> <span class="o">=</span> <span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=-</span><span class="n">MAX_RANGE</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="n">MAX_RANGE</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line"><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="o">...</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">v</span><span class="o">=</span><span class="n">FLOAT_STRATEGY</span><span class="p">)</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">push</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_stack</span><span class="o">.</span><span class="n">push</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="o">...</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Now that the test harness doesn’t find fault in itself,
+let’s hook in the <code>VarianceStack</code>, and see what happens
+when only <code>push</code> calls are generated (i.e., first test
+only the standard streaming variance algorithm).</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>variance_stack_driver.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">def</span> <span class="nf">assert_almost_equal</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">max_delta</span><span class="o">=</span><span class="n">FLOAT_DISTANCE</span><span class="p">):</span>
+</span><span class="line">    <span class="n">distance</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">float_bits</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">-</span> <span class="n">float_bits</span><span class="p">(</span><span class="n">y</span><span class="p">))</span>
+</span><span class="line">    <span class="c"># Print out some useful information on failure.</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">distance</span> <span class="o">&lt;=</span> <span class="n">max_delta</span><span class="p">,</span> <span class="s">&#39;</span><span class="si">%.18g</span><span class="s"> != </span><span class="si">%.18g</span><span class="s"> (</span><span class="si">%f</span><span class="s">)&#39;</span> <span class="o">%</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">distance</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+</span><span class="line">
+</span><span class="line"><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">(</span><span class="n">VarianceStackDriver</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__init__</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_stack</span> <span class="o">=</span> <span class="n">VarianceStack</span><span class="p">()</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">v</span><span class="o">=</span><span class="n">FLOAT_STRATEGY</span><span class="p">)</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">push</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_stack</span><span class="o">.</span><span class="n">push</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="c"># Never generate `pop()`</span>
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span> <span class="ow">and</span> <span class="bp">False</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">pop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">reference_mean</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">:</span>
+</span><span class="line">            <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span>
+</span><span class="line">        <span class="k">return</span> <span class="mi">0</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">reference_variance</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
+</span><span class="line">            <span class="k">return</span> <span class="mi">0</span>
+</span><span class="line">        <span class="n">mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">reference_mean</span><span class="p">()</span>
+</span><span class="line">        <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">pow</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">mean</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span> <span class="o">/</span> <span class="n">n</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@invariant</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">mean_matches</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="n">assert_almost_equal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reference_mean</span><span class="p">(),</span>
+</span><span class="line">                            <span class="bp">self</span><span class="o">.</span><span class="n">variance_stack</span><span class="o">.</span><span class="n">get_mean</span><span class="p">())</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@invariant</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">variance_matches</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="n">assert_almost_equal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reference_variance</span><span class="p">(),</span>
+</span><span class="line">                            <span class="bp">self</span><span class="o">.</span><span class="n">variance_stack</span><span class="o">.</span><span class="n">get_variance</span><span class="p">())</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>This already fails horribly.</p>
+
+<pre><code>Falsifying example:
+state = VarianceStackDriver()
+state.push(v=1.0)
+state.push(v=1.488565707357403e+138)
+state.teardown()
+F
 </code></pre>
 
-<p>The issue here is that, even with gaps, we might have to overwrite
-elements of <code>D</code>, and buffer them in some scratch space until we get to
-their final position.  In this case, all three elements of <code>S</code> must be
-inserted between the first and second elements of <code>D</code>, so we could
-need to buffer <code>D[1:4]</code>.</p>
+<p>The reference finds a variance of <code>5.54e275</code>,
+which is very much not the streaming computation’s <code>1.108e276</code>.
+We can manually check that the reference is wrong:
+it’s missing the <code>n - 1</code> correction term in the denominator.</p>
 
-<p>How large of a merge buffer should we reasonably plan for?</p>
+<p>We should use this updated reference.</p>
 
-<p>In general, we might have to buffer as many elements as there are in
-the smaller table of <code>S</code> and <code>D</code>.  However, we’re working with hash
-values, so we can expect them to be distributed uniformly.  That
-should give us some grip on the problem.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>variance_stack_driver.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="o">...</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">reference_variance</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
+</span><span class="line">            <span class="k">return</span> <span class="mi">0</span>
+</span><span class="line">        <span class="n">mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">reference_mean</span><span class="p">()</span>
+</span><span class="line">        <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">pow</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">mean</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>We can do even better and only assume that both sorted sets were
-sampled from the same underlying distribution.  The key idea
-is that the rank of an element in <code>S</code> is equal to the
-value of <code>S</code>’s
-<a href="https://en.wikipedia.org/wiki/Empirical_distribution_function">empirical distribution function</a>
-for that element, multiplied by the size of <code>S</code> (similarly for
-<code>D</code>).</p>
+<p>Let’s now re-enable calls to <code>pop()</code>.</p>
 
-<p>The amount of buffering we might need is simply a measure of the
-worst-case difference between the two empirical DFs: the more <code>S</code> get
-ahead of <code>D</code>, the more we need to buffer values of <code>D</code> before
-overwriting them (if we’re very unlucky, we might need a buffer the
-same size as <code>S</code>).  That’s the
-two-sample <a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test#Kolmogorov%E2%80%93Smirnov_statistic">Kolmogorov-Smirnov statistic</a>, and we have 
-<a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test#Two-sample_Kolmogorov%E2%80%93Smirnov_test">simple bounds for that distance</a>.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>variance_stack_driver.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="o">...</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">pop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_stack</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>With probability \(1 - \alpha\), we’ll consume from <code>S</code> and <code>D</code>
-at the same rate \(\pm \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}}\).
-We can let \(\alpha = 10\sp{-10}\) and pre-allocate a buffer of size</p>
+<p>And now things fail in new and excitingly numerical ways.</p>
 
-<p><span>
-\[|S| \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}} &lt; \sqrt{\frac{23.03 |S| (|S| + |D|)}{2 |D|}}.\]
-</span></p>
+<pre><code>Falsifying example:
+state = VarianceStackDriver()
+state.push(v=0.0)
+state.push(v=0.00014142319560050964)
+state.push(v=14188.9609375)
+state.pop()
+state.teardown()
+F
+</code></pre>
 
-<p>In the worst case, \(|S| = |D|\), and we can preallocate a buffer of
-size \(\sqrt{23.03 |D|} &lt; 4.8 \sqrt{|D|}\) and only need to grow
-the buffer every ten billion (\(\alpha\sp{-1}\)) merge.</p>
+<p>This counter-example fails with the online variance returning <code>0.0</code> instead of <code>1e-8</code>.
+That’s not unexpected:
+removing (the square of) a large value from a running sum
+spells catastrophic cancellation.
+It’s also not <em>that</em> bad for my use case,
+where I don’t expect to observe very large values.</p>
 
-<p>The same bound applies in a stream processing setting; I assume this
-is closer to what <a href="https://twitter.com/frankmcsherry">Frank</a> had in
-mind when he brought up this question.</p>
+<p>Another problem for our test harness is that
+floats are very dense around <code>0.0</code>, and 
+I’m ok with small (around <code>1e-8</code>) absolute error
+because the input and output will be single floats.</p>
 
-<p>Let’s assume a “push” dataflow model, where we still work on sorted
-sets of uniformly distributed hash values (and the data tuples
-associated with them), but now in streams that generate values every
-tick.  The buffer size problem now sounds as follows.  We wish to
-implement a sorted merge operator for two input streams that generate
-one value every tick, and we can’t tell our sources to cease producing
-values; how much buffer space might we need in order to merge them
-correctly?</p>
+<p>Let’s relax <code>assert_almost_equal</code>, and
+restrict generated observations to fall
+in \([-2\sp{-12}, 2\sp{12}].\)</p>
 
-<p>Again, we can go back to the Kolmogorov-Smirnov statistic.  In this
-case however, we could buffer each stream independently, so we’re
-looking for critical values for the one-sided one-sample
-Kolmogorov-Smirnov test (how much one stream might get ahead of the
-hypothetical exactly uniform stream).  We have recent (<a href="https://projecteuclid.org/euclid.aop/1176990746">1990</a>)
-<a href="https://en.wikipedia.org/wiki/Dvoretzky%E2%80%93Kiefer%E2%80%93Wolfowitz_inequality">simple and tight bounds</a>
-for this case as well.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>variance_stack_driver.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="c"># Let values be off by ~1 single float ULP</span>
+</span><span class="line"><span class="n">FLOAT_DISTANCE</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="mi">32</span>
+</span><span class="line">
+</span><span class="line"><span class="c"># or by 1e-8</span>
+</span><span class="line"><span class="n">ABSOLUTE_EPS</span> <span class="o">=</span> <span class="mf">1e-8</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">assert_almost_equal</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">max_delta</span><span class="o">=</span><span class="n">FLOAT_DISTANCE</span><span class="p">,</span> <span class="n">abs_eps</span><span class="o">=</span><span class="n">ABSOLUTE_EPS</span><span class="p">):</span>
+</span><span class="line">    <span class="n">delta</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">y</span><span class="p">)</span>
+</span><span class="line">    <span class="n">distance</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">float_bits</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">-</span> <span class="n">float_bits</span><span class="p">(</span><span class="n">y</span><span class="p">))</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">distance</span> <span class="o">&lt;=</span> <span class="n">max_delta</span> <span class="ow">or</span> <span class="n">delta</span> <span class="o">&lt;=</span> <span class="n">abs_eps</span><span class="p">,</span> <span class="s">&#39;</span><span class="si">%.18g</span><span class="s"> != </span><span class="si">%.18g</span><span class="s"> (</span><span class="si">%f</span><span class="s">)&#39;</span> <span class="o">%</span> <span class="p">(</span>
+</span><span class="line">        <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">distance</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="c"># Avoid generating very large observations.</span>
+</span><span class="line"><span class="n">MAX_RANGE</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="mi">12</span>
+</span><span class="line">
+</span><span class="line"><span class="n">FLOAT_STRATEGY</span> <span class="o">=</span> <span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">width</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">min_value</span><span class="o">=-</span><span class="n">MAX_RANGE</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="n">MAX_RANGE</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The critical values for the one-sided case are stronger than the
-two-sided two-sample critical values we used earlier: given an
-overflow probability of \(1 - \alpha\), we need to buffer at most
-\(\sqrt{-\frac{n \ln \alpha}{2}},\) elements.  For 
-\(\alpha = 10\sp{-20}\) that’s less than \(4.8 \sqrt{n}\).<sup id="fnref:three-centuries" role="doc-noteref"><a href="#fn:three-centuries" class="footnote">3</a></sup>
-This square root scaling is pretty good news in practice: shrinking
-\(n\) to \(\sqrt{n}\) tends to correspond to going down a rung or two in
-the storage hierarchy.  For example, \(10\sp{15}\) elements is
-clearly in the range of distributed storage; however, such a humongous
-stream calls for a buffer of fewer than \(1.5 \cdot 10\sp{8}\)
-elements, which, at a couple gigabytes, should fit in RAM on one large
-machine.  Similarly, \(10\sp{10}\) elements might fill the RAM on
-one machine, but the corresponding buffer of less than half a
-million elements could fit in L3 cache, while one million elements
-could fill the L3, and 4800 elements fit in L1 or L2.</p>
+<p>With all these tweaks to make sure we generate easy (i.e., <a href="https://twitter.com/alexwlchan/status/1095663620422332416">interesting</a>)
+test cases, Hypothesis fails to find a failure after its default time budget.</p>
 
-<p>What I find neat about this (probabilistic) bound on the buffer size
-is its independence from the size of the other inputs to the merge
-operator.  We can have a shared \(\Theta(\sqrt{n})\)-size buffer in
-front of each stream, and do all our operations without worrying about
-getting stuck (unless we’re extremely unlucky, in which case we can
-grow the buffer a bit and resume or restart the computation).</p>
+<p>I’m willing to call that a victory.</p>
 
-<p>Probably of more theoretical interest is the fact that these bounds do
-not assume a uniform distribution, only that all the input streams are
-identically and independently sampled from the same underlying
-distribution. That’s the beauty of working in terms of the (inverse)
-distribution functions.</p>
+<h2 id="from-stack-to-full-multiset">From stack to full multiset</h2>
 
-<h2 id="i-dont-think-theres-anything-deeper">I don’t think there’s anything deeper</h2>
+<p>We have tested code to undo updates in Welford’s classic streaming variance algorithm.
+Unfortunately, inverting <code>push</code>es away only works for LIFO edits,
+and we’re looking for arbitrary inserts and removals (and updates) to a multiset
+of observations.</p>
 
-<p>That’s it. Two cute tricks that use well-understood statistical
-distributions in hashed data structure and algorithm design.  I doubt
-there’s anything to generalise from either bounding approach.</p>
+<p>However, both the mean \(\hat{x} = \sum\sb{x\in X} x/n\) and 
+the centered second moment \(\sum\sb{x\in X}(x - \hat{x})\sp{2}\)
+are order-independent:
+they’re just sums over all observations.
+Disregarding round-off, we’ll find the same mean and second moment regardless
+of the order in which the observations were pushed in.
+Thus, whenever we wish to remove an observation from the multiset,
+we can assume it was the last one added to the estimates,
+and pop it off.</p>
 
-<p>However, I definitely believe they’re useful in practice. I like knowing
-that I can expect the maximum displacement for a table of \(n\)
-elements with Robin Hood linear probing to be less than \(5
-\log\sb{2}^{3/2} n\), because that lets me select an appropriate
-option for each table, as a function of that table’s maximum
-displacement, while knowing the range of displacements I might have to
-handle.  Having a strong bound on how much I might have to buffer for
-stream join operators feels even more useful: I can pre-allocate a
-single buffer per stream and not think about efficiently growing the
-buffer, or signaling that a consumer is falling behind.  The
-probability that I’ll need a larger buffer is so low that I just need
-to handle it, however inefficiently.  In a replicated system, where
-each node picks an independent hash function, I would even consider
-crashing when the buffer is too small!</p>
+<p>We think we know how to implement running mean and variance for a multiset of observations.
+How do we test that with Hypothesis?</p>
+
+<p>The hardest part about testing dictionary (map)-like interfaces
+is making sure to generate valid identifiers when removing values.
+As it turns out, Hypothesis has built-in support for this important use case,
+with its <a href="https://hypothesis.readthedocs.io/en/latest/stateful.html#rule-based-state-machines">Bundles</a>.
+We’ll use that to test a dictionary from observation name to observation value,
+augmented to keep track of the current mean and variance of all values.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>variance_multiset_driver.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">VarianceBag</span><span class="p">(</span><span class="n">VarianceStack</span><span class="p">):</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">old</span><span class="p">,</span> <span class="n">new</span><span class="p">):</span>
+</span><span class="line">        <span class="c"># Replace one instance of `old` with `new` by</span>
+</span><span class="line">        <span class="c"># removing `old` and inserting `new`.</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">old</span><span class="p">)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">push</span><span class="p">(</span><span class="n">new</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">class</span> <span class="nc">VarianceBagDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="n">keys</span> <span class="o">=</span> <span class="n">Bundle</span><span class="p">(</span><span class="s">&quot;keys&quot;</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">(</span><span class="n">VarianceBagDriver</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__init__</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">entries</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_bag</span> <span class="o">=</span> <span class="n">VarianceBag</span><span class="p">()</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">target</span><span class="o">=</span><span class="n">keys</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">binary</span><span class="p">(),</span> <span class="n">v</span><span class="o">=</span><span class="n">FLOAT_STRATEGY</span><span class="p">)</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">add_entry</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="p">:</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">update_entry</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
+</span><span class="line">            <span class="k">return</span> <span class="n">multiple</span><span class="p">()</span>
+</span><span class="line">
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_bag</span><span class="o">.</span><span class="n">push</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+</span><span class="line">        <span class="k">return</span> <span class="n">k</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="n">consumes</span><span class="p">(</span><span class="n">keys</span><span class="p">))</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">del_entry</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">k</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_bag</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="p">[</span><span class="n">k</span><span class="p">])</span>
+</span><span class="line">        <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="p">[</span><span class="n">k</span><span class="p">]</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="n">keys</span><span class="p">,</span> <span class="n">v</span><span class="o">=</span><span class="n">FLOAT_STRATEGY</span><span class="p">)</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">update_entry</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_bag</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="p">[</span><span class="n">k</span><span class="p">],</span> <span class="n">v</span><span class="p">)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">reference_mean</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="p">:</span>
+</span><span class="line">            <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="o">.</span><span class="n">values</span><span class="p">())</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="p">)</span>
+</span><span class="line">        <span class="k">return</span> <span class="mi">0</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">reference_variance</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="p">)</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
+</span><span class="line">            <span class="k">return</span> <span class="mi">0</span>
+</span><span class="line">        <span class="n">mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">reference_mean</span><span class="p">()</span>
+</span><span class="line">        <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">pow</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">mean</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">entries</span><span class="o">.</span><span class="n">values</span><span class="p">())</span> <span class="o">/</span> <span class="p">(</span><span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@invariant</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">mean_matches</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="n">assert_almost_equal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reference_mean</span><span class="p">(),</span>
+</span><span class="line">                            <span class="bp">self</span><span class="o">.</span><span class="n">variance_bag</span><span class="o">.</span><span class="n">get_mean</span><span class="p">())</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@invariant</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">variance_matches</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="n">assert_almost_equal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reference_variance</span><span class="p">(),</span>
+</span><span class="line">                            <span class="bp">self</span><span class="o">.</span><span class="n">variance_bag</span><span class="o">.</span><span class="n">get_variance</span><span class="p">())</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="n">BagTest</span> <span class="o">=</span> <span class="n">VarianceBagDriver</span><span class="o">.</span><span class="n">TestCase</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Each call to <code>add_entry</code> will either go to <code>update_entry</code> if
+the key already exists, or add an observation to the dictionary
+and streaming estimator.  If we have a new key, it is added
+to the <code>keys</code> Bundle; calls to <code>del_entry</code> and <code>update_entry</code>
+draw keys from this Bundle.  When we remove an entry, it’s
+also consumed from the <code>keys</code> Bundle.</p>
+
+<p>Hypothesis finds no fault with our new implementation of dictionary-with-variance,
+but <code>update</code> seems like it could be much faster and numerically stable,
+and I intend to mostly use this data structure for calls to <code>update</code>.</p>
+
+<h2 id="faster-multiset-updates">Faster multiset updates</h2>
+
+<p>The key operation for my use-case is to update one observation
+by replacing its <code>old</code> value with a <code>new</code> one.
+We can maintain the estimator by popping <code>old</code> away and pushing <code>new</code> in,
+but this business with updating the number of observation <code>n</code> and
+rescaling everything seems like a lot of numerical trouble.</p>
+
+<p>We should be able to do better.</p>
+
+<p>We’re replacing the multiset of sampled observations \(X\) with
+\(X\sp{\prime} = X \setminus \{\textrm{old}\} \cup \{\textrm{new}\}.\)
+It’s easy to maintain the mean after this update: \(\hat{x}\sp{\prime} = \hat{x} + (\textrm{new} - \textrm{old})/n.\)</p>
+
+<p>The update to <code>self.var_sum</code>, the sum of squared differences from the mean, is trickier.
+We start with \(v = \sum\sb{x\in X} (x - \hat{x})\sp{2},\)
+and we wish to find \(v\sp{\prime} = \sum\sb{x\sp{\prime}\in X\sp{\prime}} (x\sp{\prime} - \hat{x}\sp{\prime})\sp{2}.\)</p>
+
+<p>Let \(\delta = \textrm{new} - \textrm{old}\) and \(\delta\sb{\hat{x}} = \delta/n.\)
+We have
+\[\sum\sb{x\in X} (x - \hat{x}\sp{\prime})\sp{2} = \sum\sb{x\in X} [(x - \hat{x}) - \delta\sb{\hat{x}}]\sp{2},\]
+and
+\[[(x - \hat{x}) - \delta\sb{\hat{x}}]\sp{2} = (x - \hat{x})\sp{2} - 2\delta\sb{\hat{x}} (x - \hat{x}) + \delta\sb{\hat{x}}\sp{2}.\]</p>
+
+<p>We can reassociate the sum, and find</p>
+
+<p>\[\sum\sb{x\in X} (x - \hat{x}\sp{\prime})\sp{2} = \sum\sb{x\in X} (x - \hat{x})\sp{2} - 2\delta\sb{\hat{x}} \left(\sum\sb{x \in X} x - \hat{x}\right) + n \delta\sb{\hat{x}}\sp{2}\]</p>
+
+<p>Once we notice that \(\hat{x} = \sum\sb{x\in X} x/n,\)
+it’s clear that the middle term sums to zero, and we find
+the very reasonable</p>
+
+<p>\[v\sb{\hat{x}\sp{\prime}} = \sum\sb{x\in X} (x - \hat{x})\sp{2} + n \delta\sb{\hat{x}}\sp{2} = v + \delta \delta\sb{\hat{x}}.\]</p>
+
+<p>This new accumulator \(v\sb{\hat{x}\sp{\prime}}\) corresponds to the sum of the
+squared differences between the old observations \(X\) and the new mean \(\hat{x}\sp{\prime}\).
+We still have to update one observation from <code>old</code> to <code>new</code>.
+The remaining adjustment to \(v\) (<code>self.var_sum</code>) corresponds to
+going from \((\textrm{old} - \hat{x}\sp{\prime})\sp{2}\)
+to \((\textrm{new} - \hat{x}\sp{\prime})\sp{2},\)
+where \(\textrm{new} = \textrm{old} + \delta.\)</p>
+
+<p>After a bit of algebra, we get
+\[(\textrm{new} - \hat{x}\sp{\prime})\sp{2} = [(\textrm{old} - \hat{x}\sp{\prime}) + \delta]\sp{2} = (\textrm{old} - \hat{x}\sp{\prime})\sp{2} + \delta (\textrm{old} - \hat{x} + \textrm{new} - \hat{x}\sp{\prime}).\]</p>
+
+<p>The adjusted \(v\sb{\hat{x}\sp{\prime}}\) already includes
+\((\textrm{old} - \hat{x}\sp{\prime})\sp{2}\)
+in its sum, so we only have to add the last term
+to obtain the final updated <code>self.var_sum</code></p>
+
+<p>\[v\sp{\prime} = v\sb{\hat{x}\sp{\prime}} + \delta (\textrm{old} - \hat{x} + \textrm{new} - \hat{x}\sp{\prime}) = v + \delta [2 (\textrm{old} - \hat{x}) + \textrm{new} - \hat{x}\sp{\prime}].\]</p>
+
+<p>That’s our final implementation for <code>VarianceBag.update</code>,
+for which Hypothesis also fails to find failures.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>VarianceBag.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">VarianceBag</span><span class="p">(</span><span class="n">VarianceStack</span><span class="p">):</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">old</span><span class="p">,</span> <span class="n">new</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">&gt;</span> <span class="mi">0</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="n">new</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">            <span class="k">return</span>
+</span><span class="line">        <span class="n">delta</span> <span class="o">=</span> <span class="n">new</span> <span class="o">-</span> <span class="n">old</span>
+</span><span class="line">        <span class="n">old_mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span>
+</span><span class="line">        <span class="n">delta_mean</span> <span class="o">=</span> <span class="n">delta</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">+=</span> <span class="n">delta_mean</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">adjustment</span> <span class="o">=</span> <span class="n">delta</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="p">(</span><span class="n">old</span> <span class="o">-</span> <span class="n">old_mean</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">delta</span> <span class="o">-</span> <span class="n">delta_mean</span><span class="p">))</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">+</span> <span class="n">adjustment</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h2 id="how-much-do-you-trust-testing">How much do you trust testing?</h2>
+
+<p>We have automated property-based tests and some human-checked proofs.
+Ship it?</p>
+
+<p>I was initially going to ask a <a href="https://en.wikipedia.org/wiki/Computer_algebra_system">CAS</a>
+to check my reformulations,
+but the implicit \(\forall\) looked messy.
+Instead, I decided to check the induction hypothesis implicit in
+<code>VarianceBag.update</code>, and enumerate all cases up to a certain number
+of values with <a href="https://github.com/Z3Prover/z3/wiki">Z3</a> in IPython.</p>
+
+<pre><code>In [1]: from z3 import *
+In [2]: x, y, z, new_x = Reals("x y z new_x")
+In [3]: mean = (x + y + z) / 3
+In [4]: var_sum = sum((v - mean) * (v - mean) for v in (x, y, z))
+In [5]: delta = new_x - x
+In [6]: new_mean = mean + delta / 3
+In [7]: delta_mean = delta / 3
+In [8]: adjustment = delta * (2 * (x - mean) + (delta - delta_mean))
+In [9]: new_var_sum = var_sum + adjustment
+
+# We have our expressions. Let's check equivalence for mean, then var_sum
+In [10]: s = Solver() 
+In [11]: s.push()
+In [12]: s.add(new_mean != (new_x + y + z) / 3)
+In [13]: s.check()
+Out[13]: unsat  # No counter example of size 3 for the updated mean
+In [14]: s.pop()
+
+In [15]: s.push()
+In [16]: s.add(new_mean == (new_x + y + z) / 3)  # We know the mean matches
+In [17]: s.add(new_var_sum != sum((v - new_mean) * (v - new_mean) for v in (new_x, y, z)))
+In [18]: s.check()
+Out[18]: unsat  # No counter example of size 3 for the updated variance
+</code></pre>
+
+<p>Given this script, it’s a small matter of programming to generalise
+from 3 values (<code>x</code>, <code>y</code>, and <code>z</code>) to any fixed number of values, and
+generate all small cases up to, e.g., 10 values.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>z3-check.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">def</span> <span class="nf">updated_expressions</span><span class="p">(</span><span class="nb">vars</span><span class="p">,</span> <span class="n">new_x</span><span class="p">):</span>
+</span><span class="line">    <span class="n">x</span> <span class="o">=</span> <span class="nb">vars</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span class="line">    <span class="n">num_var</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">vars</span><span class="p">)</span>
+</span><span class="line">    <span class="n">mean</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">vars</span><span class="p">)</span> <span class="o">/</span> <span class="n">num_var</span>
+</span><span class="line">    <span class="n">var_sum</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">((</span><span class="n">v</span> <span class="o">-</span> <span class="n">mean</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">mean</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">vars</span><span class="p">)</span>
+</span><span class="line">    <span class="n">delta</span> <span class="o">=</span> <span class="n">new_x</span> <span class="o">-</span> <span class="n">x</span>
+</span><span class="line">    <span class="n">delta_mean</span> <span class="o">=</span> <span class="n">delta</span> <span class="o">/</span> <span class="n">num_var</span>
+</span><span class="line">    <span class="n">new_mean</span> <span class="o">=</span> <span class="n">mean</span> <span class="o">+</span> <span class="n">delta_mean</span>
+</span><span class="line">    <span class="n">adjustment</span> <span class="o">=</span> <span class="n">delta</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">mean</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">delta</span> <span class="o">-</span> <span class="n">delta_mean</span><span class="p">))</span>
+</span><span class="line">    <span class="n">new_var_sum</span> <span class="o">=</span> <span class="n">var_sum</span> <span class="o">+</span> <span class="n">adjustment</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">new_mean</span><span class="p">,</span> <span class="n">new_var_sum</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">test_num_var</span><span class="p">(</span><span class="n">num_var</span><span class="p">):</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">num_var</span> <span class="o">&gt;</span> <span class="mi">0</span>
+</span><span class="line">    <span class="nb">vars</span> <span class="o">=</span> <span class="p">[</span><span class="n">Real</span><span class="p">(</span><span class="s">&#39;x_</span><span class="si">%i</span><span class="s">&#39;</span> <span class="o">%</span> <span class="n">i</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">num_var</span><span class="p">)]</span>
+</span><span class="line">    <span class="n">new_x</span> <span class="o">=</span> <span class="n">Real</span><span class="p">(</span><span class="s">&#39;new_x&#39;</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="n">new_mean</span><span class="p">,</span> <span class="n">new_var_sum</span> <span class="o">=</span> <span class="n">updated_expressions</span><span class="p">(</span><span class="nb">vars</span><span class="p">,</span> <span class="n">new_x</span><span class="p">)</span>
+</span><span class="line">    <span class="n">new_vars</span> <span class="o">=</span> <span class="p">[</span><span class="n">new_x</span><span class="p">]</span> <span class="o">+</span> <span class="nb">vars</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+</span><span class="line">    <span class="n">s</span> <span class="o">=</span> <span class="n">Solver</span><span class="p">()</span>
+</span><span class="line">    <span class="n">s</span><span class="o">.</span><span class="n">push</span><span class="p">()</span>
+</span><span class="line">    <span class="n">s</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">new_mean</span> <span class="o">!=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">new_vars</span><span class="p">)</span> <span class="o">/</span> <span class="n">num_var</span><span class="p">)</span>
+</span><span class="line">    <span class="n">result</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">check</span><span class="p">()</span>
+</span><span class="line">    <span class="k">print</span><span class="p">(</span><span class="s">&#39;updated mean </span><span class="si">%s</span><span class="s">&#39;</span> <span class="o">%</span> <span class="n">result</span><span class="p">)</span>
+</span><span class="line">    <span class="k">if</span> <span class="n">result</span> <span class="o">!=</span> <span class="n">unsat</span><span class="p">:</span>
+</span><span class="line">        <span class="k">print</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">model</span><span class="p">())</span>
+</span><span class="line">        <span class="k">return</span> <span class="bp">False</span>
+</span><span class="line">    <span class="n">s</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+</span><span class="line">
+</span><span class="line">    <span class="n">s</span><span class="o">.</span><span class="n">push</span><span class="p">()</span>
+</span><span class="line">    <span class="n">s</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">new_mean</span> <span class="o">==</span> <span class="nb">sum</span><span class="p">(</span><span class="n">new_vars</span><span class="p">)</span> <span class="o">/</span> <span class="n">num_var</span><span class="p">)</span>
+</span><span class="line">    <span class="n">s</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">new_var_sum</span> <span class="o">!=</span> <span class="nb">sum</span><span class="p">(</span>
+</span><span class="line">        <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">new_mean</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">new_mean</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">new_vars</span><span class="p">))</span>
+</span><span class="line">    <span class="n">result</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">check</span><span class="p">()</span>
+</span><span class="line">    <span class="k">print</span><span class="p">(</span><span class="s">&#39;updated variance </span><span class="si">%s</span><span class="s">&#39;</span> <span class="o">%</span> <span class="n">result</span><span class="p">)</span>
+</span><span class="line">    <span class="k">if</span> <span class="n">result</span> <span class="o">!=</span> <span class="n">unsat</span><span class="p">:</span>
+</span><span class="line">        <span class="k">print</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">model</span><span class="p">())</span>
+</span><span class="line">        <span class="k">return</span> <span class="bp">False</span>
+</span><span class="line">    <span class="k">return</span> <span class="bp">True</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">11</span><span class="p">):</span>
+</span><span class="line">    <span class="k">print</span><span class="p">(</span><span class="s">&#39;testing n=</span><span class="si">%i</span><span class="s">&#39;</span> <span class="o">%</span> <span class="n">i</span><span class="p">)</span>
+</span><span class="line">    <span class="k">if</span> <span class="n">test_num_var</span><span class="p">(</span><span class="n">i</span><span class="p">):</span>
+</span><span class="line">        <span class="k">print</span><span class="p">(</span><span class="s">&#39;OK&#39;</span><span class="p">)</span>
+</span><span class="line">    <span class="k">else</span><span class="p">:</span>
+</span><span class="line">        <span class="k">print</span><span class="p">(</span><span class="s">&#39;FAIL </span><span class="si">%i</span><span class="s">&#39;</span> <span class="o">%</span> <span class="n">i</span><span class="p">)</span>
+</span><span class="line">        <span class="k">break</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>I find the most important thing when it comes to using automated proofs
+is to insert errors and confirm we can find the bugs we’re looking for.</p>
+
+<p>I did that by manually mutating the expressions for <code>new_mean</code> and <code>new_var_sum</code>
+in <code>updated_expressions</code>.  This let me find a simple bug in the initial
+implementation of <code>test_num_var</code>: I used <code>if not result</code> instead of <code>result != unsat</code>,
+and both <code>sat</code> and <code>unsat</code> are truthy.  The code initially failed to flag a failure
+when <code>z3</code> found a counter-example for our correctness condition!</p>
+
+<h2 id="and-now-im-satisfied">And now I’m satisfied</h2>
+
+<p>I have code to augment an arbitrary multiset or dictionary with
+a running estimate of the mean and variance;
+that code is based on a classic recurrence,
+with some new math checked by hand,
+with automated tests,
+and with some exhaustive checking of small inputs (to which I claim most bugs can be reduced).</p>
+
+<p>I’m now pretty sure the code works, but there’s another more obviously correct way to solve that update problem.
+This <a href="https://prod-ng.sandia.gov/techlib-noauth/access-control.cgi/2008/086212.pdf">2008 report by Philippe Pébay</a><sup id="fnref:pebay2016" role="doc-noteref"><a href="#fn:pebay2016" class="footnote">1</a></sup>
+presents formulas to compute the mean, variance, and arbitrary moments
+in one pass,
+and shows how to combine accumulators,
+a useful operation in parallel computing.</p>
+
+<p>We could use these formulas to <a href="http://blog.sigfpe.com/2010/11/statistical-fingertrees.html">augment an arbitrary \(k\)-ary tree</a>
+and re-combine the merged accumulator as we go back up the (search)
+tree from the modified leaf to the root.
+The update would be much more stable (we only add and merge observations),
+and incur logarithmic time overhead (with linear space overhead).
+However, given the same time budget, and a <em>logarithmic</em> space overhead,
+we could also implement the constant-time update with arbitrary precision
+software floats, and probably guarantee even better precision.</p>
+
+<p>The constant-time update I described in this post demanded more effort to convince myself
+of its correctness, but I think it’s always a better option than
+an augmented tree for serial code, especially if initial values
+are available to populate the accumulators with batch-computed
+mean and variance.
+I’m pretty sure the code works, and <a href="https://gist.github.com/pkhuong/549106fc8194c0d1fce85b00c9e192d5">it’s up in this gist</a>.
+I’ll be re-implementing it in C++
+because that’s the language used by the project that lead me to this problem;
+feel free to steal that gist.</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:waterloo" role="doc-endnote">
-      <p>I swear the Waterloo theme isn’t some <a href="https://en.wikipedia.org/wiki/Canadian_content">CanCon</a> thing. <a href="#fnref:waterloo" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:memory-less" role="doc-endnote">
-      <p>With consistent tie-breaking, the layout of entries in a Robin hood hash table is a function of the set of entries, independently of the sequence of add and remove operations. <a href="#fnref:memory-less" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:three-centuries" role="doc-endnote">
-      <p>Assuming we consume ten streams per nanosecond, we expect to experience underbuffering once every 316 years. <a href="#fnref:three-centuries" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:pebay2016" role="doc-endnote">
+      <p>There’s also a <a href="https://www.osti.gov/biblio/1426900">2016 journal article by Pébay and others</a> with numerical experiments, but I failed to implement their simpler-looking scalar update… <a href="#fnref:pebay2016" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2017/09/24/rendezvous-hashing-my-baseline-consistent-distribution-method/">Rendezvous hashing: my baseline "consistent" distribution method</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2017/12/22/appnexus-common-framework-its-out-also-how-to-print-integers-faster/">How to print integers really fast (with Open Source AppNexus code!)</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Sept
+Dec
   
-24th, 
+22nd, 
 2017
 
 
 
 
         
-         | <a href="/Blog/2017/09/24/rendezvous-hashing-my-baseline-consistent-distribution-method/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2017/09/24/rendezvous-hashing-my-baseline-consistent-distribution-method/"
+         | <a href="/Blog/2017/12/22/appnexus-common-framework-its-out-also-how-to-print-integers-faster/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2017/12/22/appnexus-common-framework-its-out-also-how-to-print-integers-faster/"
 	      >Comments</a>
         
         
@@ -116,204 +116,541 @@ Sept
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><small><em>2017-10-15: Tweaked the hash merge function to actually deliver the claims (one-universality isn’t enough).</em></small></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>Back in 2014, <a href="https://www.appnexus.com/en/company/careers">AppNexus</a>
+needed a faster way to convert machine integers to strings.  It’s a
+stupid problem to have–just use a binary format–but it’s
+surprisingly common.  Maybe a project can only grow large enough for
+serialisation speed to be an issue if it first disregards some trivial
+concerns.  I can finally share our solution: after failing to nicely
+package our internal support code for years, we recently got the OK to
+open source the
+<a href="https://github.com/appnexus/acf">AppNexus Common Framework (ACF)</a>
+under the Apache License 2.0, despite its incomplete state.</p>
 
-<p>Whenever I mention a data or work distribution problem where I
-ideally want everything related to a given key to hit the same
-machine, everyone jumps to <a href="http://courses.cse.tamu.edu/caverlee/csce438/readings/consistent-hashing.pdf">consistent hashing</a>.  I don’t know how this technique achieved the mindshare it has,
-although I suspect <a href="http://www.read.seas.harvard.edu/~kohler/class/cs239-w08/decandia07dynamo.pdf">Amazon’s 2007 Dynamo DB paper</a>
-is to blame (by introducing the problem to many of us, and mentioning
-exactly one decentralised solution)… or maybe some Google interview
-prep package.</p>
+<p>In the words of a friend and former colleague:</p>
 
-<p><small>Karger et al’s paper doesn’t help, since they introduce the
-generic concept of a consistent hash function and call their
-specific solution… “consistent hashing.”  I’m not sure where I first
-encountered rendezvous hashing, but I vaguely remember a technical
-report by Karger,  so it’s probably not some MIT vs UMich thing.</small></p>
+<blockquote class="tw-center-align twitter-tweet" data-lang="en"><p lang="en" dir="ltr">Two years of my life in one repository....<br /><br />Congrats <a href="https://twitter.com/pkhuong?ref_src=twsrc%5Etfw">@pkhuong</a> <a href="https://twitter.com/arexus?ref_src=twsrc%5Etfw">@arexus</a> and all! <a href="https://t.co/jPFnYrc5V4">https://t.co/jPFnYrc5V4</a></p>&mdash; John Wittrock (@johnwittrock) <a href="https://twitter.com/johnwittrock/status/943251391459528704?ref_src=twsrc%5Etfw">December 19, 2017</a></blockquote>
+<script async="" src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
 
-<p>Regardless of the reason for consistent hashing’s popularity, I feel
-the go-to technique should instead be <a href="http://www.eecs.umich.edu/techreports/cse/96/CSE-TR-316-96.pdf">rendezvous hashing</a>.  Its basic
-form is simple enough to remember without really trying (one of those <a href="https://www.pvk.ca/Blog/2015/04/26/pointer-less-scapegoat-trees/">desert island</a>
-algorithms), it is more memory efficient than consistent hashing in
-practice, and its downside–a simple implementation assigns a location
-in time linear in the number of hosts–is not a problem for small
-deployments, or even medium (a couple racks) scale ones if you
-actually think about failure domains.</p>
+<p>If you don’t want to read more about what’s in ACF and why I feel
+it’s important to open source imperfect repositories,
+<a href="#an_itoa">jump to the section on fast <code>itoa</code></a>.</p>
 
-<p><small>Side question: why did rendez-vous have to lose its hyphen to cross the Channel?</small></p>
+<p>ACF contains the base data structure and runtime library code we use
+to build production services, in C that targets Linux/x86-64.  Some of it is
+correctly packaged, most of it just has the raw files from our
+internal repository.  Ironically, after settling on the project’s
+name, we decided not to publish the most “framework-y” bits of code:
+it’s unclear why anyone else would want to use it.  The data
+structures are in C, and tend to be read-optimised, with perhaps some
+support for non-blocking single-writer/multi-reader concurrency.
+There’s also non-blocking algorithms to support the data structures,
+and basic HTTP server code that we find useful to run CPU-intensive or
+mixed CPU/network-intensive services.</p>
 
-<p>Basic rendezvous hashing takes a distribution key (e.g., a filename),
-and a set of destinations (e.g., hostnames).  It then uses a hash function
-to pseudorandomly map each <code>(distribution_key, destination)</code> pair to a
-value in <code>[0, 1)</code> or <code>[0, 2^64 - 1)</code>, and picks the destination that
-gives the minimal hash value.  If it needs <code>k</code> destinations for
-redundancy, it can pick the destinations that yield the least <code>k</code> hash
-values.  If there are ties (unlikely with a good hash function), it
-breaks them arbitrarily but consistently, e.g., by imposing a total
-order on hostnames.</p>
+<p>Publishing this internal code took a long time because we were trying
+to open a project that didn’t exist yet, despite being composed of
+code that we use every day.  <a href="http://www.appnexus.com">AppNexus</a>
+doesn’t sell code or binaries.  Like many other companies, AppNexus
+sells services backed by in-house code.  Our code base is full of
+informal libraries (I would be unable to make sense of the code base
+if it wasn’t organised that way), but enforcing a clean separation
+between pseudo-libraries can be a lot of extra work for questionable
+value.</p>
 
-<p>A Python implementation could look like the following.</p>
+<p>These fuzzy demarcations are made worse by the way we imported some
+ideas directly from Operating Systems literature, in order to support
+efficient concurrent operations.  That had a snowball effect:
+everything, even basic data structures, ends up indirectly depending
+on runtime system/framework code specialised for our use case.  The
+usual initial offenders are the safe memory reclamation module, and
+the tracking memory allocator (with a bump pointer mode); both go deep
+in internals that probably don’t make sense outside AppNexus.</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>basic rendezvous hashing </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="n">Destination</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s">&#39;Destination&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s">&#39;host&#39;</span><span class="p">,</span> <span class="s">&#39;hash&#39;</span><span class="p">])</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">merge_hashes</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
-</span><span class="line">    <span class="sd">&quot;&quot;&quot;murmurhash3 mix.  Alternatively, ((x | 1) * (y | 1)) % 2**64 should</span>
-</span><span class="line"><span class="sd">    be fine.</span>
-</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="n">x</span> <span class="o">^</span> <span class="n">y</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">^=</span> <span class="n">acc</span> <span class="o">&gt;&gt;</span> <span class="mi">33</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="p">(</span><span class="n">acc</span> <span class="o">*</span> <span class="mh">0xff51afd7ed558ccd</span><span class="p">)</span> <span class="o">%</span> <span class="mi">2</span><span class="o">**</span><span class="mi">64</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">^=</span> <span class="n">acc</span> <span class="o">&gt;&gt;</span> <span class="mi">33</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="p">(</span><span class="n">acc</span> <span class="o">*</span> <span class="mh">0xc4ceb9fe1a85ec53</span><span class="p">)</span> <span class="o">%</span> <span class="mi">2</span><span class="o">**</span><span class="mi">64</span>
-</span><span class="line">    <span class="n">acc</span> <span class="o">^=</span> <span class="n">acc</span> <span class="o">&gt;&gt;</span> <span class="mi">33</span>
-</span><span class="line">    <span class="k">return</span> <span class="n">acc</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">pick_destinations</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">destinations</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
-</span><span class="line">    <span class="n">key_hash</span> <span class="o">=</span> <span class="n">hash_key</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>  <span class="c"># hash the key once, instead of hash(key + host)</span>
-</span><span class="line">    <span class="n">annotated</span> <span class="o">=</span> <span class="p">[(</span><span class="n">merge_hashes</span><span class="p">(</span><span class="n">key_hash</span><span class="p">,</span> <span class="n">dest</span><span class="o">.</span><span class="n">hash</span><span class="p">),</span> <span class="n">dest</span><span class="o">.</span><span class="n">host</span><span class="p">)</span>
-</span><span class="line">                 <span class="k">for</span> <span class="n">dest</span> <span class="ow">in</span> <span class="n">destinations</span><span class="p">]</span>
-</span><span class="line">    <span class="n">ordered</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">annotated</span><span class="p">)</span>  <span class="c"># lexicographic sort on merged hash, host.</span>
-</span><span class="line">    <span class="k">return</span> <span class="p">[</span><span class="n">host</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">ordered</span><span class="p">[:</span><span class="n">k</span><span class="p">]]</span>  <span class="c"># grab host from the first k</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>Back in 2015, we looked at our support code (i.e., code that doesn’t
+directly run the business) and decided we should share it.  We
+were–and still are–sure that other people face similar challenges,
+and exchanging ideas, if not directly trading code, can only be good
+for us and for programming in general.  We tried to untangle the
+“Common” (great name) support library from the rest of the code base,
+and to decouple it from the more opinionated parts of our code, while
+keeping integration around (we need it), but purely opt-in.</p>
 
-<p>We only need to store the list of destinations, and we can convince
-ourselves that data distribution is pretty good (close to uniform) and
-that small changes in the set of destinations only affects a small
-fraction of keys (those going to destinations added/removed), either
-with pen and paper or with a few simulations.  That compares
-positively with consistent hashing, where a practical implementation
-has to create a lot (sometimes hundreds) of pseudo-nodes for each real
-destination in order to mitigate clumping in the hash ring.</p>
+<p>That was hard. Aiming for a separate <em>shared object</em> and a real Debian
+package made it even harder than it had to be.  The strong separation
+between packaged ACF code and the rest of repo added a lot of
+friction, and the majority of the support code remained in-tree.</p>
 
-<p>The downside is that we must iterate over all the nodes, while
-consistent hashing is easily \(\mathcal{O}(\log n)\) time, or even
-\(\mathcal{O}(\log \log n)\), with respect to the number of (pseudo-)nodes.
-However, that’s only a problem if you have a lot of nodes, and
-rendezvous hashing, unlike consistent hashing, does not inflate the
-number of nodes.</p>
+<p>Maybe we made a mistake when we tried to librarify our internals.
+We want a library of reusable code; that doesn’t have to mean a
+literal shared object.  I’m reminded of the two definitions of
+portable code: code sprinkled with platform conditionals, or code that
+can be made to run on a new machine with minimal effort.  Most of the
+time, I’d rather have the latter.  Especially when code mostly runs on
+a single platform, or is integrated in few programs, I try to reduce
+overhead for the common case, while making reuse <em>possible</em> and easy
+enough that others can benefit.</p>
 
-<p>Another thing I like about rendezvous hashing is that it naturally
-handles weights.  With consistent hashing, if I want a node to receive
-ten times as much load as another, I create ten times more
-pseudo-nodes.  As the greatest common divisor of weights
-shrinks, the number of pseudo-node per node grows, which makes
-distribution a bit slower, and, more importantly, increases memory
-usage (linear in the number of pseudo-nodes).  Worse, if you hit the
-<a href="https://en.wikipedia.org/wiki/Fundamental_theorem_of_arithmetic">fundamental theorem of arithmetic</a>
-(as a coworker once snarked out in a commit message), you may have
-to rescale <em>everything</em>, potentially causing massive data movement.</p>
+<p><span class="pullquote-right" data-pullquote="we accepted that the result would not be as polished as our favourite open source libraries, and that most of the code wouldn&#8217;t even be packaged or disentangled from  internals.">
+And that’s how we got the ACF effort out of the door: 
+we accepted that the result would not be as polished as our favourite open source libraries, and that most of the code wouldn’t even be packaged or disentangled from  internals. That’s far
+from an ideal state, but
+it’s closer to our goals than keeping the project private and on the
+backburner.  We got it out by “feature” boxing the amount of
+work–paring it down to figuring out what would never be useful to others,
+and tracking down licenses and provenance–before pushing the partial
+result out to a public repository.  Unsurprisingly, once that was
+done, we completed more tasks on ACF in a few days than we have in the
+past year.
+</span></p>
 
-<p>Rendezvous hashing generates pseudorandom scores by hashing, and ranks
-them to find the right node(s).  Intuitively, we want to use weights
-so that the distribution of pseudorandom scores generated for a node A
-with twice the weight as another node B has the same shape as that of
-node B, but is linearly stretched so that the average hash value for A is
-twice that for B.  We also want the distribution to cover <code>[0, infty)</code>, 
-otherwise a proportion of hashes will always go to the heavier node,
-regardless of what the lighter node hashes to, and that seems wrong.</p>
+<p>Now that <a href="https://github.com/appnexus/acf">ACF</a> is out, we still have
+to figure out the best way to help others co-opt our code, to
+synchronise the public repository with our internal repository, and,
+in my dreams, to accept patches for the public repo and have them also
+work for the internal one.  In the end, what’s important is that the
+code is out there with a clear license, and that someone with similar
+problems can easily borrow our ideas, if not our code.</p>
 
-<p>The <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.414.9353&amp;rep=rep1&amp;type=pdf">trick</a>,
-as explained by <a href="http://www.snia.org/sites/default/files/SDC15_presentations/dist_sys/Jason_Resch_New_Consistent_Hashings_Rev.pdf">Jason Resch</a>
-at Cleversafe, is to map our hashes from uniform in <code>[0, 1)</code> to
-<code>[0, infty)</code> not as an exponential, but with <code>-weight / log(h)</code>.  If you
-simulate just using an exponential, you can quickly observe that it
-doesn’t reweigh things correctly: while the mean is correctly scaled,
-the mass of the probability density function isn’t shifted quite right.
-Resch’s proof of correctness for this tweaked exponential fits on a
-<a href="https://twitter.com/pkhuong/status/799759031896309760">single page</a>.</p>
+<p>The source isn’t always pretty, and is definitely not as well packaged and
+easily re-usable as we’d like it to be, but it has proved itself in
+production (years of use on thousands of cores), and builds to our
+real needs.  The code also tries to expose correct and efficient
+enough code in ways that make correct usage easy, and, ideally, misuse
+hard.  Since we were addressing specific concrete challenges, we were
+able to tweak contracts and interfaces a bit, even for standard
+functionality like memory allocation.</p>
 
-<p>The Python code becomes something like:</p>
+<p>The last two things are what I’m really looking for when exploring
+other people’s support code: how did usage and development experience
+drive interface design, and what kind of non-standard tradeoffs
+allowed them to find new low-hanging fruits?</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>weighted rendezvous hashing </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="n">Destination</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s">&#39;Destination&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s">&#39;host&#39;</span><span class="p">,</span> <span class="s">&#39;hash&#39;</span><span class="p">,</span> <span class="s">&#39;weight&#39;</span><span class="p">])</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">score</span><span class="p">(</span><span class="n">hash_value</span><span class="p">,</span> <span class="n">weight</span><span class="p">):</span>
-</span><span class="line">    <span class="k">return</span> <span class="o">-</span><span class="n">weight</span> <span class="o">/</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">hash_value</span> <span class="o">/</span> <span class="n">HASH_MAX</span><span class="p">)</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">pick_destinations</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">destinations</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
-</span><span class="line">    <span class="n">key_hash</span> <span class="o">=</span> <span class="n">hash_key</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
-</span><span class="line">    <span class="n">annotated</span> <span class="o">=</span> <span class="p">[(</span><span class="n">score</span><span class="p">(</span><span class="n">merge_hashes</span><span class="p">(</span><span class="n">key_hash</span><span class="p">,</span> <span class="n">dest</span><span class="o">.</span><span class="n">hash</span><span class="p">),</span> <span class="n">dest</span><span class="o">.</span><span class="n">weight</span><span class="p">),</span> <span class="n">dest</span><span class="o">.</span><span class="n">host</span><span class="p">)</span>
-</span><span class="line">                 <span class="k">for</span> <span class="n">dest</span> <span class="ow">in</span> <span class="n">destinations</span><span class="p">]</span>
-</span><span class="line">    <span class="n">ordered</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">annotated</span><span class="p">)</span>
-</span><span class="line">    <span class="k">return</span> <span class="p">[</span><span class="n">host</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">ordered</span><span class="p">[:</span><span class="n">k</span><span class="p">]]</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>If anyone else is in the same situation, please give yourself the
+permission to open source something that’s not yet fully packaged.  As
+frustrating as that can be, it has to be better than keeping it
+closed.  I’d rather see real, flawed but production-tested, code from
+which I can take inspiration than nothing at all.</p>
 
-<p>There are obvious micro-optimisations here (for example, computing
-the inverse of the score lets us precompute the reciprocal of each
-destination’s weight), but that’s all details.  The salient part to me
-is that space and time are still linear in the number of nodes,
-regardless of the weights; consistent hashing instead needs space
-pseudolinear(!) in the weights, and is thus a bit slower than its
-\(\mathcal{O}(\log n)\) runtime would have us believe.</p>
+<h2 id="how-to-print-integers-faster">How to print integers faster</h2>
 
-<p>The linear-time computation for weighted rendezvous hashing is also
-CPU friendly.  The memory accesses are all linear and easily
-prefetchable (load all metadata from an array of nodes), and the
-computational kernel is standard vectorisable floating point
-arithmetic.</p>
+<p><a name="an_itoa" href="#an_itoa">¶</a> The 
+<a href="https://github.com/appnexus/acf/blob/master/src/an_itoa.c">integer to string conversion file (<code>an_itoa</code>)</a>
+is one instance of code that relaxes the usual <code>[u]itoa</code> contract
+because it was written for a specific problem (which also gave us
+real data to optimise for).  The relaxation stems from the fact that
+callers should reserve up to 10 chars to convert 32 bit (unsigned)
+integers, and 20 chars for 64 bit ones: we let the routines write
+garbage (<code>0</code>/<code>NUL</code> bytes) after the converted string, as long as it’s
+in bounds.  This allowance, coupled with a smidge of thinking, let us
+combine a few cute ideas to solve the depressingly common problem of
+needing to print integers quickly.
+<a href="https://github.com/appnexus/acf/blob/master/include/an_itoa.h">Switching to <code>an_itoa</code></a>
+might be a quick win for someone else, so I cleaned it up
+and packaged it immediately after making the repository public.</p>
 
-<p>In practice, I’m also not sure I ever really want to distribute
-between hundreds of machines: what kind of failure/resource allocation
-domain encompasses that many equivalent nodes?  For example, when
-distributing data, I would likely want a hierarchical
-consistent distribution scheme, like <a href="https://www.crss.ucsc.edu/media/papers/weil-sc06.pdf">Ceph’s CRUSH</a>:
-something that first assigns data to sections of a datacenter, then to
-racks, and only then to individual machines.  I should never blindly
-distribute data across hundreds of machines; I need to distribute
-between a handful of sections of the network, then one of a dozen
-racks, and finally to one of twenty machines.  The difference between
-linear and logarithmic time at each level of this “failure trie” is
-marginal and is easily compensated by a bit of programming.</p>
+<p>We wrote <code>an_itoa</code> in July 2014.  Back then, we had an application
+with a moderate deployment (a couple racks on three continents) that
+was approaching capacity.  While more machines were in the pipeline, a
+quick <code>perf</code> run showed it was spending a lot of time converting
+strings to integers and back.  We already had a fast-ish string to
+integer function.  Converting machine integers back to string however,
+is a bit more work, and took up around 20% of total CPU time.</p>
 
-<p>The simplicity of basic rendezvous hashing, combined with its minimal
-space usage and the existence of a weighted extension, makes me
-believe it’s a better initial/default implementation of consistent
-hash functions than consistent hashing.  Moreover, consistent
-hashing’s main advantage, sublinear-time distribution, isn’t
-necessarily compelling when you think about the whole datacenter (or
-even many datacenters) as a resilient system of failure-prone domains.
-Maybe rendezvous hashing deserves a rebranding campaign (:</p>
+<p>Of course, the real solution here is to not have this problem.  We
+shouldn’t have been using a human-readable format like JSON in the
+first place.  We had realised the format would be a problem a long
+time ago, and were actually in the middle of a transition to
+<a href="https://developers.google.com/protocol-buffers/">protobuf</a>,
+after a first temporary fix (replacing a piece of
+theoretically reconfigurable JavaScript that was almost never
+reconfigured with hardcoded C that performed the same JSON
+manipulation).  But, there we were, in the middle of this slow
+transition involving terabytes of valuable persistent data, and we
+needed another speed boost until protobuf was ready to go.</p>
+
+<p>When you’re stuck with C code that was manually converted, line by
+line, from JavaScript, you don’t want to try and make high level
+changes to the code.  The only reasonable quick win was to make
+the conversion from integer to string faster.</p>
+
+<p>Human readable formats wasting CPU cycles to print integers is a
+common problem, and we quickly found a few promising approaches and
+libraries.  Our baseline was the radix-10 code in
+<a href="https://github.com/client9/stringencoders/blob/master/src/modp_numtoa.c#L52">stringencoders</a>.
+This <a href="https://tia.mat.br/posts/2014/06/23/integer_to_string_conversion.html">post about Lwan</a>
+suggested using radix-10, but generating strings backward instead of
+reversing like the <code>stringencoders</code> library.  Facebook apparently hit
+a similar problem in 2013, which lead to 
+<a href="https://www.facebook.com/notes/facebook-engineering/three-optimization-tips-for-c/10151361643253920">this solution</a>
+by Andrei Alexandrescu.  The Facebook code combines two key
+ideas: radix-100 encoding, and finding the length of the string with
+galloping search to write the result backward, directly where it
+should go.</p>
+
+<p>Radix-100 made sense, although I wasn’t a fan of the 200-byte lookup
+table.  I was also dubious of the galloping search; it’s a lot of
+branches, and not necessarily easy to predict.  The kind of <code>memmove</code>
+we need to fixup after conversion is small and easy to specialise on
+x86, so we might not need to predict the number of digits at all.</p>
+
+<p>I then looked at the microbenchmarks for Andrei’s code, and they made
+it look like the code was either tested on integers with a fixed
+number of digits (e.g., only 4-digit integers), or randomly picked
+with uniform probability over a large range.</p>
+
+<p>If the number of digits is fixed, the branchiness of galloping search
+isn’t an issue.  When sampling uniformly… it’s also not an issue
+because most integers are large!  If I pick an integer at random in
+<code>[0, 1e6)</code>, 90% of the integers have 6 digits, 99% 5 or 6, etc.</p>
+
+<p>Sometimes, uniform selection is representative of the real workload
+(e.g., random uids or sequential object ids).  Often, not so much.  In
+general, small numbers are more common; for example, small counts can be
+expected to roughly follow a <a href="https://en.wikipedia.org/wiki/Poisson_distribution">Poisson distribution</a>.</p>
+
+<p>I was also worried about data cache footprint with the larger lookup
+table for radix-100 encoding, but then realised we were converting
+integers in tight loops, so the lookup table should usually be hot.
+That also meant we could afford a lot of instruction bytes; a multi-KB
+<code>atoi</code> function wouldn’t be acceptable, but a couple hundred bytes was
+fine.</p>
+
+<p>Given these known solutions, <a href="https://twitter.com/johnwittrock/">John</a>
+and I started doodling for a bit.  Clearly, the radix-100 encoding
+was a good idea.  We now <em>had</em> to know if we could do better.</p>
+
+<p>Our first attempt was to find the number of decimal digits more
+quickly than with the galloping search.  It turns out that
+approximating \(\log\sb{10}\) is hard, and we gave up ;)</p>
+
+<p>We then realised we didn’t need to know the number of decimal digits.
+If we generated the string in registers, we could find the length
+after the fact, slide bytes with bitwise shifts, and directly
+write to memory.</p>
+
+<p>I was still worried about the lookup table: the random accesses in the
+200 byte table for radix-100 encoding could hurt when converting short
+arrays of small integers.  I was more comfortable with some form of
+arithmetic that would trade best-case speed for consistent, if slightly
+sub-optimal, performance.  As it turns out, it’s easy to convert values
+between 0 and 100 to
+<a href="https://en.wikipedia.org/wiki/Binary-coded_decimal">unpacked BCD</a>
+with a reciprocal multiplication by \( 1/10 \) and some in-register
+bit twiddling.  Once we have a string of BCD bytes buffered in a
+general purpose register, we can vertically add <code>'0'</code> to every byte in
+the register to convert to ASCII characters.  We can even do the whole
+conversion on a pair of such values at once, with SIMD within a
+register.</p>
+
+<p>The radix-100 approach is nice because it chops up the input two
+digits at a time; the makespan for a given integer is roughly half as
+long, since modern CPUs have plenty of execution units for the body.</p>
+
+<p>The dependency graph for radix-10 encoding of <code>12345678</code> looks like
+the following, with 7 serial steps.</p>
+
+<p><img class="center" src="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/radix-10.png" /></p>
+
+<p>Going for radix-100 halves the number of steps, to 4.  The steps are
+still serial, except for the conversion of integers in <code>[0, 100)</code> to
+strings.</p>
+
+<p><img class="center" src="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/radix-100.png" /></p>
+
+<p>Could we expose even more
+<a href="https://en.wikipedia.org/wiki/Instruction-level_parallelism">ILP</a>
+than the radix-100 loop?</p>
+
+<p>The trick is to divide and conquer: divide by 10000 (<code>1e4</code>) before
+splitting each group of four digits with a radix-100 conversion.</p>
+
+<p><img class="center" src="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/dc.png" /></p>
+
+<p>Recursive encoding gives us fewer steps, and 2 of the 3 steps can
+execute in parallel.  However, that might not always be worth the
+trouble for small integers, and we know that small numbers are common.
+Even if we have a good divide-and-conquer approach for larger
+integers, we must also implement a fast path for small integers.</p>
+
+<p>The fast path for small integers (or the most significant limb of
+larger integers) converts a 2- or 4- digit integer to unpacked BCD,
+bitscans for the number of leading zeros, converts the BCD to ASCII by
+adding <code>'0'</code> (<code>0x30</code>) to each byte, and shifts out any leading zero;
+we assume that trailing noise is acceptable, and it’s all <code>NUL</code> bytes
+anyway.</p>
+
+<p>For 32-bit integers
+<a href="https://github.com/appnexus/acf/blob/master/src/an_itoa.c#L236"><code>an_itoa</code></a> 
+(really <code>an_uitoa</code>) looks like:</p>
+
+<pre><code>if number &lt; 100:
+    execute specialised 2-digit function
+if number &lt; 10000:
+    execute specialised 4-digit function
+
+partition number with first 4 digits, next 4 digits, and remainder.
+
+convert first 2 groups of 4 digits to string.
+If the number is &lt; 1e8:  # remainder is 0!
+    shift out leading zeros, print string.
+else:
+    print remainder # at most 100, since 2^32 &lt; 1e10
+	print strings for the first 2 groups of 4 digits.
+</code></pre>
+
+<p>The 64 bit version,
+<a href="https://github.com/appnexus/acf/blob/master/src/an_itoa.c#L342"><code>an_ltoa</code></a>
+(really <code>an_ultoa</code>) is more of the same, with differences when the
+input number exceeds <code>1e8</code>.</p>
+
+<h2 id="is-it-actually-faster">Is it actually faster?</h2>
+
+<p>I’ve already concluded that cache footprint was mostly not an issue,
+but we should still made sure we didn’t get anything <em>too</em> big.</p>
+
+<ul>
+  <li><code>an_itoa</code>: 400 bytes.</li>
+  <li><code>an_ltoa</code>: 880 bytes</li>
+  <li><code>fb_itoa</code>: 426 bytes + 200 byte LUT</li>
+  <li><code>fb_constant_itoa</code> (without the galloping search): 172 bytes + 200 byte LUT</li>
+  <li><code>lwan_itoa</code> (radix-10, backward generation): 60 bytes.</li>
+  <li><code>modp_uitoa10</code>: 91 bytes.</li>
+</ul>
+
+<p>The galloping search in Facebook’s converter takes a lot of space
+(there’s a ton of conditional branches, and large numbers must be
+encoded somewhere).  Even if we disregard the lookup table, <code>an_itoa</code>
+is <em>smaller</em> than <code>fb_itoa</code>, and <code>an_ltoa</code> (which adds code for &gt; 32
+bit integers) is only 254 bytes larger than <code>fb_itoa</code> (+ LUT).  Now,
+Facebook’s galloping search attempts to make small integers go faster
+by checking for them first; if we convert small numbers, we don’t
+expect to use all ~250 bytes in the galloping search.  However,
+<code>an_itoa</code> and <code>an_ltoa</code> are similar: the code is setup such that
+larger numbers jump forward over specialised subroutines for small
+integers.  Small integers thus fall through to only execute code at
+the beginning of the functions.  400 or 800 bytes are sizable
+footprints compared to the 60 or 90 bytes of the radix-10 functions,
+but acceptable when called in tight loops.</p>
+
+<p>Now that we feel like the code and lookup table sizes are reasonable
+(something that microbenchmarks rarely highlight), we can look at
+speed.</p>
+
+<p>I first ran the conversion with random integers in each digit count
+class from 1 digit (i.e., numbers in <code>[0, 10)</code>) to 19 (numbers in
+<code>[1e8, 1e9)</code>).  The instruction cache was hot, but the routines were
+not warmed on that size class of numbers (more realistic that way).</p>
+
+<p>The results are cycle counts (with the minimum overhead for a no-op
+conversion subtracted from the raw count), on an unloaded 2.4 GHz Xeon
+E5-2630L, a machine that’s similar to our older production hardware.</p>
+
+<p>We have data for:</p>
+
+<ul>
+  <li><code>an_itoa</code>, our 32 bit conversion routine;</li>
+  <li><code>an_ltoa</code>, our 64 bit conversion routine;</li>
+  <li><code>fb_constant_itoa</code>, Facebook’s code, with the galloping search
+stubbed out;</li>
+  <li><code>fb_itoa</code>, Facebook’s radix-100 code;</li>
+  <li><code>itoa</code>, GNU libc conversion (via sprintf);</li>
+  <li><code>lw_itoa</code>, <a href="https://lwan.ws/">Lwan</a>’s backward radix-10 converter;</li>
+  <li><code>modp</code>, stringencoder’s radix-10 / <code>strreverse</code> <a href="https://github.com/client9/stringencoders/blob/master/src/modp_numtoa.c#L52">converter</a>.</li>
+</ul>
+
+<p>I included <code>fb_constant_itoa</code> to serve as a lower bound on the
+radix-100 approach: the conversion loop stops as soon as it hits 0
+(same as <code>fb_itoa</code>), but the data is written at a fixed offset, like
+<code>lw_itoa</code> does.  In both <code>fb_constant_itoa</code>’s and <code>lw_itoa</code>’s cases,
+we’d need another copy to slide the part of the output buffer that was
+populated with characters over the unused padding (that’s why
+<code>fb_itoa</code> has a galloping search).</p>
+
+<p>When I chose these functions back in 2014, they were all I could find
+that was reasonable.  Since then, I’ve seen one other divide and
+conquer implementation, although it uses a lookup table instead of
+arithmetic to convert radix-100 limbs to characters, and an SSE2
+implementation that only pays off for larger integers (32 bits or
+more).</p>
+
+<p>Some functions only go up to <code>UINT32_MAX</code>, in which case we have no
+data after 9 digits.  The <a href="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/digits.tab.gz">raw data is here</a>; I used
+<a href="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/plot.R">this R script</a> to generate the plot.</p>
+
+<p><a href="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/digits_large.png">
+<img class="center" src="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/digits.png" />
+</a></p>
+
+<p>The solid line is the average time per conversion (in cycles), over
+10K data points, while the shaded region covers the 10th percentile to
+the 90th percentile.</p>
+
+<p>(GNU) libc’s conversion is just wayy out there.  The straightforward
+<code>modp</code> (stringencoders) code overlaps with Facebook’s <code>itoa</code>; it’s
+slightly slower, but so much smaller.</p>
+
+<p>We then have two incomplete string encoders: neither
+<code>fb_constant_itoa</code> nor <code>lw_itoa</code> generates their output where it should
+go.  They fill a buffer from the end, and something else (not
+benchmarked) is responsible for copying the valid bytes where they
+belong.  If an incomplete implementation suffices, Lwan’s radix-10
+approach is already competitive with, arguably faster than, the
+Facebook code.  The same backward loop, but in radix-100, is
+definitely faster than Facebook’s full galloping search/radix-100
+converter.</p>
+
+<p>Finally, we have <code>an_itoa</code> and <code>an_ltoa</code>, that are neck and neck with
+one another, faster than both <code>modp</code> and <code>fb_itoa</code> on small and large
+integers, and even comparable with or faster than the incomplete
+converters.  Their runtime is also more reliable (less variance) than
+<code>modp</code>’s and <code>fb_itoa</code>’s: <code>modp</code> pays for the second variable length
+loop in <code>strreverse</code>, and <code>fb_itoa</code> for the galloping search.  There
+are more code paths in <code>an_itoa</code> and <code>an_ltoa</code>, but no loop, so the
+number of (unpredictable) conditional branches is lower.</p>
+
+<p>What have we learned from this experiment?</p>
+
+<ol>
+  <li>It’s easy to improve on (g)libc’s <code>sprintf</code>.  That makes sense,
+since that code is so generic.  However, in practice, we only
+convert to decimal, some hex, even less octal, and the rest is
+noise.  Maybe we can afford to special case these bases.</li>
+  <li>The double traverse in <code>modp_uitoa10</code> hurts.  It does make sense
+to avoid that by generating backward, ideally in the right spot
+from the start.</li>
+  <li>Radix-100 encoding is a win over radix-10 (<code>fb_constant_itoa</code> is
+faster than <code>lwan_itoa</code>).</li>
+  <li>Using registers as buffers while generating digits is a win
+(<code>an_itoa</code> and <code>an_ltoa</code> are faster for small values).</li>
+  <li>Divide and conquer is also a win (<code>an_ltoa</code> is flatter for large
+integers).</li>
+</ol>
+
+<p>With results that made sense for an easily understood microbenchmark,
+I decided to try a bunch of distributions.  Again, the code was hot,
+the predictors lukewarm, and we gathered 10K cycle counts per
+distribution/function.  The <a href="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/nondigits.tab.gz">raw data is here</a>,
+and I used
+<a href="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/plot.R">this R script</a> to generate the plot.</p>
+
+<p>The independent variables are all categorical here, so I use one facet
+per distribution, and, in each facet, a boxplot per conversion
+function, as well as a jittered scatter plot to show the distribution
+of cycle counts.</p>
+
+<p><a href="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/nondigits_large.png">
+<img class="center" src="/images/2017-12-22-appnexus-common-framework-its-out-also-how-to-print-integers-faster/nondigits.png" />
+</a></p>
+
+<p>Clearly, we can disregard glibc’s <code>sprintf</code> (<code>itoa</code>).</p>
+
+<p>The first facet generated integers by choosing uniformly between
+\(100, 1000, 10\sp{4}, \ldots, 10\sp{8}\).  That’s a semi-realistic
+variation on the earlier dataset, which generated a bunch of numbers in
+each size class, and serves as an easily understood worst-case for
+branch prediction.  Both <code>an_itoa</code> and <code>an_ltoa</code> are faster than the
+other implementations, and branchier implementations (<code>fb_itoa</code> and
+<code>modp</code>) show their variance.  Facebook’s <code>fb_itoa</code> isn’t even faster
+than <code>modp</code>’s radix-10/<code>strreverse</code> encoder.  The galloping search
+really hurts: <code>fb_constant_itoa</code>, without that component, is slightly
+faster than the radix-10 <code>lw_itoa</code>.</p>
+
+<p>The second facet is an even harder case for branch predictors: random
+values skewed with an exponential (<code>pow(2, 64.0 * random() / RAND_MAX)</code>),
+to simulate real-world counts.  Both <code>an_itoa</code> and
+<code>an_ltoa</code> are faster than the other implementations, although
+<code>an_ltoa</code> less so: <code>an_itoa</code> only handles 32 bit integers, so it deals
+with less entropy.  Between the 32-bit implementations, <code>an_itoa</code> is
+markedly faster and more consistent than <code>lw_itoa</code> (which is
+incomplete) and <code>modp</code>.  Full 64-bit converters generally exhibit more
+variance in runtime (their input is more randomised), but <code>an_ltoa</code> is
+still visibly faster than <code>fb_itoa</code>, and even than the incomplete
+<code>fb_constant_itoa</code>.  We also notice that <code>fb_itoa</code>’s runtimes are more
+spread out than <code>fb_constant_itoa</code>: the galloping search adds overhead
+in time, but also a lot of variance.  That makes me think that the
+Facebook code is more sensitive than others to difference in data
+distribution between microbenchmarks and production.</p>
+
+<p>The third facet should be representative of printing internal
+sequential object ids: uniform integers in <code>[0, 256K)</code>.  As expected,
+every approach is tighter than with the skewed “counts” distribution
+(most integers are large).  The <code>an_itoa</code>/<code>an_ltoa</code> options are faster
+than the rest, and it’s far from clear that <code>fb_itoa</code> is preferable to
+even <code>modp</code>.  The range was also chosen because it’s somewhat of a
+worst case for <code>an_itoa</code>: the code does extra work for values between
+\(10\sp{4}\) and \(10\sp{8}\) to have more to do before the
+conditional branch for <code>x &lt; 1e8</code>.  That <em>never</em> pays off in the range
+tested here.  However, even with this weakness, <code>an_itoa</code> still seems
+preferable to <code>fb_itoa</code>, and even to the simpler <code>modp_uitoa10</code>.</p>
+
+<p>The fourth facet (first of the second row) shows what happens when we
+choose random integers in <code>[0, 20)</code>.  That test case is interesting
+because it’s small, thus semi-representative of some of our counts,
+and because it needs 1 or 2 digits with equal probability.  Everything
+does pretty well, and runtime distributions are overall tight; branch
+predictors can do a decent job when there are only two options.  I’m
+not sure why there’s such a difference between <code>an_itoa</code> and
+<code>an_ltoa</code>’s distribution.  Although the code for any value less than
+100 is identical at the C level, there are small difference in code
+generation… but I can’t pinpoint where the difference might come from.</p>
+
+<p>The fifth facet, for random integers in <code>[100, 200)</code> is similar, with
+a bit more variance.</p>
+
+<p>The sixth facet generates unix timestamps around a date in 2014 with
+uniform selection plus or minus one million second.  It’s meant to be
+representative of printing timestamps.  Again, <code>an_itoa</code> and <code>an_ltoa</code>
+are faster than the rest, with <code>an_itoa</code> being slightly faster and
+more consistent.  Radix-100 (<code>fb_constant_itoa</code>) is faster and more
+consistent than radix-10 (<code>lw_itoa</code>), but it’s not clear if <code>fb_itoa</code>
+is preferable to <code>modp</code>.  The variance for <code>modp</code> is larger than for
+the other implementations, even <code>fb_itoa</code>: that’s the cost of a
+radix-10 loop and of the additional <code>strreverse</code>.</p>
+
+<p>This set of results shows that conditional branches are an issue when
+converting integers to strings, and that the impact of branches
+strongly depends on the distribution.  The Facebook approach, with a
+galloping search for the number of digits, seems particularly
+sensitive to the distribution.  Running something like <code>fb_itoa</code>
+because it does well in microbenchmark is thus only a good idea if we
+know that the microbenchmark is representative of production.</p>
+
+<p>Bigger numbers take more time to convert, but the divide and conquer
+approach of <code>an_itoa</code> and <code>an_ltoa</code> is consistently faster at the high
+end, while their unrolled SIMD-within-a-register fast path does well for
+small numbers.</p>
+
+<h2 id="so-if-you-ever-find-yourself-bottlenecked-on-snprintf">So, if you ever find yourself bottlenecked on <code>s[n]printf</code></h2>
+
+<p><span class="pullquote-right" data-pullquote="remember the first rule of high performance string processing: &#8220;DON&#8217;T.&#8221;">
+The correct solution to the “integer printing is too slow” problem is simple:
+don’t do that.  After all, remember the first rule of high performance string processing: “DON’T.”
+When there’s no special requirement, I find <a href="https://developers.google.com/protocol-buffers/">Protobuf</a> does very well as
+a better JSON.
+</span></p>
+
+<p>However, once you find yourself in this bad spot, it’s trivial to do
+better than generic libc conversion code.  This makes it a dangerously
+fun problem in a way… especially given that the data distribution can
+matter so much.  No benchmark is perfect, but various implementations
+are affected differently by flaws in microbenchmarks.  It’s thus
+essential not to overfit on the benchmark data, probably even more
+important than improving performance by another factor of 10% or 20%
+(doing 4-5x better than libc code is already a given).  That’s why I
+prefer integer conversion code with more consistent cycle counts:
+there’s less room for differences due to the distribution of data.</p>
+
+<p>Finally, if, like 2014-AppNexus, you find yourself converting a lot of
+integers to strings in tight loops (on x86-64 machines), 
+<a href="https://github.com/appnexus/acf/blob/master/src/an_itoa.c">try <code>an_itoa</code> or <code>an_ltoa</code></a>!
+The <a href="https://github.com/appnexus/acf">whole repository is Apache 2.0</a>,
+and it should be easy to copy and paste all the dependencies to pare
+it down to two files.  If you do snatch our code, note that the
+functions use their destination array (up to 10 bytes for <code>an_itoa</code>,
+and <code>20</code> for <code>an_ltoa</code>) as scratch space, even for small integers.</p>
+
+<p><small>Thank you for reviewing drafts, John, Ruchir, Shreyas, and Andrew.</small></p>
 </div>
   
   

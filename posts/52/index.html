@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/02/19/fixed-points-and-strike-mandates/">Fixed Points and Strike Mandates</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/02/22/finally-napa-fft3-is-ready-for-users/">Finally! Napa-FFT3 is ready for users</a></h1>
     
     
       <p class="meta">
@@ -99,15 +99,15 @@
 
 Feb
   
-19th, 
+22nd, 
 2012
 
 
 
 
         
-         | <a href="/Blog/2012/02/19/fixed-points-and-strike-mandates/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2012/02/19/fixed-points-and-strike-mandates/"
+         | <a href="/Blog/2012/02/22/finally-napa-fft3-is-ready-for-users/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2012/02/22/finally-napa-fft3-is-ready-for-users/"
 	      >Comments</a>
         
         
@@ -116,128 +116,110 @@ Feb
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>Many tasks in compilation and program analysis (in symbolic
-computation in general, I suppose) amount to finding solutions to
-systems of the form \(x = f(x)\).  However, when asked to define
-algorithms to find such fixed points, we rarely stop and ask “which
-fixed point are we looking for?”</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><a href="https://github.com/pkhuong/Napa-FFT3">Napa-FFT3</a> is in the latest
+<a href="http://www.quicklisp.org/beta/">Quicklisp</a> release.  Unlike previous
+attempts that were really proofs of concept, this one feels solid
+enough for actual use.</p>
 
-<p>In practice, we tend to be interested in fixed points of monotone
-functions: given a partial order \((\prec)\), we have \(a \prec b
-\Rightarrow f(a)\prec f(b)\).  Now, in addition to being a fairly
-reasonable hypothesis, this condition usually lets us exploit
-<a href="http://en.wikipedia.org/wiki/Knaster%E2%80%93Tarski_theorem">Tarski’s fixed point theorem</a>.
-If the domain of \(f\) (with \(\prec\)) forms a
-<a href="http://mathworld.wolfram.com/CompleteLattice.html">complete lattice</a>,
-so does the set of fixpoints of \(f\) !  As a corollary, there then
-exists exactly one least and one greatest fixed point under \(\prec\).</p>
+<p>This third version is extremely different from the first two: rather
+than trying to compute in-order FFTs without blowing caches, it
+generates code for bit-reversed FFTs.  The idea came from
+<a href="http://www.math.purdue.edu/~lucier/">Brad Lucier</a>, who sent me a
+couple emails and showed how nicely his FFT scaled (it’s used in
+<a href="http://dynamo.iro.umontreal.ca/~gambit/wiki/index.php/Main_Page">gambit</a>’s
+bignum code).  Bit-reversed FFTs don’t have to go through any special
+contortion to enjoy nice access patterns: everything is naturally
+sequential.  The downside is that the output is in the wrong order (in
+<a href="http://en.wikipedia.org/wiki/Bit-reversal_permutation">bit-reversed</a>
+order).  However, it might still be an overall win over directly
+computing DFTs in order: we only need to execute one bit-reversal
+pass, and we can also provide FFT routines that work directly on
+bit-reversed inputs.</p>
 
-<p>This is extremely useful, because we can usually define useful meet
-and join operations, and enjoy a complete lattice.  For example, for a
-domain that’s the power set of a given set, we can use \(\subset\)
-as the order relation, \(\cup\) as join, and \(\cap\) as meet.
-However, what I find interesting to note is that, when we don’t pay
-attention to which fixpoint we wish to find, humans seem to
-consistently develop algorithms that converge to the least or greatest
-one, depending on the problem.  It’s as though we all have a <em>common</em>
-blind spot covering one of the extreme fixed points.</p>
+<p>My hope when I started writing Napa-FFT3 was that I could get away
+with a single generator that’d work well at all sizes, and that
+bit-reversing would either not be too much of an issue, or usually not
+needed (e.g., for people who only want to perform convolutions or
+filtering).</p>
 
-<p>A simple example is dead value (useless variable) elimination.  When I
-ask people how they’d identify such variables in a program, the naïve
-solutions tend to be very similar.  They exploit the observation that
-a value is useless if it’s only used to compute values that are
-themselves useless.  The routines start out with every value live
-(used), and prune away useless values, until there’s nothing left to
-remove.</p>
+<h2 id="overview-of-the-code">Overview of the code</h2>
 
-<p>These algorithms converge to solutions that are correct, but
-suboptimal (except for cycle-free code).  We wish to identify as many
-useless values as possible, to eliminate as many computations as
-possible.  Yet, if we start by assuming that all values are live, our
-algorithm will fail to identify some obviously-useless values, like
-<code>x</code> in:</p>
+<p>The
+<a href="https://github.com/pkhuong/Napa-FFT3/blob/master/forward.lisp">forward</a>
+and
+<a href="https://github.com/pkhuong/Napa-FFT3/blob/master/inverse.lisp">inverse</a>
+transform generators are pretty simple implementations of the
+<a href="http://en.wikipedia.org/wiki/Split-radix_FFT_algorithm">split-radix FFT</a>.</p>
 
-<pre><code>for (...)
-  x = x
-</code></pre>
+<p>Generator for “flat” base cases output code for a specialised compiler
+geared toward large basic blocks.  The specialised compiler takes
+potentially very long traces of simple operations on array elements,
+and performs two optimisations: array elements are cached in variables
+(registers), and variables are explicitly spilled back into arrays,
+following <a href="http://en.wikipedia.org/wiki/Cache_algorithms#B.C3.A9l.C3.A1dy.27s_Algorithm">Belady’s algorithm</a>.  That allows us to easily exploit the
+register file, without taking its size directly into account in the
+domain-specific generators, and even when we have to cope with a
+relatively naïve machine code generator like SBCL’s.</p>
 
-<p>We could keep adding more special cases.  However, the correct
-(simplest) solution is to try and identify live values, rather than
-dead ones.  A value is live if it’s used to compute a live value.
-Moreover, return values and writes to memory are always live.  Our
-routine now starts out by assuming that only the latter values are
-live, and adjoins live values as it finds them, until there’s nothing
-left to add.</p>
+<p>Larger input sizes instead use a generator that outputs almost-normal
+recursive code; there’s one routine for each input size, which helps
+move as much address computation as possible to compile-time.</p>
 
-<p>In this case, the intuitive solution converges to the greatest fixed
-point, but we’re looking for the least fixed point.  Setting the right
-initial value ensures convergence to the right fixed point.</p>
+<p>Even with code to handle scaling and convolution/filtering, I feel
+that the generators are easily understood and modified.  They
+currently only support in-order input for the forward transform, and
+in-order output for the inverse, but the generators are simple enough
+that adding code for all four combinations (in-order input or output,
+forward or inverse transform) would be reasonable!  I believe that’s a
+win.</p>
 
-<p>Other common instances of this pattern are
-<a href="http://en.wikipedia.org/wiki/Reference_counting">reference counting</a>
-instead of
-<a href="http://www.memorymanagement.org/glossary/m.html#marking">marking</a>, or
-performing type propagation by initially assigning the top type to all
-values (like SBCL).</p>
+<p>Better: it seems my hope that we can execute bit reverses quickly was
+more than justified.  I’m not quite sure how to describe it, but the
+<a href="https://github.com/pkhuong/Napa-FFT3/blob/master/bit-reversal.lisp">code</a>
+is based on recursing on the indices from the middle bits toward the
+least and most significant bits.  The result is that the there’s
+exactly one swap at each leaf of the recursion, and that, when cache
+associativity is high enough (as is the case for the x86 chips I use),
+all the cache misses are mandatory.  Better, the recursiveness ensures
+that the access patterns are also TLB optimal, when the TLB
+associativity is high enough (or infinite, as for my x86oids).</p>
 
-<p>
-<a href="#strike-algorithm" name="strike-algorithm">#</a>
-I recently found a use for fixed point computations outside of math
-and computer science.
-</p>
+<p>There’s one issue with that recursive scheme: it’s really heavy in
+integer arithmetic to compute indices.  Again, I generate large basic
+blocks to work around that issue.  The last couple levels (three, by
+default) of the recursion are unrolled and compiled into a long
+sequence of swaps.  The rest of the recursion is executed by looping
+over a vector that contains indices that were computed at
+compile-time.</p>
 
-<p>Most university or <a href="http://en.wikipedia.org/wiki/CEGEP">CEGEP</a> student
-unions in Québec will vote (or already have voted) on strike mandates
-to help organize protests against rising university tuition fees this
-winter and spring.  There are hundreds of such unions across the
-province representing, in total, around four hundred thousand
-students.  The vast majority of these unions comprise a couple hundred
-(or fewer) students, and many feel it would be counter-productive for
-only a tiny number of students to be on strike.  Thus, strike mandates
-commonly include conditions regarding the minimal number of other
-students who also hold strike mandates, along with additional lower
-bounds on the number of unions and universities or colleges involved.
-As far as I know, all the mandates adopted so far are monotone: if
-they are satisfied by a set striking unions, they are also satisfied
-by all of its supersets.</p>
+<h2 id="correctness">Correctness</h2>
 
-<p>Tarski’s theorem applies (again, with \((\subset, \cup, \cap)\) on the
-power set of the set of student unions).  Which fixed point are we
-looking for?</p>
+<p>I have a hard time convincing myself that <em>code generators</em> are
+correct, especially without a nice static type system.  Instead, I
+heavily tested the final generated code.  I’m using Common Lisp, so
+array accesses were all checked automatically, which was very useful
+early in the development processes.  Once I was convinced certain that
+all accesses were correct, I turned bound and type checking off.  The
+<a href="https://github.com/pkhuong/Napa-FFT3/blob/master/ergun-test.lisp">first test file</a>
+implements a set of randomised tests proposed by
+<a href="http://www.cs.sfu.ca/~funda/publications.html">Funda Ergün</a>.  That
+was enough for me to assume that the FFTs themselves were correct.  I
+then turned to a
+<a href="https://github.com/pkhuong/Napa-FFT3/blob/master/tests.lisp">second set of tests</a>
+to try and catch issues in the rest of the code that builds on
+straight FFTs.</p>
 
-<p>It’s clear to me that we’re looking for the fixed point with the
-largest set of striking unions.  In some situations, the least fixed
-point could trivially be the empty set (or all unions that did not
-adopt any lower bound).  Moreover, the mandates are usually presented
-with an explanation to the effect that, if unions representing at
-least \(n_0\) students adopt the same mandate, then all unions that
-have adopted the mandate will go on strike simultaneously.</p>
+<p>The process did catch a couple bugs, and makes me feel confident
+enough to let other people use Napa-FFT3 in their programs.</p>
 
-<p>I asked fellow graduate students in computer science to sketch an
-algorithm to determine which unions should go on strike given their
-mandates; they started with the set of student unions currently on
-strike, and adjoined unions for which all the conditions were met.
-Such algorithms will converge toward the least fixed point.  For
-example, there could be two unions, each comprising 5 000 students,
-with the same strike floor of 10 000 students, and these algorithms
-would have both unions deadlocked, waiting for the other to go on
-strike.</p>
+<h2 id="performance">Performance</h2>
 
-<p>Instead, we should start by assuming that all the unions (with a
-strike mandate) are on strike, and iteratively remove unions whose
-conditions are not all met, until we hit the greatest fixed point.
-I’m fairly sure this will end up being a purely theoretical concern,
-but it’s a pretty neat case of abstract mathematics helping us
-interpret a real-world situation.</p>
-
-<p>This pattern of intuitively converging toward a suboptimal solution
-seems to come up a lot when computing fixed points.  It’s not
-necessarily a bad choice: conservative initial values tend to lead to
-faster convergence, and often have the property that intermediate
-solutions are always correct (feasible).  When we need quick results,
-it may make sense to settle for suboptimal solutions.  However, it
-ought to be a deliberate choice, rather than a consequence of failing
-to consider other possibilities.</p>
+<p>Napa-FFT and Napa-FFT2 managed to come reasonably close to FFTW’s
+performance.  When I started working on Napa-FFT3, I hoped that it
+could come as close, with much less complexity.  In fact, it performs
+even better than expected: Napa-FFT3 is faster than Napa-FFT(2) at
+nearly all sizes, and outperforms FFTW’s default planner for
+out-of-cache transforms (even with the bit-reversal pass).</p>
 </div>
   
   

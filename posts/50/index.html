@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/05/24/fitting-polynomials-by-generating-linear-constraints/">Fitting polynomials by generating linear constraints</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/07/03/binary-search-star-eliminates-star-branch-mispredictions/">Binary search *eliminates* branch mispredictions</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-May
+July
   
-24th, 
+3rd, 
 2012
 
 
 
 
         
-         | <a href="/Blog/2012/05/24/fitting-polynomials-by-generating-linear-constraints/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2012/05/24/fitting-polynomials-by-generating-linear-constraints/"
+         | <a href="/Blog/2012/07/03/binary-search-star-eliminates-star-branch-mispredictions/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2012/07/03/binary-search-star-eliminates-star-branch-mispredictions/"
 	      >Comments</a>
         
         
@@ -116,496 +116,752 @@ May
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><small>(There were some slight edits since the original publication.
-The only major change is that the time to solve each linear program
-probably grows cubically, not linearly, with the number of
-points.)</small></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>Searching in a short, sorted vector is a fairly common task.  Lots of
+time, data sets are just small enough that it’s quicker (and simpler)
+to store them in a sorted vector than to use an alternative with
+asymptotically faster insertions.  Even when we do use more complex
+data structures, it often makes sense to specialise the leaves and
+pack more data in a single node.</p>
 
-<p>This should be the first part in a series of post exploring the
-generation of efficient and precise polynomial approximations.  Yes,
-there is Lisp code hidden in the math (: See
-<a href="https://github.com/pkhuong/rational-simplex">rational-simplex</a> and
-<a href="https://github.com/pkhuong/rational-simplex/tree/master/demo/vanilla-fit">vanilla-fit</a>.</p>
+<p>How should we implement such a search?  There are two basic options:
+linear and binary search.  After running a bunch of tests, I claim
+that a decent binary search offers good and robust performance, and is
+nearly always the right choice.  An interpolation search could be
+appropriate, but it’s a tad too complicated for short vectors, and can
+fail hard if the input is arranged just wrong.</p>
 
-<p>Here’s the context: we want to approximate some non-trivial function,
-like \(\log\), \(\exp\) or \(\sin\) on a computer, in floating
-point arithmetic.  The textbook way to do this is to use a truncated
-Taylor series: evaluating polynomials is pretty quick on computers.
-<a href="http://lol.zoy.org/blog/2011/12/21/better-function-approximations">Sam Hocevar</a>’s
-post on the topic does a very good job of illustrating how
-wrong-headed the approach is in most cases.  We should instead try to
-find an approximation that minimises the maximal error over a range
-(e.g. \([-\pi,\pi]\) for \(\sin\)).  He even has
-<a href="http://lol.zoy.org/wiki/oss/lolremez">LolRemez</a> to automatically
-compute such approximations for given functions.  (While we’re kind of
-on the topic, the very neat
-<a href="http://www2.maths.ox.ac.uk/chebfun/">Chebfun</a> applies closely-related
-ideas to try and be to continuous functions what floating point
-numbers are to reals.)</p>
+<p>When the data is expected to be in cache, binary search is pretty much
+always preferable.  When it isn’t, binary search is faster for short
+(at most one or two cache line) and long vectors, but a good linear
+search can be the best option for data that fits in a couple cache
+lines.</p>
 
-<p>The LolRemez docs point out two clever tricks to get more efficient
-approximations:
-<a href="http://lol.zoy.org/wiki/doc/maths/remez/tutorial-changing-variables">forcing odd or even polynomials</a>,
-and
-<a href="http://lol.zoy.org/wiki/doc/maths/remez/tutorial-fixing-parameters">fixing parameters to simple values</a>.
-Could we automate this process?</p>
+<p>I’ll focus on one specific case that is of interest to me: searching a
+short or medium-length sorted vector of known size.  I’m interested in
+micro-optimisations, so I’ll only work on vectors of 32-bit <code>unsigned</code>
+values.  I’m also assuming we’re looking for a
+<a href="http://www.sgi.com/tech/stl/lower_bound.html">lower bound</a>, because
+that’s what I need.
+Some
+<a href="https://schani.wordpress.com/2010/04/30/linear-vs-binary-search/">other people</a>
+have looked into this, but I consider more cases and use
+size-specialised code.  I also try to represent the whole distribution
+of runtimes, which helps us take long tails into account: I’m
+usually willing to take a small hit in average performance for an
+improvement in consistency.</p>
 
-<p>The goal of this series is to show that we can, by applying Operations
-Research (<a href="http://www.scienceofbetter.org/">“The Science of Better”</a>)
-to this micro-optimisation challenge.  OR is what I do during the day,
-as a PhD student, and I believe that there’s a lot of missed
-opportunities in nifty program optimisation or analysis.  (I also
-think that language design has a lot to offer to OR people who cope
-with modeling languages that have only changed incrementally since the
-seventies. :)</p>
+<h2 id="branch-mispredictions-and-entropy">Branch mispredictions and entropy</h2>
 
-<h2 id="problem-statement">Problem statement</h2>
+<p>X86 processors have been pipelined for quite a while now, and
+(mispredicted) conditional branches are well known for wrecking the
+performance of programs: when a branch is predicted wrong, all the
+work that’s been speculatively done so far must be thrown out.  In
+effect, the processor’s massive execution resources have then been
+completely wasted from the moment the branch is decoded until it is
+retired (out of order execution improves on things a bit, but the end
+result is the same).</p>
 
-<p>For now, let’s try and solve the original problem: find, in a family
-of functions \(F\) (e.g. polynomials of degree 4), an approximation
-\(\tilde{f}\) of a function \(f\) over some bounded range
-\(B\subset R\) such that \(\tilde{f}\) minimises the maximal error
-over that range:</p>
+<p>Of course, things aren’t as bad as they once were with the old
+<a href="http://en.wikipedia.org/wiki/NetBurst_%28microarchitecture%29">P4</a>.
+That one exhibited an awesome combination of a preternaturally long
+pipeline, slow conditional moves, slow shifts, and extra latency on
+any instruction that used the condition flags.  I don’t think I can
+convey how frustrating that microarchitecture could be… Mispredicted
+branches killed IPC, but conditional moves were only slightly better,
+and more portable bit-twiddling tricks (generating masks from the sign
+bit with <code>sar</code>, or from the carry flag via <code>sbb</code>) just as slow.  I
+believe Linus Torvalds once posted quite the rant on that topic on
+<a href="http://www.realworldtech.com/">RWT</a> (:</p>
 
-<div>
-$$\tilde{f} = \mathop{\arg\min}_{g \in F}\max_{x\in B} |g(x)-f(x)|.$$
-</div>
+<p><span class="pullquote-right" data-pullquote="&#8220;It&#8217;s better to execute many nearly useless branches.&#8221; (!?)">
+Still, I think we can tell the period has left its mark on many
+programmers who will go to great lengths to avoid anything that looks
+like a branch.  One
+<a href="http://www.drdobbs.com/article/print?articleId=184405848&amp;siteSectionName=">common</a> 
+<a href="http://stackoverflow.com/questions/5239055/more-bit-twiddling-efficiently-implementing-a-binary-search-over-a-fixed-size-a">symptom</a> 
+is the notion that it’s <em>normal</em> for a linear search to execute faster
+than a binary search, even on vectors of 32 or 64 values.  The
+reasoning is that the branches in a linear search are trivially
+predicted: the comparison always fails, except for the very last once.
+In contrast, the comparisons in a binary search are hard to predict:
+there are only \(\lg n\) of them, so each one extracts one full bit
+of information from the vector.  In other words, linear search is
+expected to run better because each conditional extracts less
+information: the predictors have less entropy to deal with, and are
+right more often… “It’s better to execute many nearly useless branches.” (!?)
+</span></p>
 
-<p>\(B\) is a dense set, with infinitely, if not uncountably, many
-elements, so it’s far from obvious that we can solve this, even up to
-negligible errors.</p>
+<h2 id="not-all-conditionals-are-created-equal">Not all conditionals are created equal</h2>
 
-<h2 id="the-remez-algorithm">The Remez algorithm</h2>
+<p><span class="pullquote-right" data-pullquote="Fixed-length binary searches are naturally executed without any branch!">
+Sometimes, it really is faster to perform redundant work to avoid
+mispredicted branches.  However, that’s definitely not the 
+case for linear versus binary search.  Linear search pretty much has
+to be implemented with conditional branches: we really want to abort
+early once we’ve found what we’re looking for.  It’s not so clear-cut
+with binary search.  I think it’s a standard exercise to ask why it
+doesn’t help that much to leave binary search early when we have an
+exact match.  So, when the size is known ahead of time, the only
+remaining conditional is when we update the upper or the
+lower bound;  that’s actually a conditional move. 
+Fixed-length binary searches are naturally executed without any branch! It doesn’t get more prediction-friendly than that.
+</span></p>
 
-<p>The
-<a href="http://en.wikipedia.org/wiki/Remez_algorithm">Remez exchange algorithm</a>
-shows one way to solve the minimax approximation problem, from the realm
-of mathematical analysis.</p>
+<p>In short, we actually expect linear search to be faster than binary
+search only when conditional branches allow the former to leave the
+search loop early.  Linear search can hope to overtake binary search
+<em>because</em> of its conditional branches!</p>
 
-<p>Let’s pretend we do not know \(\tilde{f}\), but do know the points
-where its error from \(f\) is maximised.  In fact, if we are looking
-for polynomials of degree \(n\), we only need \(n+2\) such points.
-Let’s further impose that the errors alternate in sign: i.e., if the
-points are ordered (\(x_0 &lt; \ldots &lt; x_i &lt; \ldots &lt; x_{n+1}\)), then
-\(\tilde{f}(x_0) &lt; f(x_0)\), \(\tilde{f}(x_1) &gt; f(x_1)\), etc., or
-vice versa.  Nifty analysis results tell us that these points exist,
-and that they exhibit the same absolute error \(|\epsilon|\).  We
-can now find the coefficients \(a_0,a_1,\ldots,a_n\) of
-\(\tilde{f}\) by solving a small linear system:</p>
+<h2 id="microbenchmarking-for-mispredictions">Microbenchmarking for mispredictions</h2>
 
-<div>
-$$\sum_{j=0}^n a_j x_0^j = f(x_0) + \epsilon$$
-$$\sum_{j=0}^n a_j x_1^j = f(x_1) - \epsilon$$
-<p><center>etc. for each \(x_i\).</center></p>
-</div>
+<p>I tested this hypothesis on my 2.8 GHz X5660, in GCC.  First the
+linear (lower bound) search:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>inverse linear search </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="n">ALWAYS_INLINE</span> <span class="kt">size_t</span>
+</span><span class="line"><span class="nf">linear_search</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">size</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="k">for</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span> <span class="o">=</span> <span class="n">size</span><span class="p">;</span> <span class="n">i</span> <span class="o">--&gt;</span> <span class="mi">0</span><span class="p">;)</span> <span class="p">{</span>
+</span><span class="line">                <span class="kt">unsigned</span> <span class="n">v</span> <span class="o">=</span> <span class="n">vector</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+</span><span class="line">                <span class="k">if</span> <span class="p">(</span><span class="n">v</span> <span class="o">&lt;=</span> <span class="n">key</span><span class="p">)</span> <span class="k">return</span> <span class="n">i</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>There are \(n+2\) variables (the \(n+1\) coefficients \(a_j\)
-and \(\epsilon\)), and \(n+2\) constraints (one for each
-extremum), so it’s a straight linear solve.</p>
+<p>Size-specialised versions were generated by calling it with a constant
+<code>size</code> argument.  GCC unrolled the loop for size 16 and lower, which
+seems more than reasonable to me.  For larger sizes, the loop was not
+unrolled at all.  Again, that seems reasonable: current X86 have
+special logic to accelerate such tiny (compare, conditional jump,
+decrement) loop bodies.</p>
 
-<p>Of course, we don’t actually know these extremal error points
-\(x_i\).  The Remez algorithm works because we can initialise them
-with an educated guess, find the corresponding coefficients, construct
-a new approximation from these coefficients, and update (some) of the
-extremal points from the new approximation.  In theory this process
-converges (infinitely) toward the optimal coefficients.  In practice,
-numerical issues abound: solving a linear system is usually reasonably
-stable, but finding exact function extrema is quite another issue.
-The upside is that smart people like
-<a href="http://lol.zoy.org/wiki/oss/lolremez">Sam</a> and the
-<a href="http://www.boost.org/doc/libs/1_36_0/libs/math/doc/sf_and_dist/html/math_toolkit/toolkit/internals2/minimax.html">boost::math team</a>
-have already done the hard work for us.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>compiled unrolled linear search (n=4) </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">lsearch_4:
+</span><span class="line">.LFB41:
+</span><span class="line">        .cfi_startproc
+</span><span class="line">        cmpl    12(%rsi), %edi
+</span><span class="line">        jae     .L12
+</span><span class="line">        cmpl    8(%rsi), %edi
+</span><span class="line">        jae     .L13
+</span><span class="line">        cmpl    4(%rsi), %edi
+</span><span class="line">        jae     .L14
+</span><span class="line">        cmpl    (%rsi), %edi
+</span><span class="line">        sbbq    %rax, %rax
+</span><span class="line">        ret
+</span><span class="line">        .p2align 4,,10
+</span><span class="line">        .p2align 3
+</span><span class="line">.L12:
+</span><span class="line">        movl    $3, %eax
+</span><span class="line">        ret
+</span><span class="line">        .p2align 4,,10
+</span><span class="line">        .p2align 3
+</span><span class="line">.L13:
+</span><span class="line">        movl    $2, %eax
+</span><span class="line">        ret
+</span><span class="line">        .p2align 4,,10
+</span><span class="line">        .p2align 3
+</span><span class="line">.L14:
+</span><span class="line">        movl    $1, %eax
+</span><span class="line">        ret</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<h2 id="a-linear-minimax-formulation">A linear minimax formulation</h2>
+<p>The linear search walks the data backwards, from high to low
+addresses, which is unusual.  I also tested a slightly more
+complicated version that searches the data forward:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>forward linear search </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="n">ALWAYS_INLINE</span> <span class="kt">size_t</span>
+</span><span class="line"><span class="nf">fwd_search</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">size</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="k">for</span> <span class="p">(</span><span class="kt">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">size</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="kt">unsigned</span> <span class="n">v</span> <span class="o">=</span> <span class="n">vector</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+</span><span class="line">                <span class="k">if</span> <span class="p">(</span><span class="n">v</span> <span class="o">&gt;=</span> <span class="n">key</span><span class="p">)</span>
+</span><span class="line">                        <span class="k">return</span> <span class="p">(</span><span class="n">v</span> <span class="o">&gt;</span> <span class="n">key</span><span class="p">)</span><span class="o">?</span><span class="n">i</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">i</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">return</span> <span class="n">size</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The minimax objective can be reformulated as an optimisation problem
-over reals (or rationals, really) with linear constraints and
-objective, a
-<a href="http://en.wikipedia.org/wiki/Linear_programming">linear program</a>:</p>
-<div> $$\min_{e\in\mathbb{R}, a\in\mathbb{R}^{n+1}} e$$
-subject to $$\sum_{i=0}^n a_ix^i \leq f(x) + e\qquad\forall x\in B$$
-$$\sum_{i=0}^n a_ix^i \geq f(x) - e\qquad\forall x\in B$$ </div>
+<p>The same size-specialisation trick was used for the binary search:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>binary search </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cm">/* log_2 ceiling */</span>
+</span><span class="line"><span class="n">ALWAYS_INLINE</span> <span class="kt">unsigned</span> <span class="nf">lb</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">x</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">x</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">)</span> <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line">        <span class="k">return</span> <span class="p">(</span><span class="mi">8</span><span class="o">*</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">unsigned</span> <span class="kt">long</span><span class="p">))</span><span class="o">-</span><span class="n">__builtin_clzl</span><span class="p">(</span><span class="n">x</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="n">ALWAYS_INLINE</span> <span class="kt">size_t</span>
+</span><span class="line"><span class="nf">binary_search</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">size</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">low</span> <span class="o">=</span> <span class="n">vector</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">for</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span> <span class="o">=</span> <span class="n">lb</span><span class="p">(</span><span class="n">size</span><span class="p">);</span> <span class="n">i</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">--</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">                <span class="n">size</span> <span class="o">/=</span> <span class="mi">2</span><span class="p">;</span>
+</span><span class="line">                <span class="kt">unsigned</span> <span class="n">mid</span> <span class="o">=</span> <span class="n">low</span><span class="p">[</span><span class="n">size</span><span class="p">];</span>
+</span><span class="line">                <span class="k">if</span> <span class="p">(</span><span class="n">mid</span> <span class="o">&lt;=</span> <span class="n">key</span><span class="p">)</span>
+</span><span class="line">                        <span class="n">low</span> <span class="o">+=</span> <span class="n">size</span><span class="p">;</span>
+</span><span class="line">        <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">return</span> <span class="p">(</span><span class="o">*</span><span class="n">low</span> <span class="o">&gt;</span> <span class="n">key</span><span class="p">)</span><span class="o">?</span> <span class="o">-</span><span class="mi">1</span><span class="o">:</span> <span class="n">low</span> <span class="o">-</span> <span class="n">vector</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>In words, we’re trying to find an error value \(e\) and \(n+1\)
-coefficients, such that the error \(|\tilde{f}(x)-f(x)|\quad\forall x\in
-B\) is at most \(e\): \(-e \leq \tilde{f}(x)-f(x)\leq e\).  The
-goal is to minimise that error value \(e\).</p>
+<p>I assume that the size is a power of two, so I only have to track the
+lower bracket of the search: the upper one is always at a known
+offset.  The return value checks for a key that’s smaller than all the
+elements in the vector, rather than assuming the presence of a
+sentinel.  That case doesn’t happen in the tests, and the conditional 
+branch is always predicted right.  I tried taking it out, and
+the difference was pretty much noise, on the order of one cycle.</p>
 
-<p>We’re still left with the issue that \(B\) is very large: infinite,
-or even uncountable.  It doesn’t make sense to have two constraints
-for each \(x\in B\)!  Our goal is to find approximations in floating
-point arithmetic, which helps a bit: there’s actually a finite number
-of floating point (single, double or otherwise) values in any range.
-That number, albeit finite, still tends to be impractically large.
-We’ll have to be clever and find a good-enough subset of constraints.
-Note that, unlike the Remez algorithm, we can have as many constraints
-as we want; we never have to remove constraints, so the quality of the
-approximation can only improve.</p>
+<p>Note that other sizes could be handled by special-casing the first
+iteration and setting the midpoint to <code>size - (1ul&lt;&lt;(lb(size)-1))</code>.
+If the midpoint becomes the lower bound, the rest of the search is on
+a power-of-two–sized range; otherwise, the sequel is performed on a
+wider than necessary range, but still correct.  In both cases, the
+number of iterations is the same as for a regular binary search.
+There could be a slight loss of performance due to worse locality, but
+the access patterns aren’t <em>that</em> different.</p>
 
-<p>This method is an interesting alternative to the Remez algorithm
-because it always converges, finitely, even with (or rather, due to)
-floating-point arithmetic.  It will also makes our future work on a
-branch-and-cut method marginally easier.</p>
+<p>All sizes (up to 64, so six iterations) were fully unrolled.  This is
+expected, as the body is a simple <code>cmp</code>/<code>lea</code>/<code>cmov</code>.</p>
 
-<h2 id="rational-simplex-for-exact-solutions-to-linear-programs">Rational simplex for exact solutions to linear programs</h2>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>compiled unrolled binary search (n=16) </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">bsearch_16:
+</span><span class="line">bsearch_16:
+</span><span class="line">.LFB54:
+</span><span class="line">        .cfi_startproc
+</span><span class="line">        cmpl    32(%rsi), %edi
+</span><span class="line">        leaq    32(%rsi), %rax
+</span><span class="line">        cmovb   %rsi, %rax
+</span><span class="line">        cmpl    16(%rax), %edi
+</span><span class="line">        leaq    16(%rax), %rdx
+</span><span class="line">        cmovae  %rdx, %rax
+</span><span class="line">        cmpl    8(%rax), %edi
+</span><span class="line">        leaq    8(%rax), %rdx
+</span><span class="line">        cmovae  %rdx, %rax
+</span><span class="line">        cmpl    4(%rax), %edi
+</span><span class="line">        leaq    4(%rax), %rdx
+</span><span class="line">        cmovb   %rax, %rdx
+</span><span class="line">        movq    $-1, %rax
+</span><span class="line">        cmpl    (%rdx), %edi
+</span><span class="line">        jae     .L130
+</span><span class="line">        rep
+</span><span class="line">        ret
+</span><span class="line">        .p2align 4,,10
+</span><span class="line">        .p2align 3
+</span><span class="line">.L130:
+</span><span class="line">        movq    %rdx, %rax
+</span><span class="line">        subq    %rsi, %rax
+</span><span class="line">        sarq    $2, %rax
+</span><span class="line">        ret</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>We’ve reformulated our problem as a finite linear program, assuming
-that we know for which point \(x\in B\) we should generate
-constraints.  How can we find solutions?</p>
+<p>Finally, I also tested a vectorised linear search, using SSE
+instructions.  The implementations exploits vectorised comparisons to
+only perform at most one test per cache line (16 values).  In fact for
+vectors of length 16 or less, there is no (mispredicted) branch at
+all.  The implementation is actually broken, as it performs signed
+rather than unsigned comparisons, but that’s not an issue in the tests
+performed here.</p>
 
-<p>LPs are usually solved with variants of the
-<a href="http://en.wikipedia.org/wiki/Simplex_algorithm">simplex algorithm</a>, a
-<em>combinatorial</em> algorithm.  This is the key part: while most of the
-algorithm is concerned with numerical computations (solving linear
-systems, etc.), these are fed to predicates that compare values, and
-the results of the comparisons drive each iteration of the algorithm.
-The key insight in the simplex algorithm is that there exists at least
-one optimal solution in which all but a small set of variables (the
-basis) are set to zero, and the value of the basic variables can then
-be deduced from the constraints.  Better: every suboptimal (but
-feasible) basis can be improved by only substituting one variable in
-the basis.  Thus, each iteration of the algorithm moves from one basis
-to a similar, but better, one, and numerical operations only determine
-whether a basis is feasible and is an improvement.  Very little
-information has to persist across iterations: only the set of basic
-variables.  This means that there is no inherent accumulation of
-round-off errors, and that we can borrow tricks from the computational
-geometry crowd.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>vectorised search </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">typedef</span> <span class="kt">int</span> <span class="n">v4si</span> <span class="nf">__attribute__</span> <span class="p">((</span><span class="n">vector_size</span> <span class="p">(</span><span class="mi">16</span><span class="p">)));</span>
+</span><span class="line"><span class="k">typedef</span> <span class="kt">float</span> <span class="n">v4sf</span> <span class="nf">__attribute__</span> <span class="p">((</span><span class="n">vector_size</span> <span class="p">(</span><span class="mi">16</span><span class="p">)));</span>
+</span><span class="line">
+</span><span class="line"><span class="cp">#define PCMP(KEYS, VALS) (__builtin_ia32_movmskps                       \</span>
+</span><span class="line"><span class="cp">                          ((v4sf)__builtin_ia32_pcmpgtd128((KEYS),      \</span>
+</span><span class="line"><span class="cp">                                                           (VALS))))</span>
+</span><span class="line">
+</span><span class="line"><span class="kt">size_t</span>
+</span><span class="line"><span class="nf">vsearch_4</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">vector</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">key</span><span class="p">)</span> <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+</span><span class="line">        <span class="n">v4si</span> <span class="n">keys</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">key</span><span class="p">};</span>
+</span><span class="line">        <span class="n">v4si</span> <span class="n">vals</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="n">v4si</span><span class="o">*</span><span class="p">)</span><span class="n">vector</span><span class="p">;</span>
+</span><span class="line">        <span class="kt">int</span> <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">PCMP</span><span class="p">(</span><span class="n">keys</span><span class="p">,</span> <span class="n">vals</span><span class="p">)</span><span class="o">^</span><span class="mh">0xf</span><span class="p">)</span><span class="o">|</span><span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="mi">3</span><span class="p">);</span>
+</span><span class="line">        <span class="k">return</span> <span class="n">__builtin_ctz</span><span class="p">(</span><span class="n">mask</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="cp">#define TEST2(I, V1, V2, BIT) do {                              \</span>
+</span><span class="line"><span class="cp">                unsigned mask                                   \</span>
+</span><span class="line"><span class="cp">                        = PCMP(keys, V1)                        \</span>
+</span><span class="line"><span class="cp">                        | PCMP(keys,V2)&lt;&lt;4;                     \</span>
+</span><span class="line"><span class="cp">                mask = (mask^0xff) | (BIT)&lt;&lt;7;                  \</span>
+</span><span class="line"><span class="cp">                if (mask)                                       \</span>
+</span><span class="line"><span class="cp">                        return 4*(I)+__builtin_ctz(mask);       \</span>
+</span><span class="line"><span class="cp">        } while (0)</span>
+</span><span class="line">
+</span><span class="line"><span class="kt">size_t</span>
+</span><span class="line"><span class="nf">vsearch_8</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">vector</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">key</span><span class="p">)</span> <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+</span><span class="line">        <span class="n">v4si</span> <span class="n">keys</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">key</span><span class="p">};</span>
+</span><span class="line">        <span class="n">v4si</span> <span class="o">*</span> <span class="n">vals</span> <span class="o">=</span> <span class="p">(</span><span class="n">v4si</span><span class="o">*</span><span class="p">)</span><span class="n">vector</span><span class="p">;</span>
+</span><span class="line">        <span class="n">v4si</span> <span class="n">v0</span> <span class="o">=</span> <span class="n">vals</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">v1</span> <span class="o">=</span> <span class="n">vals</span><span class="p">[</span><span class="mi">1</span><span class="p">];</span>
+</span><span class="line">        <span class="cm">/* BIT = 1, the branch is compiled away */</span>
+</span><span class="line">        <span class="n">TEST2</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">v0</span><span class="p">,</span> <span class="n">v1</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p><a href="http://www.dii.uchile.cl/~daespino">Daniel Espinoza</a> implemented
-that, and much more, for his PhD thesis on exact linear and integer
-program solvers.
-<a href="http://www.dii.uchile.cl/~daespino/ESolver_doc/main.html">QSopt-Exact</a>
-is a GPL fork of a fairly sophisticated simplex and branch and cut
-program.  It exploits the fact that the simplex algorithm is
-combinatorial to switch precision on the fly, using hardware floats
-(single, double and long), software quad floats, multiprecision
-floats, and rational arithmetic.  Unfortunately, the full solver
-segfaults when reporting solution values on my linux/x86-64 machine.
-Still, the individual simplex solvers (with double floats, quad
-floats, multiprecision floats and rationals) work fine.  What I
-decided to do was to sidestep the issue and call the solvers in
-increasing order of precision, while saving the basis between calls.
-The double float implementation is executed first, and when it has
-converged (within epsilon), a more precise solver is called, starting
-from the basis on which the previous solver converged, etc.  The final
-rational solver is exact, but very slow.  Hopefully, previous solvers,
-while inexact, will have converged to very nearly-optimal bases,
-leaving only a couple iterations for the exact solver.</p>
+<p>The preliminary test is always correctly predicted, and only ends up
+prefetching data that’ll be used a couple instructions later.  A
+similar trick as <code>TEST2</code> is used to generate a bitmask from 16
+comparisons.  Finally, even when there are loops, they’re fully
+unrolled.  The disassembly below shows how the conditional branch
+around <code>return</code> is compiled away in the last iteration.  For all sizes
+(up to 64), the loops were fully unrolled.</p>
 
-<p><a href="https://github.com/pkhuong/rational-simplex">Rational-simplex</a> is a
-one-file CL system that wraps QSopt-Exact and offers a trivial
-modeling language.  We’ll use it a lot in the sequel.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>compiled vectorised linear search (n=8) </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">vsearch_8:
+</span><span class="line">.LFB62:
+</span><span class="line">        .cfi_startproc
+</span><span class="line">        cmpl    %edi, (%rsi)
+</span><span class="line">        movq    $-1, %rax
+</span><span class="line">        jbe     .L210
+</span><span class="line">        rep
+</span><span class="line">        ret
+</span><span class="line">        .p2align 4,,10
+</span><span class="line">        .p2align 3
+</span><span class="line">.L210:
+</span><span class="line">        movl    %edi, -12(%rsp)
+</span><span class="line">        movd    -12(%rsp), %xmm1
+</span><span class="line">        pshufd  $0, %xmm1, %xmm0
+</span><span class="line">        movdqa  %xmm0, %xmm1
+</span><span class="line">        pcmpgtd 16(%rsi), %xmm0
+</span><span class="line">        pcmpgtd (%rsi), %xmm1
+</span><span class="line">        movmskps        %xmm0, %eax
+</span><span class="line">        movmskps        %xmm1, %edx
+</span><span class="line">        sall    $4, %eax
+</span><span class="line">        orl     %edx, %eax
+</span><span class="line">        xorb    $-1, %al
+</span><span class="line">        orb     $-128, %al
+</span><span class="line">        bsfl    %eax, %eax
+</span><span class="line">        cltq
+</span><span class="line">        ret</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<h2 id="solving-the-minimax-lp-with-rational-simplex">Solving the minimax LP with rational-simplex</h2>
+<h2 id="graphics-time">Graphics time!</h2>
 
-<p><a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/linf-fit.lisp">linf-fit.lisp</a>
-implements a minimax linear fit in 60 LOC (plus a couple kLOC in QSopt
-:).</p>
+<p>The first scenario was a search for random keys on an in-cache vector.
+As for all other tests, 10 000 searches were performed, and the
+overhead of the benchmarking loop was estimated with the minimal
+iteration time when calling an empty function (44 cycles), and
+subtracted from the measured values.  Finally, extreme outliers
+(values larger than the 99th percentile for each scenario, size and
+algorithm) were removed.  There’s a bit of overhead (<code>rdtscp</code> isn’t
+exactly lightweight), so the shorter searches don’t reveal much,
+except how complex current CPUs can be.  I also tried measuring a
+couple searches at a time, but that lost interesting information, and
+let out of order execution mess the results up.</p>
 
-<p>Each
-<a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/linf-fit.lisp#L20">point</a>
-is defined by <code>loc</code>, the original value for <code>x</code>, a sequence of
-parameters (in this case, powers of <code>x</code> as we’re building
-polynomials), and the <code>value</code> to approximate, \(f(x)\).</p>
+<p><img class="center" src="/images/2012-07-03-binary-search-star-reduces-star-branch-mispredictions/box-random-cached.png" /></p>
 
-<p><a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/linf-fit.lisp#L41">solve-fit</a>
-takes a sequence of such points, and solves the corresponding LP with
-QSopt-Exact:</p>
+<p>The graphics overlay a jittered scatter plot and a
+<a href="http://en.wikipedia.org/wiki/Box_plot">box plot</a>.  The density of
+points reveals how often each execution time (in clock cycle) was
+observed.  The box plots give us the median and the first and third
+quartiles; the median is a more robust single-number summary than the
+mean on strange distributions.  Still, I also included the arithmetic
+mean (without outliers) as a thin grey line.  The search algorithms
+are, from left to right, forward linear search (“lin”), backward
+linear search (“inv”), vectorised forward linear search (“vec”), and
+binary search (“bin”).  The size of the vector is reported at the
+top.</p>
 
-<pre><code>(defun solve-fit (points)
-  (lp:with-model (:name "linf fit" :sense :minimize)
-    (let ((diff  (lp:var :name "diff" :obj 1))
-          (coefs (loop for i below *dimension* collect
-                       (lp:var :name (format nil "coef ~A" i)
-                               :lower nil))))
-      (map nil (lambda (point)
-                 (let ((lhs (linexpr-dot coefs
-                                         (point-parameters point)))
-                       (rhs (point-value point)))
-                   (lp:post&lt;= lhs (lp:+ rhs diff))
-                   (lp:post&gt;= lhs (lp:- rhs diff))))
-           points)
-      (multiple-value-bind (status obj values)
-          (lp:solve)
-        (assert (eql status :optimal))
-        (values obj (map 'simple-vector
-                         (lambda (var)
-                           (gethash var values 0))
-                         coefs))))))
-</code></pre>
+<p>In general, interesting transitions will happen around length 16
+(especially for forward and backward linear searches), and 32 for
+binary search.  Scalar linear searches longer than 16 elements aren’t
+unrolled, the vectorised search works in chunks of up to 16 elements,
+and 16 <code>unsigned</code>s fit exactly in one cache line. At length 32, binary
+search may access one or two cache lines, depending on the data, and
+vectorised search starts executing conditional branches.</p>
 
-<p>With a fresh model in scope in which the goal is to minimise the
-objective function, a variable, <code>diff</code>, is created to represent the
-error term \(e\), and one variable for each coefficient in the
-polynomial (<code>coefs</code>) list; each coefficient is unbounded both from
-below and above.</p>
+<p><span class="pullquote-right" data-pullquote="binary search is always faster than linear search: the single mispredicted branch in the latter hurts."> 
+The box plots are pretty clear.  Except for vectors of length two or four
+(for which the benchmarking infrastructure probably dominates
+everything), binary search is always faster than linear search: the single mispredicted branch in the latter hurts.  The
+vectorised search is always a bit quicker than the scalar versions
+and performs nearly identically to the binary search up
+to size 16.  After that, it has to execute a few unpredictable 
+branches.  The distribution of runtimes for the vectorised search
+exhibits very distinct peaks, so the quartiles might not be as robust
+as they usually are.
+</span></p>
 
-<p>Then, for each point, the two corresponding constraints are added to
-the current model.</p>
+<p>The scatter plots are also interesting.  First, they raise an
+interesting question as to what exactly is going on with the bimodal
+distribution on vectors of length two or four.  I have no
+clue. Current CPUs are awfully complex stateful systems with strange
+interactions; I would guess a combination of back-to-back call and
+return, and the benchmarking code interfering with itself.</p>
 
-<p>Finally, the model is solved, and a vector of optimal coefficients is
-extracted from the <code>values</code> hash table.</p>
+<p>Over all vector sizes, the distribution of latencies for linear
+searches is distinctly multimodal: searches that end quickly execute
+much faster.  The effect of batching by the cache line in the
+vectorised search is also visible.  Unpredictable branches are only
+executed for length 32 or 64; the median times (and spread, obviously)
+then increase quite a lot.  There’s also some variation between the
+forward and backward linear search; I frankly don’t know why the
+access pattern has that impact, or if it might not just be noise.</p>
 
-<p>We can easily use <code>solve-fit</code> to <em>exactly</em> solve minimax instances
-with a couple thousands of points in seconds:</p>
+<p>What happens if more regular queries help eliminate branch
+mispredictions?  Obviously, binary search will not be affected, but we
+can expect the linear searches to execute more quickly.</p>
 
-<pre><code>CL-USER&gt; (let ((*dimension* 5) ; degree = 4
-               (*loc-value* (lambda (x)
-                              (rational (exp (float x 1d0))))))
-           ;; function to fit: EXP. Converting the argument to
-           ;; a double-float avoid the implicit conversion to
-           ;; single, and we translate the result into a rational
-           ;; to avoid round-off
-           (solve-fit (loop for x from -1 upto 1 by 1/2048
-                       ;; create a point for x in 
-                       ;; -1 ... -1/2048,0,1/2048, ... 1
-                            collect (make-point x))))
-dbl_solver: 0.510 sec 0.0 (optimal)      ; solve with doubles
-ldbl_solver: 0.260 sec 0.0 (optimal)     ;   with long doubles
-float128_solver: 0.160 sec 0.0 (optimal) ;   with 128 bit quads
-mpf_solver: 1.110 sec 0.0 (optimal)      ;   with multi-precision floats
-mpq_solver: 0.570 sec 0.0 (optimal)      ;   with rationals
-3192106304786396545997180544707814405/5839213465929014357942937289929760178176
-#(151103246476511404268507157826110201499879/151089648430913246511773502376932544610304
-  28253082057367857587607065964265169406677/28329309080796233720957531695674852114432
-  13800443618507633486386515045130833755/27665340899215071993122589546557472768
-  9582651302802548702442907342912775/54033868943779437486567557708120064
-  2329973989305264632365349185439/52767450140409606920476130574336)
-</code></pre>
+<p><img class="center" src="/images/2012-07-03-binary-search-star-reduces-star-branch-mispredictions/box-fixed-cached.png" /></p>
 
-<p>Or, as more readable float values:</p>
+<p>The leftmost four plots above show what happens when the linear searches
+always find the key after eight iterations (one for the vectorised
+search).  The remaining two (“32*” and “64*”) instead set the key
+as the very last position that is searched.</p>
 
-<pre><code>CL-USER&gt; (values (float * 1d0) (map 'simple-vector (lambda (x)
-                                                     (float x 1d0))
-                                     (second /)))
-5.466671707434376d-4 ; (estimated) error bound
-#(1.0000899998493569d0 0.997309252293765d0 0.49883511895923116d0
-  0.177345274179293d0 0.04415551600665573d0) ; coefficients
-</code></pre>
+<p><span class="pullquote-right" data-pullquote="Conditional branches speed linear search up."> 
+In all cases, binary search remains the same.  When the key is found
+quickly (first four plots), scalar linear searches are approximately
+on par with binary search, and the vectorised search faster.  On the
+other hand, when the whole vector must be traversed (two rightmost
+plots), the linear searches take more than thrice as much time as the
+binary search! Even the vectorised search is at best comparable to the
+binary search.  Comparing the top of the distribution in the first
+plot to this one shows that mispredicted branches can slow linear
+searches by up to 50ish cycles.  However, it is still quicker overall
+to take the hit and break out of the search early: compare the
+medians.  Conditional branches speed linear search up.
+</span></p>
 
-<p>So, we have an approximation that’s very close to what
-<a href="http://lol.zoy.org/wiki/doc/maths/remez/tutorial-exponential">LolRemez</a>
-finds for \(\exp\) and degree 4.  However, we’re reporting a maximal
-error of 5.466672e-4, while LolRemez finds 5.466676e-4.  Who’s wrong?</p>
+<p>The effect isn’t as marked on the vectorised search, but it’s still
+slower than a binary search on the “32*” and “64*” plots.  The
+branches are always predicted correctly, and we end up with a good
+approximation of a fully vectorised search.  Rather than eliminating
+all the branches from the vectorised linear search (by always
+processing the whole vector), it’s simpler and faster to go for a
+binary search.</p>
 
-<h2 id="tightening-the-model">Tightening the model</h2>
+<p>Mispredictions slow linear searches down, and traversing the data
+completely even more. The next plot summarises the timings for
+searches that succeed after the first or second iterations of (scalar)
+linear search.  That’s almost the best environment I can think of for
+linear search, short of always searching for one value that’s found in
+the very first iterations.</p>
 
-<p>As is usually the case, we’re (slightly) wrong! The complete LP
-formulation has constraints for each possible argument \(x\in B\).
-We only considered 4k equidistant such values in the example above.
-The model we solved is missing constraints: it is a
-<a href="http://en.wikipedia.org/wiki/Relaxation_%28approximation%29">relaxation</a>.
-We’re solving that relaxation exactly, so the objective value it
-reports is a lower bound on the real error, and on the real optimal
-error.  At least, we don’t have any design constraint, and the
-coefficients are usable directly.</p>
+<p><img class="center" src="/images/2012-07-03-binary-search-star-reduces-star-branch-mispredictions/box-split-cached.png" /></p>
 
-<p>We shall not settle for an approximate solution.  We must simply add
-constraints to the model to make it closer to the real problem.</p>
+<p>Even when they always succeed after at most two iterations, the linear
+searches are only slightly faster than a binary search, with a few
+very slow runs.  The vectorised search is shown in its best light: it
+always succeeds on the first iteration and is, overall, comparable
+with the linear searches (with a tighter spread).  Much like the
+binary search, vectorising minimises branches, but does so at the cost
+of additional work.</p>
 
-<p>Obviously, adding constraints that are already satisfied by the
-optimal solution to the current relaxation won’t change anything.
-Adding constraints can only remove feasible solutions, and the current
-optimal solution remains feasible; since it was optimal before
-removing some candidates, it still is after.</p>
+<p><span class="pullquote-right" data-pullquote="Even with very regular queries, linear searches are, at best, slightly faster than binary search, and otherwise significantly slower."> 
+The “64*” plot exercises the vectorised search better: the element is
+found on the third or last iteration (48th or 49th for the linear
+searches).  The binary search isn’t affected at all, and the linear
+searches become appreciably (by a factor of two or four) slower.  Even with very regular queries, linear searches are, at best, slightly faster than binary search, and otherwise significantly slower.
+</span></p>
 
-<p>So, we’re looking for constraints that are violated to add them to our
-current model.  In the optimisation lingo, we’re doing constraint (or
-row, or cut) generation.  In our problem, this means that we’re
-looking for points such that the error from the current approximation
-is greater than the estimate reported as our solution value.  We’ll
-take a cue from the Remez algorithm and look for extremal violation
-points.</p>
+<p>When the data is expected to be cached, I believe it’s fair to say
+that binary search should always be used instead of linear searches,
+even unrolled vectorised (fully or not) versions.  In the worst
+case, scalar linear searches can be more than 50 or 100 cycles slower
+than a decent binary search.  In the best case, a partially vectorised
+linear search can save about 10 cycles.  That sounds like a horrible
+bargain.</p>
 
-<p>Extrema of differentiable functions are found where the first
-derivative is zero.  Our approximation function is a polynomial and is
-trivially differentiated.  We’ll assume that the user provides the
-derivative of the function to approximate.  The (signed) error term is
-a difference of differentiable functions \(\tilde{f}-f\), and its
-first derivative is simply the difference of the derivatives.</p>
+<h2 id="lets-throw-in-some-cache-misses">Let’s throw in some cache misses</h2>
 
-<p>Assuming that the derivative is continuous, we can use the
-<a href="http://en.wikipedia.org/wiki/Intermediate_value_theorem">intermediate value theorem</a>
-to find its roots: for each root, there is a (non-empty, open)
-neighbourhood such that the derivative is negative to the left of the
-root and positive to the right, or inversely.</p>
+<p><span class="pullquote-right" data-pullquote="linear searches will eke speed-ups out by skipping some accesses, thanks to their conditional branches.">
+When the data is cached, linear search only wins if we keep hammering
+the same query, and it’s found in the first iterations. What if
+the data isn’t cached?  I ran another set of tests, this time hopping
+around 1 GB’s worth of short vectors.  The vectors were aligned to
+their size, so the vectorised search worked naturally, and we can also
+easily think about cache lines.  The vectors were chosen by picking
+vectors in different 4 KB pages, at every potential offsets from the
+start of the page, and shuffling them randomly to foil prefetching.
+This is pretty much a worst-case scenario: there’s both a TLB and an
+L3 miss (but the latency of a TLB miss varies a lot depending on which
+parts of the page table are still cached).  I could also have tried to
+use huge pages (2MB) to eliminate TLB misses.  I don’t think that’s
+realistic: huge pages aren’t widely used, and TLBs misses tend
+to be an issue even with working sets that are still big
+enough for L2.  We can expect two things here: the timings will be
+orders of magnitude slower, 
+and linear searches will eke speed-ups out by skipping some accesses, thanks to their conditional branches.
+</span></p>
 
-<p>This is what
-<a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/find-extrema.lisp">find-extrema.lisp</a>
-implements.  In optimisation-speak, that’s our separation algorithm:
-we use it to find (maximally-) violated constraints that we ought to
-add to our relaxation.</p>
+<p>The first set of plots corresponds to random searches in out-of-cache
+vectors.  Searches in even the shortest vectors are slow enough to be
+somewhat meaningful.  We can observe that the latency of two accesses
+to the same cache line varies a lot, from 200 to 700 cycles.  The
+distributions are strongly multimodal, and it’s not clear to me that
+comparing the quartiles is always useful: they sometimes fall in
+nearly-empty zones between two peaks, so I would expect tiny changes
+to affect them a lot.  The plots for length up to eight are all very
+similar, so I’ll just drop sizes two and four in the sequel.</p>
 
-<p><a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/find-extrema.lisp#L71">find-root</a>
-takes a function, a lower bound, and an upper bound on the root, and
-first performs a
-<a href="http://en.wikipedia.org/wiki/Bisection_method">bisection search</a>
-until the range is down to 256 distinct double values.  Then, the 256
-values in the range are scanned linearly to find the minimal absolute
-value.  I first tried to use
-<a href="http://en.wikipedia.org/wiki/Newton's_method">Newton’s method</a>, but
-it doesn’t play very well with rationals: although convergence is
-quick, denominators grow even more quickly.  There are also potential
-issues with even slightly inexact derivatives.  This is why the final
-step is a linear search.  The method will work as long as we have
-correctly identified a tiny interval around the extremum; the interval
-can be explored exhaustively without involving the derivative.</p>
+<p><img class="center" src="/images/2012-07-03-binary-search-star-reduces-star-branch-mispredictions/box-random-uncached.png" /></p>
 
-<p><a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/find-extrema.lisp#L90">%approximation-error-extrema</a>
-finds candidate ranges.  The sign of the derivative at each pair of
-consecutive points currently considered in the model is examined; when
-they differ, the range is passed to <code>find-root</code>.  If we find a new
-extremum, it is pushed on a list.  Once all the pairs have been
-examined, the maximal error is returned, along with the list of new
-extrema, and the maximal distance between new extrema and the
-corresponding bounds.  As the method converges, extrema should be
-enclosed more and more tightly by points already considered in our
-constraints.</p>
+<p><span class="pullquote-right" data-pullquote="In the real world, chips don&#8217;t load whole cache lines atomically.">
+The forward linear searches (scalar and vectorised) are, over all,
+a bit faster than the backward one.  That’s a bit counter-intuitive:
+vectors of size up to 16 fit in one cache line.  That the latency from
+cache misses is always the same as soon as we touch a cache line is a
+useful lie: it’s usually good enough of an approximation.  In the real world, chips don’t load whole cache lines atomically.
+Current sockets have hundreds of pins, but they can’t all be dedicated
+to communicating with DIMMs.  On the X5660 where the tests were
+executed, single-core bandwidth is 8 GB/s.  That’s exactly the
+bandwidth from one of its DDR3-1066 modules.  DDR3 sends data in
+chunks of 64 bits, so that’s how one cache line is loaded: 64 bits at a
+time.  The CPU’s memory controller first loads the chunk corresponding
+to the instruction that triggered a cache miss, and then the rest of
+the cache line.  The controller simply seems to have been tuned for
+programs that load data from low to high addresses.
+</span></p>
 
-<p>There are frequent calls to
-<a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/utility.lisp#L18">round-to-double</a>:
-this function is used to take an arbitrary real, convert it to the
-closest double value, and convert that value back in a rational.  The
-reason we do that is that we don’t want to generate constraints that
-correspond to values that cannot be represented as double floats: not
-only are they superfluous, but they also tend to have large
-denominators, and those really slow down the exact solver.</p>
+<p>The binary search seems a tiny bit quicker than the other searches on
+sizes up to 32, and fares badly on 64-element vectors.  16 <code>unsigned</code>s is
+exactly one cache line, so it’s not surprising that 16 or fewer
+(correctly aligned) elements can be binary searched quickly.  The
+size-32 case benefits from an implicit data dependency in binary
+search.  When the key falls in the latter half of the vector, only
+that half will be read from: the initial midpoint is the first element
+of that latter half.  32 <code>unsigned</code>s fit exactly in two cache lines, and
+binary search thus behaves very similarly to linear searches: it reads
+from only one cache line half the time, and otherwise from two.  I
+can’t explain the solid peak of occurrences around 600 cycles though.
+Finally, the data dependency doesn’t help so much on vectors of length
+64 (half of four cache lines is still two), and binary search is then
+significantly slower.</p>
 
-<p>Finally, the two pieces are put together in
-<a href="https://github.com/pkhuong/rational-simplex/blob/master/demo/vanilla-fit/driver.lisp">driver.lisp</a>.
-The constraints are initialised from 4096 equidistant points in the
-range over which we optimise.  Then, for each iteration, the
-relaxation is solved, new extrema are found and added to the
-relaxation, until convergence.  Convergence is easy to determine: when
-the error reported by the LP (the relaxation) over the constraint
-subset is the same as the actual error, we are done.</p>
+<p>Some of the variation in execution times must still be caused by
+branch mispredictions.  The following plots show what happens if the
+key is always found after eight iterations of the scalar linear
+searches (one iteration of the vectorised search).  The binary search
+is also slightly advantaged on sizes 16 and up, as the key is found in
+the latter half of the vector.  The rightmost two plots fix the key so
+that it is found at the very last iteration of the searches, and
+disadvantages binary search by searching for the minimum value in the
+data.</p>
 
-<pre><code>CL-USER&gt; (time
-          (let ((*trace-output* (make-broadcast-stream)))
-            ;; muffle the simplex solver log
-            (find-approximation 4 -1 1
-                                (lambda (x)
-                                  (rational (exp (float x 1d0))))
-                                (lambda (x)
-                                  (rational (exp (float x 1d0)))))))
-          ;  predicted error  actual       difference           log distance of new points
-Iteration    1: 5.4666716e-4 5.466678e-4 [6.5808034e-10] (4 new extrema, delta 40.42 bit)
-Iteration    2: 5.4666746e-4 5.4666775e-4 [3.25096e-10] (4 new extrema, delta 41.15 bit)
-Iteration    3: 5.466676e-4 5.466677e-4 [9.041601e-11] (4 new extrema, delta 40.89 bit)
-Iteration    4: 5.4666764e-4 5.4666764e-4 [2.4131829e-11] (4 new extrema, delta 38.30 bit)
-Iteration    5: 5.4666764e-4 5.4666764e-4 [5.3669834e-12] (4 new extrema, delta 39.04 bit)
-Iteration    6: 5.4666764e-4 5.4666764e-4 [2.1303722e-12] (4 new extrema, delta 36.46 bit)
-Iteration    7: 5.4666764e-4 5.4666764e-4 [8.5113746e-13] (4 new extrema, delta 37.19 bit)
-Iteration    8: 5.4666764e-4 5.4666764e-4 [5.92861e-14] (4 new extrema, delta 36.93 bit)
-Iteration    9: 5.4666764e-4 5.4666764e-4 [8.7291163e-14] (4 new extrema, delta 34.34 bit)
-Iteration   10: 5.4666764e-4 5.4666764e-4 [2.7814624e-14] (4 new extrema, delta 35.08 bit)
-Iteration   11: 5.4666764e-4 5.4666764e-4 [1.22935355e-14] (4 new extrema, delta 33.82 bit)
-Iteration   12: 5.4666764e-4 5.4666764e-4 [6.363092e-15] (4 new extrema, delta 34.56 bit)
-Iteration   13: 5.4666764e-4 5.4666764e-4 [2.6976767e-15] (4 new extrema, delta 31.97 bit)
-Iteration   14: 5.4666764e-4 5.4666764e-4 [6.2273127e-16] (4 new extrema, delta 31.71 bit)
-Iteration   15: 5.4666764e-4 5.4666764e-4 [3.1716093e-16] (4 new extrema, delta 32.44 bit)
-Iteration   16: 5.4666764e-4 5.4666764e-4 [8.9307225e-17] (4 new extrema, delta 29.86 bit)
-Iteration   17: 5.4666764e-4 5.4666764e-4 [2.986885e-17] (4 new extrema, delta 29.60 bit)
-Iteration   18: 5.4666764e-4 5.4666764e-4 [8.047477e-17] (4 new extrema, delta 30.33 bit)
-Iteration   19: 5.4666764e-4 5.4666764e-4 [0.0e+0] (4 new extrema, delta 27.75 bit)
-Evaluation took:
-  153.919 seconds of real time    ; includes time spent in the LP solvers
-  43.669636 seconds of total run time (39.078488 user, 4.591148 system)
-  [ Run times consist of 2.248 seconds GC time, and 41.422 seconds non-GC time. ]
-  28.37% CPU
-  245,610,372,128 processor cycles
-  4,561,238,704 bytes consed
-  
-4046879766238553594956027226378928284211150354828640757733860080712233114910799/7402816194767429570294393430906636383377554724586974324818463099198772886301048832
-#(925435306122623901577988826638313570454904960173764226165130358296546098660735739/925352024345928696286799178863329547922194340573371790602307887399846610787631104
-  6557329860867414742326673804552068829044003331586895788335382835917/6575021589199030076761681434499916661609079970484769650357093605918
-  1639925832159462899796569909691517124754835951733786891469617405863/3287510794599515038380840717249958330804539985242384825178546802959
-  583024503858777554811473359621837746265838166280012537010086877260/3287510794599515038380840717249958330804539985242384825178546802959
-  145161740826348143502214435074903924097159484388538508594721873208/3287510794599515038380840717249958330804539985242384825178546802959)
-</code></pre>
+<p><img class="center" src="/images/2012-07-03-binary-search-star-reduces-star-branch-mispredictions/box-fixed-uncached.png" /></p>
 
-<p>Note that we found new extrema in the last iteration.  However, the
-error for those extrema wasn’t actually larger than for the points we
-were already considering, so the solution was still feasible and
-optimal.</p>
+<p>When the key is found early, the forward linear search seems a tiny
+bit faster than the rest, even the vectorised search (which trades
+more memory accesses for fewer branches).  Interestingly, when the key
+is always found at the end, the linear searches aren’t affected that
+much; speculative execution seems to be doing its job at hiding
+latencies.</p>
 
-<p>The fractions will be more readable in floats:</p>
+<p>The last plots correspond to the situation when the key is found after
+one or two iterations (equiprobably) for the linear searches (one for
+the vectorised version, and in the last cache line for binary search).
+The “64*” column shows the latencies for a worse scenario: the key is
+found after 48 or 49 iterations of the linear searches (three or four
+for the vectorised search), and in the first quarter of data for
+binary search.</p>
 
-<pre><code>CL-USER&gt; (values (float * 1d0) (map 'simple-vector
-                                    (lambda (x) (float x 1d0))
-                                    (second /)))
-5.466676005138464d-4
-#(1.0000900001021278d0 0.9973092516744465d0 0.4988351170902357d0
-  0.177345274368841d0 0.044155517622880315d0)
-</code></pre>
+<p><img class="center" src="/images/2012-07-03-binary-search-star-reduces-star-branch-mispredictions/box-split-uncached.png" /></p>
 
-<p>Now, we have nearly exactly (up to a couple bits) the same values as
-<a href="http://lol.zoy.org/wiki/doc/maths/remez/tutorial-exponential">LolRemez’s example</a>.
-Each iteration takes less than 10 seconds to execute; we could easily
-initialise the relaxation with even more than 4096 points.  We should
-expect the impact on the solution time to be cubic: most of the
-simplex iterations take place in the floating point solvers, and the
-number of iterations is usually linear in the number of variables and
-constraints, but the constraint matrix is dense so the complexity of
-each iteration should grow almost quadratically.  What really slows
-down the rational solver isn’t the number of variables or constraints,
-but the size of the fractions.  On the other hand, we see that some of
-the points considered by our constraints differ by \(\approx 30\)
-bit in their double representation: we would need a very fine grid
-(and very many points) to hit that.</p>
+<p>On the good cases, all searches seem to be doing similarly, except for
+vectors of length 64 (on which the binary search really suffers).  In
+fact, comparing the “64” and “64*” plots reveals that binary search
+is affected by variations in the query just as much as linear
+searches: bad memory access patterns can hurt a lot more than
+mispredicted branches.</p>
 
-<p>In addition to being more easily generalised than the Remez algorithm,
-the LP minimax has no convergence issue: we will always observe
-monotone progress in the quality of the approximation and, except for
-potential issues with the separation algorithm, we could use the
-approach on any function.  There is however (in theory, at least) a
-gaping hole in the program: however improbable, all the extrema could
-be sandwiched between two points for which the derivative has the same
-sign.  In that case, the program will finish (there are no constraint
-to adjoin), but report the issue.  A finer initial grid would be one
-workaround.  A better solution would be to use a more robust
-root-finding algorithm.</p>
+<p>In the end it looks like all searches behave pretty much the same when
+searching uncached vectors spanning at most two cache lines.  After
+that, linear searches have better access patterns (and after that,
+asymptotics catch up).</p>
 
-<h2 id="whats-next">What’s next?</h2>
+<h2 id="wrapping-up">Wrapping up</h2>
 
-<p>The minimax polynomial fitting code is on github, as a
-<a href="https://github.com/pkhuong/rational-simplex/tree/master/demo/vanilla-fit">demo</a>
-for the
-<a href="https://github.com/pkhuong/rational-simplex">rational-simplex</a>
-system.  The code can easily be adapted to any other basis (e.g. the
-Fourier basis), as long as the coefficients are used linearly.</p>
+<p><span class="pullquote-right" data-pullquote="Linear search should only be used when it&#8217;s expected to bail out quickly.">
+When performance matters, linear search shouldn’t be preferred to
+binary search to minimise branch mispredictions.  Linear search should only be used when it’s expected to bail out quickly.
+The situations in which that property is most useful involve
+uncached, medium-size vectors.  In general, I’d just stick to binary
+search: it’s easy to get good and consistent performance from a
+simple, portable implementation.
+</span></p>
 
-<p>In the next instalment, I plan to use the cut (constraint) generation
-algorithm we developed here in a
-<a href="http://en.wikipedia.org/wiki/Branch_and_cut">branch-and-cut</a>
-algorithm.  The new algorithm will let us handle side-constraints on
-the coefficients: e.g., fix as many as possible to zero, 1, -1 or
-other easy multipliers.</p>
+<p>In some cases, it might be worth the trouble to go for a
+heroically optimised linear search, but maintenance may be a bitch.
+If I expected to be working with larger, potentially uncached,
+datasets, I’d instead try to exploit caches more smartly… But that’s a
+topic for another post!</p>
 
-<p>If you found the diversion in Linear programming and cut generation
-interesting, that makes be very happy!  One of my great hopes is to
-see programmers, particularly compiler writers, better exploit the
-work we do in mathematical optimisation.  Sure, “good enough” is nice,
-but wouldn’t it be better to have solutions that are provably optimal
-or within a few percent of optimal?</p>
+<p>A friend of mine pointed out one case when a fully vectorised linear
+search, without early exit, may be the only (high-performance) option:
+cryptographic code.  When the data isn’t cached, even binary search
+can leak some information, via the number of distinct cache lines that
+are accessed.</p>
 
-<p>If you want more of that stuff, I find that Chvatal’s book
-<a href="http://books.google.com/books?id=DN20_tW_BV0C">Linear Programming</a> is
-a very nice presentation of linear programming from both the usage and
-implementation points of view; in particular, it avoids the trap of
-simplex tableaux, and directly exposes the meaning of the operations
-(its presentation also happens to be closer to the way real solvers
-work).  Works like Wolsey’s
-<a href="http://books.google.com/books?id=x7RvQgAACAAJ">Integer Programming</a>
-build on the foundation of straight linear programs to tackle more
-complex problems, and introduce techniques we will use (or have used)
-here, like branch-and-bound or cut generation.  The classic
-undergraduate-level text on operations research seems to be Hillier
-and Lieberman’s
-<a href="http://books.google.com/books?id=SrfgAAAAMAAJ">Introduction to operations research</a>
-(I used it, and so did my father nearly 40 years ago)… I’m not sure
-that I’m a fan though.</p>
+<p>I also completely ignored the question of shared resources (memory
+channels, particularly) on multicore chips: what happens to throughput
+when multiple cores are executing that kind of search workload?  I’ll
+probably leave that to someone else ;)</p>
 </div>
   
   

@@ -5,7 +5,7 @@
 <!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
 <head>
   <meta charset="utf-8">
-  <title>Paul Khuong: some Lisp</title>
+  <title>Nearly double the PH bits for one more CLMUL - Paul Khuong: some Lisp</title>
   <meta name="author" content="Paul Khuong">
   <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
   
@@ -16,7 +16,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   
-  <link rel="canonical" href="https://www.pvk.ca/">
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/">
   <link href="/favicon.png" rel="icon">
   <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
   <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
@@ -79,15 +79,14 @@
   <div id="main">
     <div id="content">
       
-      <div class="blog-index">
+      <div>
+<article class="hentry" role="article">
   
-  
-  
-    <article>
-      
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/">Nearly double the PH bits for one more CLMUL</a></h1>
+      
+        <h1 class="entry-title" style="font-family: ">Nearly double the PH bits for one more CLMUL</h1>
+      
     
     
       <p class="meta">
@@ -106,7 +105,7 @@ Oct
 
 
         
-         | <a href="/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/#disqus_thread"
+         | <a href="#disqus_thread"
               data-disqus-identifier="https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/"
 	      >Comments</a>
         
@@ -116,7 +115,7 @@ Oct
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>The core of <a href="https://github.com/backtrace-labs/umash">UMASH</a> is a
+<div class="entry-content" style="font-family: ; font-size: "><p>The core of <a href="https://github.com/backtrace-labs/umash">UMASH</a> is a
 hybrid <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.105.9929&amp;rep=rep1&amp;type=pdf#page=3">PH</a>/<a href="https://eprint.iacr.org/2004/319.pdf#page=4">(E)NH</a>
 block compression function.
 That function is fast
@@ -589,19 +588,57 @@ at most \(2^{-127}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" cl
   </ol>
 </div>
 </div>
-  
-  
 
 
-    </article>
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Oct
   
-  <div class="pagination">
+31st, 
+2020
+
+
+
+
+      
+      
+
+
+    </p>
     
-      <a class="prev" href="/posts/2">&larr; Older</a>
+      <div class="sharing">
+  
+  
+  
+</div>
+
     
-    <a href="/Blog/archives">Blog Archives</a>
-    
-  </div>
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/" title="Previous Post: UMASH: a fast and universal enough hash">&laquo; UMASH: a fast and universal enough hash</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
 </div>
 
     </div>
@@ -614,6 +651,24 @@ at most \(2^{-127}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" cl
   
 
 <script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/';
+      this.page.title = 'Nearly double the PH bits for one more CLMUL';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
 
 
 
