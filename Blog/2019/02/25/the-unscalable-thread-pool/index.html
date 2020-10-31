@@ -125,7 +125,7 @@ undominated and hope to hear about better approaches.</small></p>
 <p>Thread pools tend to only offer a sparse interface: 
 <a href="https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.Executor.submit">pass a closure or a function and its arguments to the pool</a>,
 <a href="https://github.com/silentbicycle/loom/blob/master/loom.h#L46">and that function</a>
-<a href="https://github.com/lmj/lparallel/blob/9c11f40018155a472c540b63684049acc9b36e15/src/kernel/core.lisp#L374">will be called, eventually</a>.<sup id="fnref:convenience"><a href="#fn:convenience" class="footnote">1</a></sup>  Functions can do 
+<a href="https://github.com/lmj/lparallel/blob/9c11f40018155a472c540b63684049acc9b36e15/src/kernel/core.lisp#L374">will be called, eventually</a>.<sup id="fnref:convenience" role="doc-noteref"><a href="#fn:convenience" class="footnote">1</a></sup>  Functions can do 
 anything, so this interface should offer all the expressive power one
 could need. Experience tells me otherwise.</p>
 
@@ -152,7 +152,7 @@ a serial loop that pulls in work (e.g., files in a directory), or wait
 for requests on a socket, one work unit at a time.</p>
 
 <p>At some point, there’s enough work to think about parallelisation, and
-we choose threads.<sup id="fnref:processes"><a href="#fn:processes" class="footnote">2</a></sup> To keep things simple, we simply spawn
+we choose threads.<sup id="fnref:processes" role="doc-noteref"><a href="#fn:processes" class="footnote">2</a></sup> To keep things simple, we simply spawn
 a thread per work unit. Load increases further, and we observe that
 we spend more time switching between threads or contending on shared
 data than doing actual work. We could use a semaphore to limit the
@@ -280,7 +280,7 @@ the hypothesis.</p>
 four classes.</p>
 
 <ol>
-  <li>Resources that may be seamlessly<sup id="fnref:thrashing"><a href="#fn:thrashing" class="footnote">3</a></sup> shared or timesliced, like CPU.</li>
+  <li>Resources that may be seamlessly<sup id="fnref:thrashing" role="doc-noteref"><a href="#fn:thrashing" class="footnote">3</a></sup> shared or timesliced, like CPU.</li>
   <li>Resources that are acquired for the duration of a single function
 call or processing step, like DB connections.</li>
   <li>Resources that are acquired in one function call, then released in
@@ -302,7 +302,7 @@ that all need a given resource (e.g., a DB connection from a
 connection pool) before releasing it, instead of repetitively
 acquiring and releasing the same resource in back-to-back function
 calls, or blocking multiple workers on the same
-bottleneck.<sup id="fnref:SEDA"><a href="#fn:SEDA" class="footnote">4</a></sup> More importantly, the property of always being
+bottleneck.<sup id="fnref:SEDA" role="doc-noteref"><a href="#fn:SEDA" class="footnote">4</a></sup> More importantly, the property of always being
 acquired and released in the same function invocation, is a global
 one: as soon as even one piece of code acquires a given resource and
 releases in another thread pool call (e.g., acquires a DB connection,
@@ -363,28 +363,29 @@ load-testing data.</p>
 
 <p>Complex programs are often best understood as state machines. These
 state machines can be implicit, or explicit. I prefer the latter.  I
-claim that it’s also preferable to have one thread pool<sup id="fnref:queue"><a href="#fn:queue" class="footnote">5</a></sup> per
+claim that it’s also preferable to have one thread pool<sup id="fnref:queue" role="doc-noteref"><a href="#fn:queue" class="footnote">5</a></sup> per
 explicit state than to dump all sorts of state transition logic
 in a shared pool.  If writing functions that process flat tables is
 data-oriented programming, I suppose I’m arguing for data-oriented
 state machines.</p>
 
-<div class="footnotes">
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:convenience">
-      <p>Convenience wrappers, like parallel map, or “run after this time,” still rely on the flexibility of opaque functions. <a href="#fnref:convenience" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:convenience" role="doc-endnote">
+      <p>Convenience wrappers, like parallel map, or “run after this time,” still rely on the flexibility of opaque functions. <a href="#fnref:convenience" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:processes">
-      <p>Maybe we decided to use threads because there’s a lot of shared, read-mostly, data on the heap. It doesn’t really matter, process pools have similar problems. <a href="#fnref:processes" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:processes" role="doc-endnote">
+      <p>Maybe we decided to use threads because there’s a lot of shared, read-mostly, data on the heap. It doesn’t really matter, process pools have similar problems. <a href="#fnref:processes" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:thrashing">
-      <p>Up to a point, of course. No model is perfect, etc. etc. <a href="#fnref:thrashing" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:thrashing" role="doc-endnote">
+      <p>Up to a point, of course. No model is perfect, etc. etc. <a href="#fnref:thrashing" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:SEDA">
-      <p>Explicit resource requirements combined with one queue per stage lets us steal ideas from <a href="https://en.wikipedia.org/wiki/Staged_event-driven_architecture">SEDA</a>. <a href="#fnref:SEDA" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:SEDA" role="doc-endnote">
+      <p>Explicit resource requirements combined with one queue per stage lets us steal ideas from <a href="https://en.wikipedia.org/wiki/Staged_event-driven_architecture">SEDA</a>. <a href="#fnref:SEDA" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:queue">
-      <p>One thread pool per state in the sense that no state can fully starve out another of CPU time. The concrete implementation may definitely let a shared set of workers pull from all the queues. <a href="#fnref:queue" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:queue" role="doc-endnote">
+      <p>One thread pool per state in the sense that no state can fully starve out another of CPU time. The concrete implementation may definitely let a shared set of workers pull from all the queues. <a href="#fnref:queue" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

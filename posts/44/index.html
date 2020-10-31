@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/08/23/on-the-importance-of-keeping-microbenchmarks-honest/">On the importance of keeping microbenchmarks honest</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/08/27/tabasco-sort-super-optimal-merge-sort/">Tabasco Sort: a super-optimal merge sort</a></h1>
     
     
       <p class="meta">
@@ -99,15 +99,15 @@
 
 Aug
   
-23rd, 
+27th, 
 2012
 
 
 
 
         
-         | <a href="/Blog/2012/08/23/on-the-importance-of-keeping-microbenchmarks-honest/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2012/08/23/on-the-importance-of-keeping-microbenchmarks-honest/"
+         | <a href="/Blog/2012/08/27/tabasco-sort-super-optimal-merge-sort/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2012/08/27/tabasco-sort-super-optimal-merge-sort/"
 	      >Comments</a>
         
         
@@ -116,51 +116,1131 @@ Aug
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><a href="http://tapoueh.org/blog/2012/08/20-performance-the-easiest-way.html">A recent post</a> tried to extract information from a microbenchmark, but the author
-absolutely did not care whether the programs computed the right, or
-even the same, thing.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>EDIT: 2012-08-29: I added a section to compare comparison counts with
+known bounds for general comparison sorts and sorting networks.</p>
 
-<p>The result? Pure noise.</p>
+<p>In an
+<a href="http://pvk.ca/Blog/2012/08/13/engineering-a-list-merge-sort/">earlier post</a>,
+I noted how tedious coding unrolled sorts can be.  Frankly, that’s the
+main reason I stopped at leaf sorts of size three.  Recently,
+<a href="http://blog.racket-lang.org/2012/08/fully-inlined-merge-sort.html">Neil Toronto</a>
+wrote a nice post on the generation of size-specialised merge sorts.
+The post made me think about that issue a bit more, and I now have a
+neat way to generate unrolled/inlined merge sorts that are
+significantly smaller than the comparison and size “-optimal” inlined
+merge sorts.</p>
 
-<p><code>(expt 10 10)</code> overflows 32 bit <em>signed</em> integers, so the C version
-wound up going through 1410065408 iterations instead.  In fact, signed
-overflow is undefined in C, so a sufficiently devious compiler could
-cap the iteration count to 65536 and still be standard compliant.</p>
+<p>The code is up as a
+<a href="http://discontinuity.info/~pkhuong/tabasco-sort.lisp">single-file library</a>,
+and sorts short vectors faster than SBCL’s inlined heapsort by a
+factor of two to three… and compiles to less machine code.  The
+generator is a bit less than 100 LOC, so I’m not sure I want to
+include it in the mainline yet.  If someone wants to add support for
+more implementations, I’d be happy to extend Tabasco sort, and might
+even consider letting it span multiple files ;)</p>
 
-<p>On SBCL/x86-64, we can do the following and explicitly ask for machine
-unsigned arithmetic:</p>
+<h2 id="differently-optimal-sorts">Differently-optimal sorts</h2>
 
-<pre><code>CL-USER&gt; (lambda (max)
-           (declare (type (unsigned-byte 64) max)
-                    (optimize speed))
-           (let ((sum 0))
-             (declare (type (unsigned-byte 64) sum))
-             (dotimes (i max sum)
-               (setf sum (ldb (byte 64 0) (+ sum i))))))
-#&lt;FUNCTION (LAMBDA (MAX)) {1004DA3D6B}&gt;
-CL-USER&gt; (disassemble *)
-; disassembly for (LAMBDA (MAX))
-; 04DA3E02:       31C9             XOR ECX, ECX               ; no-arg-parsing entry point
-;       04:       31C0             XOR EAX, EAX
-;       06:       EB0E             JMP L1
-;       08:       0F1F840000000000 NOP
-;       10: L0:   4801C1           ADD RCX, RAX
-;       13:       48FFC0           INC RAX
-;       16: L1:   4839D0           CMP RAX, RDX
-;       19:       72F5             JB L0
-[ function epilogue ]
+<p>The inlined merge sort for three values (<code>a</code>, <code>b</code>, and <code>c</code>) is copied
+below.  It has to detect between \(3! = 6\) permutation, and does so
+with an optimal binary search tree.  That scheme leads to code with
+\(n! - 1\) comparisons to sort n values, and for which each
+execution only goes through two or three comparisons (\(\approx \lg n!\)).</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"optimal" inlined merge sort (n = 3) </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(if (&lt; b c)
+</span><span class="line">    (if (&lt; a b)
+</span><span class="line">        (values a b c)
+</span><span class="line">        (if (&lt; a c)
+</span><span class="line">            (values b a c)
+</span><span class="line">            (values b c a)))
+</span><span class="line">    (if (&lt; a c)
+</span><span class="line">        (values a c b)
+</span><span class="line">        (if (&lt; a b)
+</span><span class="line">            (values c a b)
+</span><span class="line">            (values c b a))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>An optimal sorting network for three values needs only three
+comparisons, and always executes those three comparisons.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>optimal sorting network (n = 3) </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(progn
+</span><span class="line">  (when (&lt; c b)
+</span><span class="line">    (rotatef b c))
+</span><span class="line">  (when (&lt; b a)
+</span><span class="line">    (rotatef a b))
+</span><span class="line">  (when (&lt; c b)
+</span><span class="line">    (rotatef b c)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Finally, the leaf sort I used in SBCL is smaller than the inlined
+merge sort (three comparisons), but sometimes executes fewer than
+three comparisons.  It’s superoptimal ;)</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"super-optimal" inlined merge sort (n = 3) </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(progn
+</span><span class="line">  (when (&lt; c b)
+</span><span class="line">    (rotatef b c))
+</span><span class="line">  (if (&lt; b a)
+</span><span class="line">      (if (&lt; c a)
+</span><span class="line">          (values b c a)
+</span><span class="line">          (values b a c))
+</span><span class="line">      (values a b c)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The optimal merge sort is larger than the optimal sorting network, and
+the optimal sorting network performs potentially more comparisons than
+the optimal merge sort…</p>
+
+<p>Each implementation is optimal for different search spaces: the
+optimal merge sort never merges continuations, and the sorting
+network’s only control dependencies are in the conditional swaps.</p>
+
+<p>The “super-optimal” merge sort does better by allowing itself both
+assignments (or tail-calls) and non-trivial control flow: it’s smaller
+than the inlined merge sort (but performs more data movement), and
+potentially executes fewer comparisons than the sorting network (with
+a larger total code size).  And, essential attribute in practice, it’s
+easy to generate.  This contrasts with optimal sorting networks, for
+which we do not have any generation method short of brute force
+search; in fact, in practice, sorting networks tend to exploit
+suboptimal (by a factor of \(\log n\)) schemes like
+<a href="http://www.iti.fh-flensburg.de/lang/algorithmen/sortieren/bitonic/bitonicen.htm">bitonic sort</a>
+or
+<a href="http://www.iti.fh-flensburg.de/lang/algorithmen/sortieren/networks/oemen.htm">odd-even merge sort</a>.
+Then again, we’re only concerned with tiny sorts, and asymptotics can
+be misleading: Batcher’s odd-even merge sort happens to be optimal for
+\(n\leq 8\).  The issue with sorting networks remains:
+data-oblivious control flow pessimises their comparison count.</p>
+
+<h2 id="generalising-from-size-3">Generalising from size 3</h2>
+
+<p>What the last merge sort does is to first sort both halves of the
+values (<code>a</code> is trivially sorted, and <code>b c</code> needs one conditional
+swap), and then, assuming that each half (<code>a</code> and <code>b c</code>) is sorted,
+find the right permutation with which to merge them.  Rather than
+\(n!\) permutations, a merge only needs to distinguish between
+\(C(n, \lfloor n/2\rfloor) = \frac{n!}{\lfloor n/2\rfloor!\lceil n/2\rceil!}\)
+permutations, and the recursive sorts are negligible compared to the
+merge step.  That’s a huge reduction in code size!</p>
+
+<p>A simple merge generator fits in half a
+<a href="http://wry.me/~darius/hacks/screenfuls/screen3.html">screenful</a>.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>unrolled merge generator </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun emit-permute (destinations sources)
+</span><span class="line">  ;; (setf values) is parallel assignment
+</span><span class="line">  `(setf (values ,@destinations) (values ,@sources)))
+</span><span class="line">
+</span><span class="line">(defun emit-merge-1 (destinations left right acc)
+</span><span class="line">  "Build a search tree to determine the right permutation to
+</span><span class="line">   merge LEFT and RIGHT, given that each is pre-sorted."
+</span><span class="line">  (cond ((null left)
+</span><span class="line">         (emit-permute destinations (append (reverse acc) right)))
+</span><span class="line">        ((null right)
+</span><span class="line">         (emit-permute destinations (append (reverse acc) left)))
+</span><span class="line">        (t
+</span><span class="line">         `(if (&lt; ,(first right) ,(first left)) ; stable sort
+</span><span class="line">              ,(emit-merge-1 destinations
+</span><span class="line">                             left (rest right)
+</span><span class="line">                             (cons (first right) acc))
+</span><span class="line">              ,(emit-merge-1 destinations
+</span><span class="line">                             (rest left) right
+</span><span class="line">                             (cons (first left) acc))))))
+</span><span class="line">
+</span><span class="line">(defun emit-merge (left right)
+</span><span class="line">  (emit-merge-1 (append left right) left right nil))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Given two lists of sorted variables, <code>emit-merge</code> calls <code>emit-merge-1</code>
+to generate code that finds the right permutation, and executes it at
+the leaf.  A binary search tree is generated by keeping track of the
+merged list in a reverse-order (to enable tail-sharing) accumulator of
+variable names.  As expected, when merging a list of length one with
+another of length two, we get pretty much the code I wrote by hand
+earlier.</p>
+
+<pre><code>CL-USER&gt; (emit-merge '(a) '(b c))
+(if (&lt; b a)
+    (if (&lt; c a)
+        (setf (values a b c) (values b c a))
+        (setf (values a b c) (values b a c)))
+    (setf (values a b c) (values a b c)))
 </code></pre>
 
-<p>Now that <code>ldb</code> <em>portably</em> ensures modular arithmetic, we
-virtually get the exact same thing as what GCC outputs, down to
-alignment.  It’s still slower than the C version because it goes
-through 1e10 iterations of the lossy sum, rather than
-1.4e9.</p>
+<p>There’s one striking weakness: we generate useless code for the
+identity permutation.  We could detect that case, or, more generally,
+we could find the cycle decomposition of each permutation and use it
+to minimise temporary values; that’d implicitly take care of cases
+like <code>(setf (values a b c) (values b a c))</code>, in which some values are
+left unaffected.</p>
 
-<p>Microbenchmarks are useful to improve our understanding of complex
-systems.  Microbenchmarks whose results we completely discard not so
-much: if there’s nothing keeping us or the compiler honest, we might
-as well get them to compile to no-ops.</p>
+<h2 id="a-smarter-permutation-generator">A smarter permutation generator</h2>
+
+<p>I’ll represent permutations as associative lists, from source to
+destination.  Finding a cycle is easy: just walk the permutation from
+an arbitrary value until we loop back.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>extract a single cycle from a linearly-represented permutation </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun find-cycle (mapping)
+</span><span class="line">  "Extract an arbitrary cycle from a non-empty mapping,
+</span><span class="line">   returning both the cycle and the rest of the mapping."
+</span><span class="line">  (assert mapping)
+</span><span class="line">  (let* ((head  (pop mapping))
+</span><span class="line">         (cycle (list (cdr head))))
+</span><span class="line">    (loop
+</span><span class="line">     (let* ((next-source (first cycle))
+</span><span class="line">            (pair        (assoc next-source mapping)))
+</span><span class="line">       (cond (pair
+</span><span class="line">              (push (cdr pair) cycle)
+</span><span class="line">              ;; if this sucks enough to matter, the output
+</span><span class="line">              ;; will be humongous anyway
+</span><span class="line">              (setf mapping (remove pair mapping)))
+</span><span class="line">             (t
+</span><span class="line">              (assert (eql next-source (first head)))
+</span><span class="line">              (return (values cycle mapping))))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>To generate the code corresponding to a permutation, I can extract all
+the cycles, execute each cycle with a <code>rotatef</code>.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>cycle-decomposition-based permute generator </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun emit-permute (destinations sources)
+</span><span class="line">  "Emit a [destinations &lt;- sources] permutation via its
+</span><span class="line">   cycle decomposition"
+</span><span class="line">  ;; source -&gt; destination alist, minus trivial pairs
+</span><span class="line">  (let ((mapping (remove-if (lambda (pair)
+</span><span class="line">                              (eql (car pair) (cdr pair)))
+</span><span class="line">                            (pairlis sources destinations))))
+</span><span class="line">    `(progn
+</span><span class="line">       ,@(loop while mapping
+</span><span class="line">               collect
+</span><span class="line">               (multiple-value-bind (cycle new-mapping)
+</span><span class="line">                   (find-cycle mapping)
+</span><span class="line">                 (setf mapping new-mapping)
+</span><span class="line">                 `(rotatef ,@cycle))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The merge step for a sort of size three is now a bit more explicit,
+but likely compiles to code that uses fewer registers as well. It
+probably doesn’t matter on good SSA-based backends, but those are the
+exception rather than the norm in the Lisp world.</p>
+
+<pre><code>CL-USER&gt; (emit-merge '(a) '(b c))
+(if (&lt; b a)
+    (if (&lt; c a)
+        (progn (rotatef a b c))
+        (progn (rotatef a b)))
+    (progn))
+</code></pre>
+
+<h2 id="adding-the-recursive-steps">Adding the recursive steps</h2>
+
+<p>The only thing missing for a merge sort is to add base cases and
+recursion.  The base case is easy: lists of length one are sorted.
+Inlining recursion is trivial, as is usually the case when generating
+Lisp code.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"super-optimal" inlined merge sort </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun emit-sort-1 (values length)
+</span><span class="line">  (when (&gt; length 1)
+</span><span class="line">    (let* ((split (truncate length 2))
+</span><span class="line">           (left  (subseq values 0 split))
+</span><span class="line">           (right (subseq values split)))
+</span><span class="line">      `(progn
+</span><span class="line">         ,(emit-sort-1 left  split)
+</span><span class="line">         ,(emit-sort-1 right (- length split))
+</span><span class="line">         ,(emit-merge left right)))))
+</span><span class="line">
+</span><span class="line">(defun emit-sort (values)
+</span><span class="line">  (emit-sort-1 values (length values)))
+</span><span class="line">
+</span><span class="line">(defmacro inline-sort (&amp;rest values)
+</span><span class="line">  (let* ((pairs (loop for value in values
+</span><span class="line">                      collect `(,(gensym "TEMP") ,value)))
+</span><span class="line">         (temps (mapcar #'first pairs)))
+</span><span class="line">    `(let ,pairs
+</span><span class="line">       ,(emit-sort temps)
+</span><span class="line">       (values ,@temps))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The resulting three-value sorter looks good; there are some
+redundancies with nested or empty <code>progn</code>s, but any half-decent
+compiler will take care of that.  Python certainly does a goob job on
+that code.</p>
+
+<pre><code>CL-USER&gt; (emit-sort '(a b c))
+(progn
+ nil
+ (progn
+  nil
+  nil
+  (if (&lt; c b)
+      (progn (rotatef b c))
+      (progn)))
+ (if (&lt; b a)
+     (if (&lt; c a)
+         (progn (rotatef a b c))
+         (progn (rotatef a b)))
+     (progn)))
+CL-USER&gt; (disassemble (lambda (a b c)
+                        (declare (type fixnum a b c))
+                        (inline-sort a b c)))
+; disassembly for (lambda (a b c))
+; 0E88F150:       498BD0           mov rdx, r8                ; no-arg-parsing entry point
+;       53:       498BC9           mov rcx, r9
+;       56:       498BDA           mov rbx, r10
+;       59:       4D39CA           cmp r10, r9
+;       5C:       7C30             jl L3
+;       5E: L0:   4C39C1           cmp rcx, r8
+;       61:       7D0B             jnl L1
+;       63:       4C39C3           cmp rbx, r8
+;       66:       7C1B             jl L2
+;       68:       488BD1           mov rdx, rcx
+;       6B:       498BC8           mov rcx, r8
+;       6E: L1:   488BF9           mov rdi, rcx
+;       71:       488BF3           mov rsi, rbx
+;       74:       488D5D10         lea rbx, [rbp+16]
+;       78:       B906000000       mov ecx, 6
+;       7D:       F9               stc
+;       7E:       488BE5           mov rsp, rbp
+;       81:       5D               pop rbp
+;       82:       C3               ret
+;       83: L2:   488BD1           mov rdx, rcx
+;       86:       488BCB           mov rcx, rbx
+;       89:       498BD8           mov rbx, r8
+;       8C:       EBE0             jmp L1
+;       8E: L3:   498BCA           mov rcx, r10
+;       91:       498BD9           mov rbx, r9
+;       94:       EBC8             jmp L0
+</code></pre>
+
+<p>I thought about generating calls to <code>values</code> in the final merge,
+rather than permuting, but decided against: I know SBCL doesn’t
+generate clever code when permuting registers, and that’d result in
+avoidable spills.  I also considered generating code in CPS rather
+than emitting assignments; again, I decided against because I can’t
+depend on SBCL to emit clever permutation code.  The transformation
+would make sense in a dialect with weaker support (both compiler and
+social) for assignment.</p>
+
+<h2 id="how-good-is-the-generated-code">How good is the generated code?</h2>
+
+<p>Both this inline merge sort and the original, permutation-free (except
+at the leaves), one actually define the exact same algorithms.  For
+any input, both (should) execute the same comparisons in the same
+order: the original inline merge sort simply inlines the whole set of
+execution traces, without even merging control flow.</p>
+
+<p>The permutation-free sort guarantees that it never performs redundant
+comparisons.  Whether it performs the strict minimum number of
+comparisons, either on average or in the worst case, is another question.
+At first, I thought that \(\lg n!\) should be a good estimate, since
+the search tree seems optimally balanced.  The problem is \(n!\)
+tends to have many other prime factors than 2, and we can thus expect
+multiple comparisons to extract less than 1 bit of information, for
+each execution.  The lower bound can thus be fairly far from the
+actual value… Still, this question is only practically relevant for
+tiny sorts, so the discrepancy shouldn’t be too large.</p>
+
+<p>A simple way to get the minimum, average or maximum comparison count
+would be to annotate the permutation-free generator to compute the
+shortest, average and longest path as it generates the search tree.</p>
+
+<p>I’ll instead mimic the current generator.</p>
+
+<p>The first step is to find the number of comparisons to perform a
+merge of <code>m</code> and <code>n</code> values.</p>
+
+<p>If either <code>m</code> or <code>n</code> is zero, merging the sequences is trivial.</p>
+
+<p>Otherwise, the minimum number of comparisons is <code>(min m n)</code>: the
+sequences are pre-sorted, and the shortest sequence comes first.  The
+maximum is <code>(1- (+ m n))</code>.  I couldn’t find a simple expression for
+the average over all permutations.  Instead, I iterate over all
+possible combinations and count the number of comparisons until either
+subsequence is exhausted.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>compute the number of comparisons during merges </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun merge-count (m n)
+</span><span class="line">  ;; return min, expected, max comparison to merge
+</span><span class="line">  ;; presorted subsequences of m and n values
+</span><span class="line">  (if (zerop (min m n))
+</span><span class="line">      (values 0 0 0)
+</span><span class="line">      (let ((comparisons 0)
+</span><span class="line">            (count 0)
+</span><span class="line">            (min   most-positive-fixnum)
+</span><span class="line">            (max   0))
+</span><span class="line">        (dotimes (i (ash 1 (+ m n))
+</span><span class="line">                    (values min
+</span><span class="line">                            (/ comparisons
+</span><span class="line">                               count)
+</span><span class="line">                            max))
+</span><span class="line">          ;; only consider combinations with m ones
+</span><span class="line">          ;; (and n zeros)
+</span><span class="line">          (when (= (logcount i) m)
+</span><span class="line">            (let ((cmp (1- (+ m n)))
+</span><span class="line">                  (mask i))
+</span><span class="line">              ;; no more comparison needed until two consecutive
+</span><span class="line">              ;; elements from distinct subsequences
+</span><span class="line">              (loop while (eql (logbitp 0 mask)
+</span><span class="line">                               (logbitp 1 mask))
+</span><span class="line">                    do (decf cmp)
+</span><span class="line">                       (setf mask (ash mask -1)))
+</span><span class="line">              (setf min (min min cmp)
+</span><span class="line">                    max (max max cmp))
+</span><span class="line">              (incf comparisons cmp)
+</span><span class="line">              (incf count)))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Counting the number of comparisons in sorts is then trivial, with a
+recursive function.  I didn’t even try to memoise repeated
+computations: the generated code is ludicrously long when sorting as
+few as 13 or 14 values.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>compute the number of comparisons in merge sort </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun sort-count (n)
+</span><span class="line">  (if (&lt;= n 1)       ; trivially sorted
+</span><span class="line">      (values 0 0 0)
+</span><span class="line">      (let ((min 0)
+</span><span class="line">            (avg 0)
+</span><span class="line">            (max 0))
+</span><span class="line">        (flet ((inc (min- avg- max-)
+</span><span class="line">                 (incf min min-)
+</span><span class="line">                 (incf avg avg-)
+</span><span class="line">                 (incf max max-)))
+</span><span class="line">          ;; accumulate min/avg/max count from sorting the left and
+</span><span class="line">          ;; right subsequences, and merging
+</span><span class="line">          (multiple-value-call #'inc (sort-count (floor n 2)))
+</span><span class="line">          (multiple-value-call #'inc (sort-count (ceiling n 2)))
+</span><span class="line">          (multiple-value-call #'inc (merge-count (floor n 2)
+</span><span class="line">                                                  (ceiling n 2))))
+</span><span class="line">        (values min avg max))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<pre><code>CL-USER&gt; (loop for i from 2 upto 16
+               do (multiple-value-bind (min avg max)
+                      (sort-count i)
+                    (format t "~4D ~6,2F ~6D ~6,2F ~6D~%"
+                            i (log (! i) 2d0)
+                            min (float avg) max)))
+;; n  lg(n!)   min   avg     max ;   best   network
+   2   1.00      1   1.00      1 ;   1      1
+   3   2.58      2   2.67      3 ;   3      3
+   4   4.58      4   4.67      5 ;   5      5
+   5   6.91      5   7.17      8 ;   7      9
+   6   9.49      7   9.83     11 ;   10     12
+   7  12.30      9  12.73     14 ;   13     16
+   8  15.30     12  15.73     17 ;   16     19
+   9  18.47     13  19.17     21 ;   19     25?
+  10  21.79     15  22.67     25 ;   22     29?
+  11  25.25     17  26.29     29 ;   26     35?
+  12  28.84     20  29.95     33 ;   30     39?
+  13  32.54     22  33.82     37 ;   34     45?
+  14  36.34     25  37.72     41 ;   38     51?
+  15  40.25     28  41.69     45 ;   42     56?
+  16  44.25     32  45.69     49 ;   46?    60?
+</code></pre>
+
+<p>I annotated the output with comments (marked with semicolons).  The
+columns are, from left to right, the sort size, the theoretical lower
+bound (on the average or maximum number of comparisons), the minimum
+number of comparisons (depending on the input permutation), the
+average (over all input permutations), and the maximum count.  I added
+two columns by hand: the optimal worst-case (maximum) comparison
+counts (over all sorting methods, copied from the
+<a href="http://oeis.org/A036604">OEIS</a>), and the optimal size for sorting
+networks, when known (lifted from a table
+<a href="http://nn.cs.utexas.edu/downloads/papers/valsalam.utcstr11.pdf">here [pdf]</a>).
+Inexact (potentially higher than the optimum) bounds are marked with a
+question mark.</p>
+
+<p>For the input size the inline merge sort can reasonably tackle (up to
+ten or so), its worst-case is reasonably close to the best possible,
+and its average case tends to fall between the lower bound and the
+best possible.  Over all these sizes, the merge sort’s worst case
+performs fewer comparisons than the optimal or best-known sorting
+networks.  The current best upper bounds on the minimal worst-case
+comparison count seem to be based on insertion sort passes that
+minimise the number of comparisons with a binary search.  I don’t
+believe that’s directly useful for the current use case, but a similar
+trick might be useful to reduce the number of comparisons, at the
+expense of reasonably more data movement.</p>
+
+<h2 id="making-it-cl-strength">Making it CL-strength</h2>
+
+<p>That’s already a decent proof of concept.  It’s also far too plain to
+fit in the industrial-strength Common Lisp way.  An inline sorting
+macro worthy of CL should be parameterised on both comparator and key
+functions, and work with arbitrary places rather than only variables.</p>
+
+<p>Parameterising the comparator is trivial.  The key could be handled by
+calling it at each comparison, but that’s wasteful.  We’re generating
+code; might as well go for glory.  Just like in the list merge sort,
+I’ll cache calls to the key function in the merge tree.  I’ll also use
+special variables instead of passing a half-dozen parameters around in
+the generator.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>key/comparator-aware merge generator </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+<span class="line-number">61</span>
+<span class="line-number">62</span>
+<span class="line-number">63</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defvar *inline-sort-comparator*)
+</span><span class="line">(defvar *inline-sort-key*)
+</span><span class="line">(defvar *inline-sort-destinations*)
+</span><span class="line">(defvar *inline-sort-left-head*)
+</span><span class="line">(defvar *inline-sort-right-head*)
+</span><span class="line">
+</span><span class="line">(defun emit-merge-1 (left right acc)
+</span><span class="line">  "Build a search tree to determine the right permutation to
+</span><span class="line">   merge LEFT and RIGHT, given that each is pre-sorted."
+</span><span class="line">  ;; stability trickery
+</span><span class="line">  `(if (funcall ,*inline-sort-comparator* ,*inline-sort-right-head*
+</span><span class="line">                                          ,*inline-sort-left-head*)
+</span><span class="line">       ,(let* ((acc        (cons (first right) acc))
+</span><span class="line">               (right      (rest right)))
+</span><span class="line">          ;; pop from RIGHT, and recurse if RIGHT isn't empty.
+</span><span class="line">          (if right
+</span><span class="line">              `(let ((,*inline-sort-right-head*
+</span><span class="line">                       (funcall ,*inline-sort-key* ,(first right))))
+</span><span class="line">                 ,(emit-merge-1 left right acc))
+</span><span class="line">              (emit-permute *inline-sort-destinations*
+</span><span class="line">                            (append (reverse acc) left))))
+</span><span class="line">       ;; same
+</span><span class="line">       ,(let* ((acc  (cons (first left) acc))
+</span><span class="line">               (left (rest left)))
+</span><span class="line">          (if left
+</span><span class="line">              `(let ((,*inline-sort-left-head*
+</span><span class="line">                       (funcall ,*inline-sort-key* ,(first left))))
+</span><span class="line">                 ,(emit-merge-1 left right acc))
+</span><span class="line">              (emit-permute *inline-sort-destinations*
+</span><span class="line">                            (append (reverse acc) right))))))
+</span><span class="line">
+</span><span class="line">(defun emit-merge (left right)
+</span><span class="line">  "Caching calls to KEY means we have to special-case empty lists
+</span><span class="line">   (which doesn't happen when we sort, anyway)"
+</span><span class="line">  (cond ((null left)
+</span><span class="line">         (emit-permute right right))
+</span><span class="line">        ((null right)
+</span><span class="line">         (emit-permute left left))
+</span><span class="line">        (t
+</span><span class="line">         (let ((*inline-sort-destinations* (append left right))
+</span><span class="line">               (*inline-sort-left-head*  (gensym "LEFT-HEAD-KEY"))
+</span><span class="line">               (*inline-sort-right-head* (gensym "RIGHT-HEAD-KEY")))
+</span><span class="line">           `(let ((,*inline-sort-left-head*  (funcall ,*inline-sort-key*
+</span><span class="line">                                                      ,(first left)))
+</span><span class="line">                  (,*inline-sort-right-head* (funcall ,*inline-sort-key*
+</span><span class="line">                                                      ,(first right))))
+</span><span class="line">              ,(emit-merge-1 left right nil))))))
+</span><span class="line">
+</span><span class="line">(defun emit-sort-1 (values length)
+</span><span class="line">  "Unrolled and inlined recursive merge sort generator.
+</span><span class="line">   Lists of length 1 or less are trivially sorted; recurse
+</span><span class="line">   on the rest."
+</span><span class="line">  (when (&gt; length 1)
+</span><span class="line">    (let* ((split (truncate length 2))
+</span><span class="line">           (left  (subseq values 0 split))
+</span><span class="line">           (right (subseq values split)))
+</span><span class="line">      `(progn
+</span><span class="line">         ,(emit-sort-1 left  split)
+</span><span class="line">         ,(emit-sort-1 right (- length split))
+</span><span class="line">         ,(emit-merge left right)))))
+</span><span class="line">
+</span><span class="line">(defun emit-sort (values *inline-sort-comparator* *inline-sort-key*)
+</span><span class="line">  (emit-sort-1 values (length values)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Finally, handling arbitrary places, thus letting the macro take care
+of writing results back to the places, is just regular macrology.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>CL-style inline sort macro </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defmacro inline-sort ((comparator &amp;key key (overwrite t))
+</span><span class="line">                       &amp;body values
+</span><span class="line">                       &amp;environment env)
+</span><span class="line">  "Sorts all VALUES in increasing order with respect to COMPARATOR and
+</span><span class="line">   KEY.  COMPARATOR should be a strict order, like CL:&lt;, and KEY defaults
+</span><span class="line">   to NIL (which is interpreted as the identity).  By default, the result
+</span><span class="line">   is written back to the places; that's skipped if OVERWRITE is NIL. A
+</span><span class="line">   literal NIL value for overwrite will avoid generating any write.
+</span><span class="line">   The SORT form always evaluates to the sorted values, in order."
+</span><span class="line">  (let (vars vals
+</span><span class="line">        store-vars writer-forms
+</span><span class="line">        reader-forms
+</span><span class="line">        temps
+</span><span class="line">        (_comparator (gensym "COMPARATOR"))
+</span><span class="line">        (_key        (gensym "KEY"))
+</span><span class="line">        (_overwrite  (gensym "OVERWRITE")))
+</span><span class="line">    (loop for value in (reverse values) do
+</span><span class="line">      (push (gensym "TEMP") temps)
+</span><span class="line">      ;; only use the setf expansion if we might write to the place.
+</span><span class="line">      (if (not overwrite)
+</span><span class="line">          (push value reader-forms)
+</span><span class="line">          (multiple-value-bind (var val store-var writer reader)
+</span><span class="line">              (get-setf-expansion value env)
+</span><span class="line">            (setf vars (append var vars)
+</span><span class="line">                  vals (append val vals))
+</span><span class="line">            (push store-var store-vars)
+</span><span class="line">            (push writer writer-forms)
+</span><span class="line">            (push reader reader-forms))))
+</span><span class="line">    `(let* ((,_comparator ,comparator)
+</span><span class="line">            (,_comparator (if (functionp ,_comparator)
+</span><span class="line">                              ,_comparator
+</span><span class="line">                              (symbol-function ,_comparator)))
+</span><span class="line">            (,_key        ,(or key '#'identity))
+</span><span class="line">            (,_key        (if (functionp ,_key)
+</span><span class="line">                              ,_key
+</span><span class="line">                              (symbol-function ,_key)))
+</span><span class="line">            (,_overwrite  ,overwrite)
+</span><span class="line">            ,@(mapcar 'list vars vals)
+</span><span class="line">            ,@(mapcar 'list temps reader-forms))
+</span><span class="line">       (declare (ignorable ,_comparator ,_key ,_overwrite))
+</span><span class="line">       ,(emit-sort temps _comparator _key)
+</span><span class="line">       ,(and overwrite
+</span><span class="line">             `(when ,_overwrite
+</span><span class="line">                ,@(loop
+</span><span class="line">                    for value in values
+</span><span class="line">                    for store-var-list in store-vars
+</span><span class="line">                    for writer in writer-forms
+</span><span class="line">                    for temp in temps
+</span><span class="line">                    collect
+</span><span class="line">                    (progn
+</span><span class="line">                      (unless (= 1 (length store-var-list))
+</span><span class="line">                        (error "Can't sort multiple-value place ~S" value))
+</span><span class="line">                      `(let ((,(first store-var-list) ,temp))
+</span><span class="line">                         ,writer)))))
+</span><span class="line">       (values ,@temps))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Now, the macro can be used to sort, e.g., vectors of double floats
+“in-place” (inasmuch as copying everything to registers can be
+considered in-place).</p>
+
+<pre><code>CL-USER&gt; (macroexpand-1 `(inline-sort (#'&lt; :key #'-)
+                           (aref array 0) (aref array 1) (aref array 2)))
+(let* ((#:comparator1184 #'&lt;)
+       (#:comparator1184
+        (if (functionp #:comparator1184)
+            #:comparator11184
+            (symbol-function #:comparator1184)))
+       (#:key1185 #'-)
+       (#:key1185
+        (if (functionp #:key1185)
+            #:key1185
+            (symbol-function #:key1185)))
+       (#:overwrite1186 t)
+       (#:array1195 array)
+       (#:array1192 array)
+       (#:array1189 array)
+       (#:temp1193 (aref #:array1195 0))
+       (#:temp1190 (aref #:array1192 1))
+       (#:temp1187 (aref #:array1189 2)))
+  (declare (ignorable #:comparator1184 #:key1185 #:overwrite1186))
+  (progn
+   nil
+   (progn
+    nil
+    nil
+    (let ((#:left-head-key1196 (funcall #:key1185 #:temp1190))
+          (#:right-head-key1197 (funcall #:key1185 #:temp1187)))
+      (if (funcall #:comparator1184 #:right-head-key1197 #:left-head-key1196)
+          (progn (rotatef #:temp1190 #:temp1187))
+          (progn))))
+   (let ((#:left-head-key1198 (funcall #:key1185 #:temp1193))
+         (#:right-head-key1199 (funcall #:key1185 #:temp1190)))
+     (if (funcall #:comparator1184 #:right-head-key1199 #:left-head-key1198)
+         (let ((#:right-head-key1199 (funcall #:key1185 #:temp1187)))
+           (if (funcall #:comparator1184 #:right-head-key1199
+                        #:left-head-key1198)
+               (progn (rotatef #:temp1193 #:temp1190 #:temp1187))
+               (progn (rotatef #:temp1193 #:temp1190))))
+         (progn))))
+  (when #:overwrite1186
+    (let ((#:new1194 #:temp1193))
+      (sb-kernel:%aset #:array1195 0 #:new1194))
+    (let ((#:new1191 #:temp1190))
+      (sb-kernel:%aset #:array1192 1 #:new1191))
+    (let ((#:new1188 #:temp1187))
+      (sb-kernel:%aset #:array1189 2 #:new1188)))
+  (values #:temp1193 #:temp1190 #:temp1187))
+t
+CL-USER&gt; (disassemble (lambda (array)
+                        (declare (type (simple-array double-float (3)) array))
+                        (inline-sort (#'&lt; :key #'-)
+                          (aref array 0) (aref array 1) (aref array 2))
+                        array))
+; disassembly for (lambda (array))
+; 0C5A5661:       F20F105201       movsd XMM2, [rdx+1]        ; no-arg-parsing entry point
+;      666:       F20F104209       movsd XMM0, [rdx+9]
+;      66B:       F20F104A11       movsd XMM1, [rdx+17]
+;      670:       660F28E0         movapd XMM4, XMM0
+;      674:       660F5725A4000000 xorpd XMM4, [rip+164]
+;      67C:       660F28D9         movapd XMM3, XMM1
+;      680:       660F571D98000000 xorpd XMM3, [rip+152]
+;      688:       660F2FDC         comisd XMM3, XMM4
+;      68C:       7A02             jp L0
+;      68E:       7267             jb L3
+;      690: L0:   660F28DA         movapd XMM3, XMM2
+;      694:       660F571D84000000 xorpd XMM3, [rip+132]      ; negate double-float
+;      69C:       660F28E0         movapd XMM4, XMM0
+;      6A0:       660F572578000000 xorpd XMM4, [rip+120]
+;      6A8:       660F2FE3         comisd XMM4, XMM3
+;      6AC:       7A26             jp L1
+;      6AE:       7324             jnb L1
+;      6B0:       660F28E1         movapd XMM4, XMM1
+;      6B4:       660F572564000000 xorpd XMM4, [rip+100]
+;      6BC:       660F2FE3         comisd XMM4, XMM3
+;      6C0:       7A27             jp L2
+;      6C2:       7325             jnb L2
+;      6C4:       660F28DA         movapd XMM3, XMM2
+;      6C8:       660F28D0         movapd XMM2, XMM0
+;      6CC:       660F28C1         movapd XMM0, XMM1
+;      6D0:       660F28CB         movapd XMM1, XMM3
+;      6D4: L1:   F20F115201       movsd [rdx+1], XMM2
+;      6D9:       F20F114209       movsd [rdx+9], XMM0
+;      6DE:       F20F114A11       movsd [rdx+17], XMM1
+;      6E3:       488BE5           mov rsp, rbp
+;      6E6:       F8               clc
+;      6E7:       5D               pop rbp
+;      6E8:       C3               ret
+;      6E9: L2:   660F28DA         movapd XMM3, XMM2
+;      6ED:       660F28D0         movapd XMM2, XMM0
+;      6F1:       660F28C3         movapd XMM0, XMM3
+;      6F5:       EBDD             jmp L1
+;      6F7: L3:   660F28D8         movapd XMM3, XMM0
+;      6FB:       660F28C1         movapd XMM0, XMM1
+;      6FF:       660F28CB         movapd XMM1, XMM3
+;      703:       EB8B             jmp L0
+</code></pre>
+
+<h2 id="bonus-hooking-in-sbcl">Bonus: Hooking in SBCL</h2>
+
+<p>The inline sort supports the same options as <code>CL:SORT</code>, so it’d be
+really interesting to opportunistically compile calls to the latter
+into size-specialised inline sort.  The usual, portable, way to code
+that sort of macro qua source-to-source optimiser in CL is with
+compiler macros; compiler macros have access to all the usual
+macroexpansion-time utility, but the function definition is left in
+place.  That way the user can still use the function as a first-class
+function, and the compiler-macro can decline the transformation if a
+regular call would work better (and the compiler can ignore any
+compiler macro).  That’s not enough for our needs, though… and there
+can only be one compiler macro per function, so adding one to code we
+don’t own is a bad idea.</p>
+
+<p>Python’s first internal representation (ir1) is optimised by
+iteratively deriving tighter type information, and (mostly) pattern
+matching on the type of function calls.  Its DEFTRANSFORM form lets us
+add new rules, and there may be an arbitrary number of such rules for
+each function.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Hooking our sort generator in SBCL </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(in-package "SB-C")
+</span><span class="line">(defvar *unrolled-vector-sort-max-length* 8)
+</span><span class="line">
+</span><span class="line">(defun maybe-emit-unrolled-merge-sort (node sequence key)
+</span><span class="line">  (unless (policy node (&gt; speed space))
+</span><span class="line">    (give-up-ir1-transform))
+</span><span class="line">  (let* ((sequence-type (lvar-type sequence))
+</span><span class="line">         (dimensions (array-type-dimensions-or-give-up
+</span><span class="line">                      sequence-type)))
+</span><span class="line">    (unless (typep dimensions '(cons number null))
+</span><span class="line">      (give-up-ir1-transform
+</span><span class="line">       "~@&lt;sequence argument isn't a vector of known length~:@&gt;"))
+</span><span class="line">    (let ((length (first dimensions)))
+</span><span class="line">      (when (&gt; length *unrolled-vector-sort-max-length*)
+</span><span class="line">        (give-up-ir1-transform
+</span><span class="line">         "~@&lt;sequence argument too long for unrolled sort ~
+</span><span class="line">              (length ~S greater than ~S)~:@&gt;"
+</span><span class="line">         length *unrolled-vector-sort-max-length*))
+</span><span class="line">      (if (&lt;= length 1)
+</span><span class="line">          'sequence
+</span><span class="line">          `(with-array-data ((array sequence)
+</span><span class="line">                             (start)
+</span><span class="line">                             (end))
+</span><span class="line">             (declare (optimize (insert-array-bounds-checks 0))
+</span><span class="line">                      (ignore end))
+</span><span class="line">             (inline-sort
+</span><span class="line">                 ((%coerce-callable-to-fun predicate)
+</span><span class="line">                  :key ,(if key
+</span><span class="line">                            '(%coerce-callable-to-fun key)
+</span><span class="line">                            '#'identity))
+</span><span class="line">               ,@(loop for i below length
+</span><span class="line">                       collect `(aref array (+ start ,i))))
+</span><span class="line">             sequence)))))
+</span><span class="line">
+</span><span class="line">(deftransform sort ((sequence predicate &amp;key key)
+</span><span class="line">                    * * :node node)
+</span><span class="line">  "unroll sort of short vectors"
+</span><span class="line">  (maybe-emit-unrolled-merge-sort node sequence key))
+</span><span class="line">
+</span><span class="line">(deftransform stable-sort ((sequence predicate &amp;key key)
+</span><span class="line">                           * * :node node)
+</span><span class="line">  "unroll stable-sort of short vectors"
+</span><span class="line">  (maybe-emit-unrolled-merge-sort node sequence key))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The two deftransforms at the end define new rules that match on calls
+to <code>CL:SORT</code> and <code>CL:STABLE-SORT</code>, with arbitrary argument types and
+return types: basic type checks are performed elsewhere, and
+<code>maybe-emit-unrolled-merge-sort</code> does the rest.  Transforms are
+identified by the docstring (which also improve compiler notes), and
+the argument and return types, so the forms are reevaluation-safe.</p>
+
+<p>All the logic lies in <code>maybe-emit-unrolled-merge-sort</code>.  The <code>policy</code>
+form checks that the optimisation policy at the call node has <code>speed</code>
+greater than <code>space</code>, and gives up on the transformation otherwise.
+The next step is to make sure the sequence argument is an array, and
+that its dimensions are known and define a vector (its dimension list
+is a list of one number).  The final guard makes sure we only
+specialise on small sorts (at most
+<code>*unrolled-vector-sort-max-length*</code>).</p>
+
+<p>Finally, we get to code generation itself.  A vector of length 1 or 0
+is trivially pre-sorted.  I could also directly emit the inner
+<code>inline-sort</code> form, but SBCL has some stuff to hoist out computations
+related to hairy arrays.  <code>with-array-data</code> takes a potentially
+complex array (e.g. displaced, or not a vector), and binds the
+relevant variables to the underlying simple array of rank 1, and the
+start and end indices corresponding to the range we defined
+(defaulting to the whole range of the input array).  Bound checks are
+eliminated because static information ensures the accesses are safe
+(or the user lied and asked not to insert type checks earlier), and
+the <code>start</code> index is declared to be small enough that we can add to it
+without overflow – Python doesn’t implement the sort of sophisticated
+shape analyses that could figure that out.  Finally, a straight
+<code>inline-sort</code> form can be emitted.</p>
+
+<p>That machinery means we’ll get quicker and shorter inline sort code
+when the size is known ahead of time.  For example, a quick
+disassembly shows the following is about one fourth the size of the
+size-generic inline code (with <code>(simple-array double-float (*))</code>, and
+<code>(optimize speed (space 0))</code>.
+    CL-USER&gt; (lambda (x)
+               (declare (type (simple-array double-float (4)) x)
+                        (optimize speed))
+               (sort x #’&lt;))
+    #&lt;FUNCTION (lambda (x)) {100BFF457B}&gt;
+    CL-USER&gt; (disassemble *)
+    ; disassembly for (lambda (x))
+    ; 0BFF45CF:       F20F105A01       movsd XMM3, [rdx+1]        ; no-arg-parsing entry point
+    ;      5D4:       F20F104209       movsd XMM0, [rdx+9]
+    ;      5D9:       F20F104A11       movsd XMM1, [rdx+17]
+    ;      5DE:       F20F105219       movsd XMM2, [rdx+25]
+    ;      5E3:       660F2FC3         comisd XMM0, XMM3
+    ;      5E7:       7A0E             jp L0
+    ;      5E9:       730C             jnb L0
+    ;      5EB:       660F28E3         movapd XMM4, XMM3
+    ;      5EF:       660F28D8         movapd XMM3, XMM0
+    ;      5F3:       660F28C4         movapd XMM0, XMM4
+    […]</p>
+
+<p>Even for vectors of length 8 (the default limit), the specialised
+merge sort is shorter than SBCL’s inlined heapsort, and about three
+times as fast on shuffled vectors.</p>
+
+<h2 id="thats-it">That’s it</h2>
+
+<p>It took me much longer to write this up than to code the generator,
+but I hope this can be useful to other people.  One thing I’d like to
+note is that sorting networks are much harder to get right than this
+generator, and pessimise performance: without branches, there must be
+partially redundant computations on non-power-of-two sizes.  In the
+absence of solid compiler support for conditional swaps, I doubt the
+additional overhead of <em>optimal</em> sorting networks can be compensated
+by the simpler control flow, never mind the usual odd-even or bitonic
+networks.</p>
 </div>
   
   

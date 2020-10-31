@@ -188,7 +188,7 @@ optimisation should flow naturally from that
 point of view.  Finally, I’ll guess why I had more success
 with <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a> this time than with 
 <a href="https://www.satyenkale.com/papers/mw-survey.pdf">Multiplicative Weight Update</a>
-eight years ago.<sup id="fnref:wall"><a href="#fn:wall" class="footnote">1</a></sup></p>
+eight years ago.<sup id="fnref:wall" role="doc-noteref"><a href="#fn:wall" class="footnote">1</a></sup></p>
 
 <h2 id="the-experts-problem-and-lp-feasibility">The experts problem and LP feasibility</h2>
 
@@ -239,14 +239,14 @@ experts (e.g., 60% rock, 40% paper, 0% scissors).  The cost
 \(\mathrm{rock} = -0.5\), \(\mathrm{paper} = 0.5\), 
 \(\mathrm{scissors} = 0\)), and we incur the weighted average
 from our play (e.g., \(60\% \cdot -0.5 + 40\% \cdot 0.5 = -0.1\))
-before playing the next round.<sup id="fnref:equivalent"><a href="#fn:equivalent" class="footnote">2</a></sup>  The goal is to minimise
+before playing the next round.<sup id="fnref:equivalent" role="doc-noteref"><a href="#fn:equivalent" class="footnote">2</a></sup>  The goal is to minimise
 our worst-case regret, the additive difference between the total cost
 incurred by our mixtures of experts and that of the a posteriori best single
 expert.  In this case as well, online learning
 algorithms guarantee regret in \(\mathcal{O}(\sqrt{T} \, \lg n)\)</p>
 
 <p>This line of research is interesting because simple algorithms achieve
-that bound, with explicit constant factors on the order of 1,<sup id="fnref:which-log"><a href="#fn:which-log" class="footnote">3</a></sup>
+that bound, with explicit constant factors on the order of 1,<sup id="fnref:which-log" role="doc-noteref"><a href="#fn:which-log" class="footnote">3</a></sup>
 and <a href="http://drops.dagstuhl.de/opus/volltexte/2017/7499/pdf/LIPIcs-ICALP-2017-48.pdf">those bounds are known to be non-asymptotically tight for a large class of algorithms</a>.
 Like dense linear algebra or fast Fourier transforms, where algorithms
 are often compared by counting individual floating point operations,
@@ -572,7 +572,7 @@ width is narrower.</p>
 
 <p><a href="https://arxiv.org/abs/1301.0534">de Rooij and others published AdaHedge in 2013</a>,
 an algorithm that addresses both these issues by smoothly estimating
-its parameter over time, without using the doubling trick.<sup id="fnref:doubling"><a href="#fn:doubling" class="footnote">4</a></sup>
+its parameter over time, without using the doubling trick.<sup id="fnref:doubling" role="doc-noteref"><a href="#fn:doubling" class="footnote">4</a></sup>
 AdaHedge’s loss (convergence rate to an \(\varepsilon-\)solution)
 still depends on the relaxation’s width.  However, it depends on the
 maximum width actually observed during the solution process, and not
@@ -595,7 +595,7 @@ by more than \(1\), but some points could be covered by hundreds of
 tours, so the worst case satisfaction width is high. I had to rely on
 the way AdaHedge adapts to the actual hardness of the problem.  In the
 end, \(34492\) iterations sufficed to find a solution that was \(4.5\%\)
-infeasible.<sup id="fnref:wrong-log"><a href="#fn:wrong-log" class="footnote">5</a></sup>  This corresponds to a worst case with a width
+infeasible.<sup id="fnref:wrong-log" role="doc-noteref"><a href="#fn:wrong-log" class="footnote">5</a></sup>  This corresponds to a worst case with a width
 of less than \(2\), which is probably not what happened.  It seems
 more likely that the surrogate dual isn’t actually an omniscient
 adversary, and AdaHedge was able to exploit some of that “easiness.”</p>
@@ -613,22 +613,24 @@ times faster with vectorisation and parallelisation.</p>
 algorithm to mimick <a href="https://link.springer.com/article/10.1007/BF02592954">Lagrangian decomposition</a>
 <a href="https://perso.ensta-paristech.fr/~diam/ro/online/Monique.Guignard-top11201.pdf">instead of Lagrangian relaxation</a>
 guarantees an iteration count in \(\mathcal{O}\left(\frac{\lg \#\mathrm{nonzero}}{\varepsilon\sp{2}}\right)\) independently of luck or the specific linear constraints.</p>
-<div class="footnotes">
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:wall">
-      <p>Yes, I have been banging my head against that wall for a while. <a href="#fnref:wall" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:wall" role="doc-endnote">
+      <p>Yes, I have been banging my head against that wall for a while. <a href="#fnref:wall" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:equivalent">
-      <p>This is equivalent to minimising expected loss with random bits, but cleans up the reduction. <a href="#fnref:equivalent" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:equivalent" role="doc-endnote">
+      <p>This is equivalent to minimising expected loss with random bits, but cleans up the reduction. <a href="#fnref:equivalent" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:which-log">
-      <p>When was the last time you had to worry whether that log was natural or base-2? <a href="#fnref:which-log" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:which-log" role="doc-endnote">
+      <p>When was the last time you had to worry whether that log was natural or base-2? <a href="#fnref:which-log" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:doubling">
-      <p>The doubling trick essentially says to start with an estimate for some parameters (e.g., width), then adjust it to at least double the expected iteration count when the parameter’s actual value exceeds the estimate. The sum telescopes and we only pay a constant multiplicative overhead for the dynamic update. <a href="#fnref:doubling" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:doubling" role="doc-endnote">
+      <p>The doubling trick essentially says to start with an estimate for some parameters (e.g., width), then adjust it to at least double the expected iteration count when the parameter’s actual value exceeds the estimate. The sum telescopes and we only pay a constant multiplicative overhead for the dynamic update. <a href="#fnref:doubling" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:wrong-log">
-      <p>I think I computed the \(\log\) of the number of decision variables instead of the number of constraints, so maybe this could have gone a bit better. <a href="#fnref:wrong-log" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:wrong-log" role="doc-endnote">
+      <p>I think I computed the \(\log\) of the number of decision variables instead of the number of constraints, so maybe this could have gone a bit better. <a href="#fnref:wrong-log" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

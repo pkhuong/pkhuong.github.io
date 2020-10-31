@@ -1137,7 +1137,7 @@ with automated tests,
 and with some exhaustive checking of small inputs (to which I claim most bugs can be reduced).</p>
 
 <p>I’m now pretty sure the code works, but there’s another more obviously correct way to solve that update problem.
-This <a href="https://prod-ng.sandia.gov/techlib-noauth/access-control.cgi/2008/086212.pdf">2008 report by Philippe Pébay</a><sup id="fnref:pebay2016"><a href="#fn:pebay2016" class="footnote">1</a></sup>
+This <a href="https://prod-ng.sandia.gov/techlib-noauth/access-control.cgi/2008/086212.pdf">2008 report by Philippe Pébay</a><sup id="fnref:pebay2016" role="doc-noteref"><a href="#fn:pebay2016" class="footnote">1</a></sup>
 presents formulas to compute the mean, variance, and arbitrary moments
 in one pass,
 and shows how to combine accumulators,
@@ -1161,10 +1161,12 @@ I’m pretty sure the code works, and <a href="https://gist.github.com/pkhuong/5
 I’ll be re-implementing it in C++
 because that’s the language used by the project that lead me to this problem;
 feel free to steal that gist.</p>
-<div class="footnotes">
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:pebay2016">
-      <p>There’s also a <a href="https://www.osti.gov/biblio/1426900">2016 journal article by Pébay and others</a> with numerical experiments, but I failed to implement their simpler-looking scalar update… <a href="#fnref:pebay2016" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:pebay2016" role="doc-endnote">
+      <p>There’s also a <a href="https://www.osti.gov/biblio/1426900">2016 journal article by Pébay and others</a> with numerical experiments, but I failed to implement their simpler-looking scalar update… <a href="#fnref:pebay2016" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

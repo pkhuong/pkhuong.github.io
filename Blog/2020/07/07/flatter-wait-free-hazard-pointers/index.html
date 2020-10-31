@@ -118,14 +118,14 @@ July
 <div class="entry-content" style="font-family: ; font-size: "><p><small>2020-07-09: we can fix <a href="#hp_read_swf-relaxed">time-travel in <code>hp_read_swf</code></a> without changing the fast path. See <a href="#addendum-2020-07-09">the addendum</a>.</small></p>
 
 <p>Back in February 2020, Blelloch and Wei submitted this cool preprint: <a href="https://arxiv.org/abs/2002.07053">Concurrent Reference Counting and Resource Management in Wait-free Constant Time</a>.
-Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also"><a href="#fn:but-also" class="footnote">1</a></sup>
-<a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">Safe memory reclamation (PDF)</a> is a key component in lock-free algorithms when garbage collection isn’t an option,<sup id="fnref:it-is-gc"><a href="#fn:it-is-gc" class="footnote">2</a></sup>
+Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also" role="doc-noteref"><a href="#fn:but-also" class="footnote">1</a></sup>
+<a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">Safe memory reclamation (PDF)</a> is a key component in lock-free algorithms when garbage collection isn’t an option,<sup id="fnref:it-is-gc" role="doc-noteref"><a href="#fn:it-is-gc" class="footnote">2</a></sup>
 and <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">hazard pointers (PDF)</a> let us bound the amount of resources stranded by delayed cleanups much more tightly than, e.g., <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf">epoch reclamation (PDF)</a>.
 However the usual implementation has a <em>loop</em> in its <a href="https://www.iecc.com/gclist/GC-algorithms.html">read barriers (in the garbage collection sense)</a>,
 which can be annoying for code generation and bad for worst-case time bounds.</p>
 
 <p>Blelloch and Wei’s wait-free algorithm eliminates that loop… with a construction that stacks <a href="https://arxiv.org/abs/1911.09671">two emulated primitives—strong LL/SC, and atomic copy, implemented with the former—</a>on top of what real hardware offers.
-I see the real value of the construction in proving that wait-freedom is achievable,<sup id="fnref:not-obvious"><a href="#fn:not-obvious" class="footnote">3</a></sup>
+I see the real value of the construction in proving that wait-freedom is achievable,<sup id="fnref:not-obvious" role="doc-noteref"><a href="#fn:not-obvious" class="footnote">3</a></sup>
 and that the key is atomic memory-memory copies.</p>
 
 <p>In this post, I’ll show how to flatten down that abstraction tower into something practical with a bit of engineering elbow grease,
@@ -152,22 +152,22 @@ The introduction includes a concise explanation of the safe memory reclamation (
 once all links to these resources have been removed from that data structure (<a href="http://concurrencykit.org/presentations/ebr.pdf#page=8">after “logical deletion”</a>).
 The problem makes intuitive sense for dynamically managed memory,
 but it applies equally well to any resource (e.g., file descriptors),
-and its solutions can even be seen as extremely read-optimised reader/writer locks.<sup id="fnref:RCU"><a href="#fn:RCU" class="footnote">4</a></sup></p>
+and its solutions can even be seen as extremely read-optimised reader/writer locks.<sup id="fnref:RCU" role="doc-noteref"><a href="#fn:RCU" class="footnote">4</a></sup></p>
 
 <p>The basic idea behind Hazard Pointers is to have
-each thread publish to permanently allocated<sup id="fnref:stable-alloc"><a href="#fn:stable-alloc" class="footnote">5</a></sup> hazard pointer records (HP records) the set of resources (pointers) it’s temporarily borrowing from a lock-free data structure.
+each thread publish to permanently allocated<sup id="fnref:stable-alloc" role="doc-noteref"><a href="#fn:stable-alloc" class="footnote">5</a></sup> hazard pointer records (HP records) the set of resources (pointers) it’s temporarily borrowing from a lock-free data structure.
 That’s enough information for a background thread to snapshot the current list of resources that have been logically deleted but not yet physically released (the limbo list),
 scan all records for all threads,
 and physically release all resources in the snapshot that aren’t in any HP record.</p>
 
 <p>With just enough batching of the limbo list, this scheme can be practical:
 in practice, lock-free algorithms only need to pin a few (usually one or two) nodes at a time to ensure memory safety.  As long as we avoid running arbitrary code while holding hazardous references, we can bound the number of records each thread may need at any one time.
-Scanning the records thus takes time roughly linear in the number of active threads, and we can amortise that to constant time per deleted item by waiting until the size of the limbo list is greater than a multiple of the number of active threads.<sup id="fnref:even-with-pinned-nodes"><a href="#fn:even-with-pinned-nodes" class="footnote">6</a></sup></p>
+Scanning the records thus takes time roughly linear in the number of active threads, and we can amortise that to constant time per deleted item by waiting until the size of the limbo list is greater than a multiple of the number of active threads.<sup id="fnref:even-with-pinned-nodes" role="doc-noteref"><a href="#fn:even-with-pinned-nodes" class="footnote">6</a></sup></p>
 
 <p>The tricky bit is figuring out how to reliably publish to a HP record without locking.
 Hazard pointers simplify that challenge with three observations:</p>
 <ol>
-  <li>It’s OK to have arbitrary garbage in a record (let’s disregard language-level<sup id="fnref:or-hw-level"><a href="#fn:or-hw-level" class="footnote">7</a></sup> undefined behaviour), since protected values are only ever subtracted from the limbo list: a garbage record simply doesn’t protect anything.</li>
+  <li>It’s OK to have arbitrary garbage in a record (let’s disregard language-level<sup id="fnref:or-hw-level" role="doc-noteref"><a href="#fn:or-hw-level" class="footnote">7</a></sup> undefined behaviour), since protected values are only ever subtracted from the limbo list: a garbage record simply doesn’t protect anything.</li>
   <li>It’s also OK to leave a false positive in a record: correctness arguments for hazard pointers already assume each record keeps a different node (resource) alive, and that’s the worst case.</li>
   <li>1 and 2 mean it doesn’t matter what pinned value we read in a record whose last update was started after we snapshotted the limbo list: resources in the limbo list are unreachable, so freshly pinned resources can’t refer to anything in the snapshot.</li>
 </ol>
@@ -175,7 +175,7 @@ Hazard pointers simplify that challenge with three observations:</p>
 <p>This is where the clever bit of hazard pointers comes in:
 we must make sure that any resource (pointer to a node, etc.) we borrow from a lock-free data structure is immediately protected by a HP record.
 We can’t make two things happen atomically without locking.
-Instead, we’ll <em>guess</em><sup id="fnref:guessing-is-fine"><a href="#fn:guessing-is-fine" class="footnote">8</a></sup> what resource we will borrow,
+Instead, we’ll <em>guess</em><sup id="fnref:guessing-is-fine" role="doc-noteref"><a href="#fn:guessing-is-fine" class="footnote">8</a></sup> what resource we will borrow,
 publish that guess,
 and then actually borrow the resource.
 If we guessed correctly, we can immediately use the borrowed resource;
@@ -203,7 +203,7 @@ record that will protect the value borrowed from <code>cell</code>.</p>
 </span><span class="line">            <span class="k">return</span> <span class="n">guess</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>In practice, we must make sure that our write to <code>record.pin</code> is visible before re-reading the <code>cell</code>’s value, and we should also make sure the pointer read is ordered with respect to the rest of the calling read-side code.<sup id="fnref:beware-accidental-success"><a href="#fn:beware-accidental-success" class="footnote">9</a></sup></p>
+<p>In practice, we must make sure that our write to <code>record.pin</code> is visible before re-reading the <code>cell</code>’s value, and we should also make sure the pointer read is ordered with respect to the rest of the calling read-side code.<sup id="fnref:beware-accidental-success" role="doc-noteref"><a href="#fn:beware-accidental-success" class="footnote">9</a></sup></p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_explicit.py </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -268,7 +268,7 @@ resource only enters the limbo list once <em>all</em> its persistent
 references have been cleared (in particular, this means circular
 backreferences must be broken before scheduling a node for
 destruction), so any newly pinned value cannot refer to any resource
-awaiting destruction in the limbo list.<sup id="fnref:DEBRA-plus"><a href="#fn:DEBRA-plus" class="footnote">10</a></sup></p>
+awaiting destruction in the limbo list.<sup id="fnref:DEBRA-plus" role="doc-noteref"><a href="#fn:DEBRA-plus" class="footnote">10</a></sup></p>
 
 <p>The following sequence diagrams shows how the fencing guarantees that any
 iteration of <code>hp_read_explicit</code> will fail if it starts before <code>C1</code>
@@ -281,7 +281,7 @@ when it reads the record in <code>C2</code>.</p>
     <img src="/images/2020-07-07-flatter-wait-free-hazard-pointers/fenced-hp.png" />
 </a></p>
 
-<p>This all works, but it’s slow:<sup id="fnref:travis-says-its-fine"><a href="#fn:travis-says-its-fine" class="footnote">11</a></sup> we added an <em>atomic</em> write instruction (or worse, a fence) to a read-only operation.  We can do better with a little help from our operating system.</p>
+<p>This all works, but it’s slow:<sup id="fnref:travis-says-its-fine" role="doc-noteref"><a href="#fn:travis-says-its-fine" class="footnote">11</a></sup> we added an <em>atomic</em> write instruction (or worse, a fence) to a read-only operation.  We can do better with a little help from our operating system.</p>
 
 <h2 id="injecting-fences-with-os-support">Injecting fences with OS support</h2>
 
@@ -310,7 +310,7 @@ Windows has <a href="https://docs.microsoft.com/en-us/windows/win32/api/processt
 on other operating systems, we can probably <a href="https://github.com/pkhuong/barrierd">do something useful with scheduler statistics</a> or ask for a new syscall.</p>
 
 <p>Armed with these new blocking system calls, we can replace the store-load fence in <code>R1</code> with a compiler barrier, and execute a slow <code>membarrier</code>/<code>FlushProcessWriteBuffers</code> after <code>C1</code>.
-The cleanup function will then wait long enough<sup id="fnref:arguably-lock-ful"><a href="#fn:arguably-lock-ful" class="footnote">12</a></sup> to ensure that any
+The cleanup function will then wait long enough<sup id="fnref:arguably-lock-ful" role="doc-noteref"><a href="#fn:arguably-lock-ful" class="footnote">12</a></sup> to ensure that any
 read-side operation that had executed before <code>R1</code> at the time we read the limbo list in <code>C1</code> will be visible (e.g., because the operating system knows a preemption interrupt executed at least once on each core).</p>
 
 <p>The pseudocode for this asymmetric strategy follows.</p>
@@ -848,7 +848,7 @@ pointers without crashing.  One might think mutual exclusion in the
 cleanup function fixes that, but programs often mix and match
 different reclamation schemes, as well as lock-free and lock-ful code.
 On Linux, we could
-abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;<sup id="fnref:no-guarantees"><a href="#fn:no-guarantees" class="footnote">13</a></sup>
+abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;<sup id="fnref:no-guarantees" role="doc-noteref"><a href="#fn:no-guarantees" class="footnote">13</a></sup>
 in general I suppose we could install signal handlers to catch <code>SIGSEGV</code> and <code>SIGBUS</code>.</p>
 
 <div id="hp_read_swf-relaxed"></div>
@@ -869,7 +869,7 @@ the hazard pointer implementation is technically correct.  However,
 this scenario shows that <code>hp_read_swf</code> can violate memory ordering and
 causality, and even let long-overwritten values time travel into the future.  The
 simpler read-side code sequence comes at a cost: its load is extremely
-relaxed, much more so than any intuitive mental model might allow.<sup id="fnref:hybrid-swf"><a href="#fn:hybrid-swf" class="footnote">14</a></sup></p>
+relaxed, much more so than any intuitive mental model might allow.<sup id="fnref:hybrid-swf" role="doc-noteref"><a href="#fn:hybrid-swf" class="footnote">14</a></sup></p>
 
 <p>EDIT 2020-07-09: However, see <a href="#addendum-2020-07-09">this addendum</a> for a way to fix that race
 without affecting the fast (read) path.</p>
@@ -1085,7 +1085,7 @@ from realistic (if I found an inner loop that <em>only</em> traversed a
 singly linked list, I’d consider a different data structure), but helps
 establish an upper bound on the overhead from different hazard pointer
 read sides.  I would usually show a faceted graph of the latency
-distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen"><a href="#fn:did-not-randomize-codegen" class="footnote">15</a></sup>
+distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen" role="doc-noteref"><a href="#fn:did-not-randomize-codegen" class="footnote">15</a></sup>
 that I doubt there’s any additional information to be found in the graphs,
 compared to the tables below.</p>
 
@@ -1360,52 +1360,52 @@ latency from 4 membarriers to 3, and that’s not negligible when each
 <code>membarrier</code> can block for 30ms.</p>
 
 <p><hr style="width: 50%" /></p>
-<div class="footnotes">
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:but-also">
-      <p>I also tend to read anything by <a href="https://dblp.uni-trier.de/pers/b/Blelloch:Guy_E=.html">Guy Blelloch</a>. <a href="#fnref:but-also" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:but-also" role="doc-endnote">
+      <p>I also tend to read anything by <a href="https://dblp.uni-trier.de/pers/b/Blelloch:Guy_E=.html">Guy Blelloch</a>. <a href="#fnref:but-also" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:it-is-gc">
-      <p>In fact, I’ve often argued that SMR <em>is</em> garbage collection, just not fully tracing GC.  Hazard pointers in particular look a lot like deferred reference counting, <a href="https://web.eecs.umich.edu/~weimerw/2012-4610/reading/bacon-garbage.pdf">a form of tracing GC</a>. <a href="#fnref:it-is-gc" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:it-is-gc" role="doc-endnote">
+      <p>In fact, I’ve often argued that SMR <em>is</em> garbage collection, just not fully tracing GC.  Hazard pointers in particular look a lot like deferred reference counting, <a href="https://web.eecs.umich.edu/~weimerw/2012-4610/reading/bacon-garbage.pdf">a form of tracing GC</a>. <a href="#fnref:it-is-gc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:not-obvious">
-      <p>Something that wasn’t necessarily obvious until then. See, for example, <a href="https://arxiv.org/abs/2001.01999">this article presented at PPoPP 2020</a>, which conjectures that “making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;” Blelloch was in attendance, so this must have been a fun session. <a href="#fnref:not-obvious" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:not-obvious" role="doc-endnote">
+      <p>Something that wasn’t necessarily obvious until then. See, for example, <a href="https://arxiv.org/abs/2001.01999">this article presented at PPoPP 2020</a>, which conjectures that “making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;” Blelloch was in attendance, so this must have been a fun session. <a href="#fnref:not-obvious" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:RCU">
-      <p>The SMR problem is essentially the same problem as determining when it’s safe to return from <code>rcu_synchronize</code> or execute a <code>rcu_call</code> callback.  Hence, the same <a href="https://www.usenix.org/legacy/publications/library/proceedings/usenix03/tech/freenix03/full_papers/arcangeli/arcangeli.pdf#page=5">reader-writer lock analogy</a> holds. <a href="#fnref:RCU" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:RCU" role="doc-endnote">
+      <p>The SMR problem is essentially the same problem as determining when it’s safe to return from <code>rcu_synchronize</code> or execute a <code>rcu_call</code> callback.  Hence, the same <a href="https://www.usenix.org/legacy/publications/library/proceedings/usenix03/tech/freenix03/full_papers/arcangeli/arcangeli.pdf#page=5">reader-writer lock analogy</a> holds. <a href="#fnref:RCU" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:stable-alloc">
-      <p>Hazard pointer records must still be managed separately, e.g., with a type stable allocator, but we can bootstrap everything else once we have a few records per thread. <a href="#fnref:stable-alloc" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:stable-alloc" role="doc-endnote">
+      <p>Hazard pointer records must still be managed separately, e.g., with a type stable allocator, but we can bootstrap everything else once we have a few records per thread. <a href="#fnref:stable-alloc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:even-with-pinned-nodes">
-      <p>We can even do that without keeping track of the number of nodes that were previously pinned by hazard pointer records and kept in the limbo list: each record can only pin at most one node, so we can wait until the limbo list is, e.g., twice the size of the record set. <a href="#fnref:even-with-pinned-nodes" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:even-with-pinned-nodes" role="doc-endnote">
+      <p>We can even do that without keeping track of the number of nodes that were previously pinned by hazard pointer records and kept in the limbo list: each record can only pin at most one node, so we can wait until the limbo list is, e.g., twice the size of the record set. <a href="#fnref:even-with-pinned-nodes" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:or-hw-level">
-      <p>Let’s also hope efforts like <a href="https://www.cl.cam.ac.uk/research/security/ctsrd/cheri/">CHERI</a> don’t have to break lock-free code. <a href="#fnref:or-hw-level" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:or-hw-level" role="doc-endnote">
+      <p>Let’s also hope efforts like <a href="https://www.cl.cam.ac.uk/research/security/ctsrd/cheri/">CHERI</a> don’t have to break lock-free code. <a href="#fnref:or-hw-level" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:guessing-is-fine">
-      <p>The scheme is correct with any actual guess; we could even use a random number generator. However, performance is ideal (the loop exits) when we “guess” by reading current value of the pointer we want to borrow safely. <a href="#fnref:guessing-is-fine" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:guessing-is-fine" role="doc-endnote">
+      <p>The scheme is correct with any actual guess; we could even use a random number generator. However, performance is ideal (the loop exits) when we “guess” by reading current value of the pointer we want to borrow safely. <a href="#fnref:guessing-is-fine" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:beware-accidental-success">
-      <p>I tend to implement lock-free algorithms with a heavy dose of inline assembly, or <a href="http://concurrencykit.org/">Concurrency Kit</a>’s wrappers: it’s far too easy to run into subtle undefined behaviour.  For example, comparing a pointer after it has been freed is UB in C and C++, even if we don’t access the pointee.  Even if we compare as <code>uintptr_t</code>, it’s apparently debatable whether the code is well defined when the comparison happens to succeed because the pointee was freed, then recycled in an allocation and published to <code>cell</code> again. <a href="#fnref:beware-accidental-success" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:beware-accidental-success" role="doc-endnote">
+      <p>I tend to implement lock-free algorithms with a heavy dose of inline assembly, or <a href="http://concurrencykit.org/">Concurrency Kit</a>’s wrappers: it’s far too easy to run into subtle undefined behaviour.  For example, comparing a pointer after it has been freed is UB in C and C++, even if we don’t access the pointee.  Even if we compare as <code>uintptr_t</code>, it’s apparently debatable whether the code is well defined when the comparison happens to succeed because the pointee was freed, then recycled in an allocation and published to <code>cell</code> again. <a href="#fnref:beware-accidental-success" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:DEBRA-plus">
-      <p>In <a href="http://www.cs.utoronto.ca/~tabrown/debra/fullpaper.pdf">Reclaiming Memory for Lock-Free Data Structures: There has to be a Better Way</a>, Trevor Brown argues this requirement is a serious flaw in all hazard pointer schemes.  I think it mostly means applications should be careful to coarsen the definition of resource in order to ensure the resulting condensed heap graph is a DAG.  In extreme cases, we end up proxy collecting an epoch, but we can usually do much better. <a href="#fnref:DEBRA-plus" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:DEBRA-plus" role="doc-endnote">
+      <p>In <a href="http://www.cs.utoronto.ca/~tabrown/debra/fullpaper.pdf">Reclaiming Memory for Lock-Free Data Structures: There has to be a Better Way</a>, Trevor Brown argues this requirement is a serious flaw in all hazard pointer schemes.  I think it mostly means applications should be careful to coarsen the definition of resource in order to ensure the resulting condensed heap graph is a DAG.  In extreme cases, we end up proxy collecting an epoch, but we can usually do much better. <a href="#fnref:DEBRA-plus" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:travis-says-its-fine">
-      <p>That’s what <a href="https://travisdowns.github.io/blog/2020/07/06/concurrency-costs.html">Travis Downs classifies as a Level 1 concurrency cost</a>, which is usually fine for writes, but adds a sizable overhead to simple read-only code. <a href="#fnref:travis-says-its-fine" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:travis-says-its-fine" role="doc-endnote">
+      <p>That’s what <a href="https://travisdowns.github.io/blog/2020/07/06/concurrency-costs.html">Travis Downs classifies as a Level 1 concurrency cost</a>, which is usually fine for writes, but adds a sizable overhead to simple read-only code. <a href="#fnref:travis-says-its-fine" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:arguably-lock-ful">
-      <p>I suppose this means the reclamation path isn’t wait-free, or even lock-free, anymore, in the strict sense of the words. In practice, we’re simply waiting for periodic events that would occur regardless of the syscalls we issue.  People who really know what they’re doing might have fully isolated cores.  If they do, they most likely have a watchdog on their isolated and latency-sensitive tasks, so we can still rely on running some code periodically, potentially after some instrumentation: if an isolated task fails to check in for a short while, the whole box will probably be presumed wedged and taken offline. <a href="#fnref:arguably-lock-ful" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:arguably-lock-ful" role="doc-endnote">
+      <p>I suppose this means the reclamation path isn’t wait-free, or even lock-free, anymore, in the strict sense of the words. In practice, we’re simply waiting for periodic events that would occur regardless of the syscalls we issue.  People who really know what they’re doing might have fully isolated cores.  If they do, they most likely have a watchdog on their isolated and latency-sensitive tasks, so we can still rely on running some code periodically, potentially after some instrumentation: if an isolated task fails to check in for a short while, the whole box will probably be presumed wedged and taken offline. <a href="#fnref:arguably-lock-ful" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:no-guarantees">
-      <p>With the caveat that the public documentation for <code>process_vm_readv</code> does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I’m pretty sure the kernel’s build flags prevent GCC/clang from converting it to <code>memcpy</code>. We could rely on the strong “don’t break userspace” culture, but it’s probably a better idea to try and get that guarantee in writing. <a href="#fnref:no-guarantees" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:no-guarantees" role="doc-endnote">
+      <p>With the caveat that the public documentation for <code>process_vm_readv</code> does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I’m pretty sure the kernel’s build flags prevent GCC/clang from converting it to <code>memcpy</code>. We could rely on the strong “don’t break userspace” culture, but it’s probably a better idea to try and get that guarantee in writing. <a href="#fnref:no-guarantees" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:hybrid-swf">
-      <p>This problem feels like something we could address with a coarse epoch-based versioning scheme.  It’s however not clear to me that the result would be much simpler than <code>hp_read_wf</code>, and we’d have to steal even more bits (2 bits, I expect) from <code>cell_or_pin</code> to make room for the epoch.  EDIT 2020-07-09: it turns out <a href="#addendum-2020-07-09">we only need to steal one bit</a>. <a href="#fnref:hybrid-swf" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:hybrid-swf" role="doc-endnote">
+      <p>This problem feels like something we could address with a coarse epoch-based versioning scheme.  It’s however not clear to me that the result would be much simpler than <code>hp_read_wf</code>, and we’d have to steal even more bits (2 bits, I expect) from <code>cell_or_pin</code> to make room for the epoch.  EDIT 2020-07-09: it turns out <a href="#addendum-2020-07-09">we only need to steal one bit</a>. <a href="#fnref:hybrid-swf" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:did-not-randomize-codegen">
-      <p>Although I did compare several independent executions and confirmed the reported cycle counts were stable, I did not try to randomise code generation… mostly because I’m not looking for super fine differences as much as close enough runtimes.  Hopefully, aligning functions to 256 bytes leveled some bias away. <a href="#fnref:did-not-randomize-codegen" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:did-not-randomize-codegen" role="doc-endnote">
+      <p>Although I did compare several independent executions and confirmed the reported cycle counts were stable, I did not try to randomise code generation… mostly because I’m not looking for super fine differences as much as close enough runtimes.  Hopefully, aligning functions to 256 bytes leveled some bias away. <a href="#fnref:did-not-randomize-codegen" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
@@ -1449,6 +1449,8 @@ July
       
         <a class="basic-alignment left" href="/Blog/2020/05/02/check-for-borrows-in-bitwise-operations/" title="Previous Post: Check for borrows in bitwise operations">&laquo; Check for borrows in bitwise operations</a>
       
+      
+        <a class="basic-alignment right" href="/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/" title="Next Post: UMASH: a fast and universal enough hash">UMASH: a fast and universal enough hash &raquo;</a>
       
     </p>
   </footer>

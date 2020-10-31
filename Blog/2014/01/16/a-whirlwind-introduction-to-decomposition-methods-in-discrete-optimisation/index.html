@@ -221,16 +221,16 @@ exactly what I’m talking about.  For reasons both practical and
 theoretical, I’ll assume that we have a (sub)problem that’s simpler
 once a few linear (affine) constraints are removed, i.e. something
 like 
-<script type="math/tex">\min\sb{x} z(x)</script>
+\(\min\sb{x} z(x)\)
 subject to
-<script type="math/tex">Ax \leq b,</script>
-<script type="math/tex">x\in X.</script></p>
+\(Ax \leq b,\)
+\(x\in X.\)</p>
 
 <p>This form is general; the objective function \(z\) need only be
 convex and the feasible set \(X\) is arbitrary.</p>
 
 <p>Lagrangian duality says that we can relax this problem into
-<script type="math/tex">\min\sb{x\in X} z(x) + \lambda(Ax-b),</script> where \(\lambda\) is any
+\(\min\sb{x\in X} z(x) + \lambda(Ax-b),\) where \(\lambda\) is any
 vector of non-negative multipliers for each row (constraint) in
 \(A\).  I find such subproblems interesting because minimising over
 \(X\) can be easy with a specialised procedure, but hard as a linear
@@ -254,7 +254,7 @@ lower bound for the optimal value of the initial problem.</p>
 is a superset of that of the initial problem: we only removed a set of
 linear constraints.  Moreover, for any feasible solution \(\bar{x}\)
 for the initial problem,
-<script type="math/tex">z(\bar{x}) + \lambda(A\bar{x}-b) \leq z(\bar{x}):</script>
+\(z(\bar{x}) + \lambda(A\bar{x}-b) \leq z(\bar{x}):\)
 \(A\bar{x} \leq b\), i.e., \(A\bar{x}-b \leq 0\), and
 \(\lambda\geq 0\).  In particular, that is true if \(\bar{x}\) is
 an optimal solution to the initial problem.  Obviously, an optimal
@@ -267,9 +267,9 @@ for the relaxed subproblem is true given any \(\lambda\geq 0\).
 However, it’s often useless: bad multipliers (e.g., \(\lambda = 0\))
 lead to trivially weak bounds.  The Lagrangian dual problem with
 respect to \(Ax \leq b\) is to maximise this lower bound:
-<script type="math/tex">\max\sb{\lambda\geq 0} \min\sb{x\in X} F(\lambda, x),</script> where
-<script type="math/tex">F(\lambda, x) = z(x) + \lambda(Ax-b) = z(x) + \lambda Ax - \lambda
-b.</script></p>
+\(\max\sb{\lambda\geq 0} \min\sb{x\in X} F(\lambda, x),\) where
+\(F(\lambda, x) = z(x) + \lambda(Ax-b) = z(x) + \lambda Ax - \lambda
+b.\)</p>
 
 <p>Again, we don’t have to maximise this dual exactly.  As long as the
 minisation subproblem is solved to optimality, we have a set of lower
@@ -282,10 +282,10 @@ approximately, even with very little storage and computing power.</p>
 <p>There’s some nifty theoretical results that tell us that, when
 \(z(x)\) is a linear function, maximising the Lagrangian dual
 function is equivalent to solving the linear programming dual of
-<script type="math/tex">\min z(x)</script>
+\(\min z(x)\)
 subject to
-<script type="math/tex">Ax \leq b,</script>
-<script type="math/tex">x\in \textrm{conv}(X),</script>
+\(Ax \leq b,\)
+\(x\in \textrm{conv}(X),\)
 where \(\textrm{conv}(X)\) is the convex hull of \(X\).</p>
 
 <p><img class="center" src="/images/2014-01-16-a-whirlwind-introduction-to-decomposition-methods-in-discrete-optimisation/conv-x.jpg" /></p>
@@ -340,15 +340,15 @@ for less clearly feasible parts of the search space).</p>
 for the intersection of sets defined by oracles.  For example, we can
 satisfy over the intersection of finite sets \(X\) and
 \(Y\) by relaxing the linear constraint in
-<script type="math/tex">x = y,</script>
-<script type="math/tex">x\in X, y\in Y.</script>
+\(x = y,\)
+\(x\in X, y\in Y.\)
 The relaxed subproblem is then
-<script type="math/tex">\min\sb{(x,y)\in X\times Y} \lambda(x-y),</script>
+\(\min\sb{(x,y)\in X\times Y} \lambda(x-y),\)
 which we can separate (linear objectives are separable) into
 two optimisation subproblems:
-<script type="math/tex">\min\sb{x\in X} \lambda x,</script>
+\(\min\sb{x\in X} \lambda x,\)
 and
-<script type="math/tex">\min\sb{y\in Y} -\lambda y.</script>
+\(\min\sb{y\in Y} -\lambda y.\)
 Even if the initial problem is one of satisfaction, Lagrangian
 decomposition considers each finite set in the intersection
 through independent minimisation: components communicate via their
@@ -408,11 +408,11 @@ with continuous tactical (\(x\)) variables, but I’ll instead present the
 generalised form, which seems well suited to constraint programming.</p>
 
 <p>We start with the initial integrated formulation
-<script type="math/tex">\min\sb{(x,y)\in S} cx + fy,</script>
+\(\min\sb{(x,y)\in S} cx + fy,\)
 which we reformulate as
-<script type="math/tex">\min\sb{(x,y)} cx + fy,</script>
-<script type="math/tex">y\in Y,</script>
-<script type="math/tex">x\in X(y).</script></p>
+\(\min\sb{(x,y)} cx + fy,\)
+\(y\in Y,\)
+\(x\in X(y).\)</p>
 
 <p>For example, this could be a network design problem: we wish to
 determine where to build links so that all (known) communication
@@ -422,11 +422,11 @@ demands are satisfied at least total cost.</p>
 
 <p>Benders decomposition then eliminates variables \(x\) from the
 reformulation.  The latter becomes the master problem
-<script type="math/tex">\min\sb{y,z} fy + z</script>
+\(\min\sb{y,z} fy + z\)
 subject to
-<script type="math/tex">Ay = d,</script>
-<script type="math/tex">By \leq z,</script>
-<script type="math/tex">y\in Y.</script></p>
+\(Ay = d,\)
+\(By \leq z,\)
+\(y\in Y.\)</p>
 
 <p>The two linear constraints are generated dynamically, by solving
 subproblems over \(X\).  The first corresponds directly to learned
@@ -437,10 +437,10 @@ over \(S\).</p>
 
 <p>The idea is to solve a Lagrangian relaxation of the (slave) subproblem
 for a given assignment \(y\sp{i}\):
-<script type="math/tex">\min\sb{x,y} cx</script>
+\(\min\sb{x,y} cx\)
 subject to
-<script type="math/tex">y = y\sp{i},</script>
-<script type="math/tex">x\in X(y).</script></p>
+\(y = y\sp{i},\)
+\(x\in X(y).\)</p>
 
 <p>We will relax the first equality constraint to obtain a new feasible
 set that is a relaxation (outer approximation) of \(S\):
@@ -455,9 +455,9 @@ of independent shortest path problems (over the edges that are open in
 <p><img class="center" src="/images/2014-01-16-a-whirlwind-introduction-to-decomposition-methods-in-discrete-optimisation/sp.jpg" /></p>
 
 <p>We dualise the first constraint and obtain the Lagrangian dual
-<script type="math/tex">\max\sb{\lambda} \min\sb{y\in\mathbb{R}\sp{m}, x\in X(y)} cx + \lambda(y-y\sp{i})</script>
+\(\max\sb{\lambda} \min\sb{y\in\mathbb{R}\sp{m}, x\in X(y)} cx + \lambda(y-y\sp{i})\)
 or, equivalently,
-<script type="math/tex">\max\sb{\lambda} -\lambda y\sp{i} + \min\sb{y\in\mathbb{R}\sp{m}, x\in X(y)} cx + \lambda y.</script></p>
+\(\max\sb{\lambda} -\lambda y\sp{i} + \min\sb{y\in\mathbb{R}\sp{m}, x\in X(y)} cx + \lambda y.\)</p>
 
 <p>The network design subproblem still reduces to a lot of independent
 shortest path problems, but (with appropriate duplication of decision
@@ -491,7 +491,7 @@ can then solve for \(x\in X(y\sp{i})\) to find a heuristic solution
 is infeasible); if the heuristic solution is close enough to our
 current lower bound, we can stop the search.  Otherwise, we solve the
 fixed Lagrangian dual and generate a fresh optimality cut
-<script type="math/tex">-\bar{\lambda}\sp{i}y + c\sp{i} \leq z,</script>
+\(-\bar{\lambda}\sp{i}y + c\sp{i} \leq z,\)
 where \(c\sp{i} = c\bar{x}\sp{i} + \bar{\lambda}\sp{i}\bar{y}\sp{i}\):
 we update the master problem with information about why its last
 tentative assignment isn’t as good as it looked.</p>
@@ -548,19 +548,19 @@ of hard work, I’m probably biased (Stockholm syndrome and all that ;).</p>
 
 <p>I already presented the basic idea.  We take an initial integrated
 problem
-<script type="math/tex">\min\sb{x\in X\cap Y} cx</script>
+\(\min\sb{x\in X\cap Y} cx\)
 and reformulate it as
-<script type="math/tex">\min\sb{(x,y)\in X\times Y} cx</script>
+\(\min\sb{(x,y)\in X\times Y} cx\)
 subject to
-<script type="math/tex">x = y.</script>
+\(x = y.\)
 Of course, this works for any finite number of sets in the
 intersection as well as for partial intersections, e.g., \(x\sb{0} =
 y\sb{0}\) and \(x\) and \(y\) otherwise independent.</p>
 
 <p>Dualising the linear constraint leaves the independent subproblems
-<script type="math/tex">\min\sb{x\in X} cx+\lambda x,</script>
+\(\min\sb{x\in X} cx+\lambda x,\)
 and
-<script type="math/tex">\min\sb{y\in Y} -\lambda y.</script></p>
+\(\min\sb{y\in Y} -\lambda y.\)</p>
 
 <p>The two subproblems communicate indirectly, through adjustments to
 \(\lambda\)… and updating Lagrange multipliers is a fascinating

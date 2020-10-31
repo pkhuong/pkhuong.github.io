@@ -140,7 +140,7 @@ value matches any of the follow nine cases:</p>
   <li><code>0b00000000</code></li>
 </ul>
 
-<p>Looking at the bit patterns,<sup id="fnref:b-for-bit-literal"><a href="#fn:b-for-bit-literal" class="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
+<p>Looking at the bit patterns,<sup id="fnref:b-for-bit-literal" role="doc-noteref"><a href="#fn:b-for-bit-literal" class="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
 is pretty natural.  These instructions are somewhat complex (latency
 closer to 3 cycles than 1, and often port restricted),
 and it seems like the sort of problem that would have had efficient
@@ -161,7 +161,7 @@ or bitscan.  There’s also a simpler classic solution to this problem:</p>
 <p><code>x == 0 || is_power_of_two(x) &lt;==&gt; (x &amp; (x - 1)) == 0</code></p>
 
 <p>How does that expression work?  Say <code>x</code> is a power of two. Its binary
-representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian"><a href="#fn:big-endian" class="footnote">2</a></sup>
+representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian" role="doc-noteref"><a href="#fn:big-endian" class="footnote">2</a></sup>
 a single “1” bit, and trailing zeros (maybe none).  Let’s see what happens when
 we subtract 1 from <code>x</code>:</p>
 
@@ -208,7 +208,7 @@ ends.  Let’s focus on the fast path, when the encoded ULEB fits in a
 machine register.</p>
 
 <p>We have <code>uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...</code>:
-a sequence of bytes<sup id="fnref:remember-endianness"><a href="#fn:remember-endianness" class="footnote">3</a></sup> with the topmost bit equal to 1,
+a sequence of bytes<sup id="fnref:remember-endianness" role="doc-noteref"><a href="#fn:remember-endianness" class="footnote">3</a></sup> with the topmost bit equal to 1,
 terminated by a byte with the top bit set to 0,
 and, finally, arbitrary nuisance bytes (<code>m...m</code>, <code>n...n</code>, etc.) we wish to ignore.
 Ideally, we’d extract <code>data = 0b0000000000000000...?zzzzzzz?yyyyyyy?...</code> from <code>uleb</code>: we want to clear the
@@ -338,16 +338,16 @@ That’s another nice primitive to generate bitmasks dynamically.</p>
 <p><small>Thank you Ruchir for helping me clarify the notation around the ULEB section.</small></p>
 
 <p><hr style="width: 50%" /></p>
-<div class="footnotes">
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:b-for-bit-literal">
-      <p>I use the <code>0b...</code> syntax throughout this post to denote bit literals, similarly to the usual <code>0x...</code> hexadecimal literals. <a href="#fnref:b-for-bit-literal" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:b-for-bit-literal" role="doc-endnote">
+      <p>I use the <code>0b...</code> syntax throughout this post to denote bit literals, similarly to the usual <code>0x...</code> hexadecimal literals. <a href="#fnref:b-for-bit-literal" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:big-endian">
-      <p>While I prefer to work with little-endian bytes, I find everything makes more sense with big-endian bits. <a href="#fnref:big-endian" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:big-endian" role="doc-endnote">
+      <p>While I prefer to work with little-endian bytes, I find everything makes more sense with big-endian bits. <a href="#fnref:big-endian" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:remember-endianness">
-      <p>Remember, while ULEB is little-endian, we use big bit-endianness. <a href="#fnref:remember-endianness" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:remember-endianness" role="doc-endnote">
+      <p>Remember, while ULEB is little-endian, we use big bit-endianness. <a href="#fnref:remember-endianness" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

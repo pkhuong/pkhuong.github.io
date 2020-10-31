@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2017/06/17/chubanovs-projection-methods-for-0-slash-1-programming/">Chubanov's projection methods for 0/1 programming</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2017/09/24/rendezvous-hashing-my-baseline-consistent-distribution-method/">Rendezvous hashing: my baseline "consistent" distribution method</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-June
+Sept
   
-17th, 
+24th, 
 2017
 
 
 
 
         
-         | <a href="/Blog/2017/06/17/chubanovs-projection-methods-for-0-slash-1-programming/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2017/06/17/chubanovs-projection-methods-for-0-slash-1-programming/"
+         | <a href="/Blog/2017/09/24/rendezvous-hashing-my-baseline-consistent-distribution-method/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2017/09/24/rendezvous-hashing-my-baseline-consistent-distribution-method/"
 	      >Comments</a>
         
         
@@ -116,233 +116,204 @@ June
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I’ve long felt that compilers (and symbolic processing in general)
-would benefit from embedding integer programming solvers.  However, I
-was never comfortable with actually doing so for a production system
-that others would have to run: industrial strength integer linear
-programming solvers are large systems with complex runtime behaviour,
-and that’s not the kind of black box you want to impose on people who
-just want to build their project.  (That’s also true of SAT solvers,
-though, so maybe embedding complicated black boxes is the new normal?)</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><small><em>2017-10-15: Tweaked the hash merge function to actually deliver the claims (one-universality isn’t enough).</em></small></p>
 
-<p>However, if we had something simple enough to implement natively in
-the compiler, we could hope for the maintainers to understand what the
-ILP solver is doing.  This seems realistic to me mostly because the
-generic complexity tends to lie in the continuous optimisation part.
-Branching, bound propagation, etc. is basic, sometimes domain
-specific, combinatorial logic; cut generation is probably the most
-prominent exception, and even that tends to be fairly
-combinatorial. (Maybe that’s why we seem to be growing comfortable
-with SAT solvers: no scary analysis.)  So, for the past couple years,
-I’ve been looking for simple enough specialised solvers I could use in
-branch-and-bound for large 0/1 ILP.</p>
+<p>Whenever I mention a data or work distribution problem where I
+ideally want everything related to a given key to hit the same
+machine, everyone jumps to <a href="http://courses.cse.tamu.edu/caverlee/csce438/readings/consistent-hashing.pdf">consistent hashing</a>.  I don’t know how this technique achieved the mindshare it has,
+although I suspect <a href="http://www.read.seas.harvard.edu/~kohler/class/cs239-w08/decandia07dynamo.pdf">Amazon’s 2007 Dynamo DB paper</a>
+is to blame (by introducing the problem to many of us, and mentioning
+exactly one decentralised solution)… or maybe some Google interview
+prep package.</p>
 
-<p>Some stuff with augmented lagrangians and specialised methods for
-box-constrained QP almost panned out, but nested optimisation sucks
-when the inner solver is approximate: you never know if you should be
-more precise in the lower level or if you should aim for more outer
-iterations.</p>
+<p><small>Karger et al’s paper doesn’t help, since they introduce the
+generic concept of a consistent hash function and call their
+specific solution… “consistent hashing.”  I’m not sure where I first
+encountered rendezvous hashing, but I vaguely remember a technical
+report by Karger,  so it’s probably not some MIT vs UMich thing.</small></p>
 
-<p>A subroutine in <a href="http://www.optimization-online.org/DB_FILE/2013/07/3948.pdf">Chubanov’s polynomial-time linear programming algorithm [PDF]</a>
-(<a href="https://link.springer.com/article/10.1007/s10107-014-0823-8">related journal version</a>)
-seems promising, especially since it doesn’t suffer from the numerical
-issues inherent to log barriers.</p>
+<p>Regardless of the reason for consistent hashing’s popularity, I feel
+the go-to technique should instead be <a href="http://www.eecs.umich.edu/techreports/cse/96/CSE-TR-316-96.pdf">rendezvous hashing</a>.  Its basic
+form is simple enough to remember without really trying (one of those <a href="https://www.pvk.ca/Blog/2015/04/26/pointer-less-scapegoat-trees/">desert island</a>
+algorithms), it is more memory efficient than consistent hashing in
+practice, and its downside–a simple implementation assigns a location
+in time linear in the number of hosts–is not a problem for small
+deployments, or even medium (a couple racks) scale ones if you
+actually think about failure domains.</p>
 
-<h2 id="chubanovs-subroutine-in-branch-and-bound">Chubanov’s subroutine in branch-and-bound</h2>
+<p><small>Side question: why did rendez-vous have to lose its hyphen to cross the Channel?</small></p>
 
-<p>Chubanov’s “Basic Subroutine” accepts a problem of the form \(Ax =
-0\), \(x &gt; 0\), and either:</p>
+<p>Basic rendezvous hashing takes a distribution key (e.g., a filename),
+and a set of destinations (e.g., hostnames).  It then uses a hash function
+to pseudorandomly map each <code>(distribution_key, destination)</code> pair to a
+value in <code>[0, 1)</code> or <code>[0, 2^64 - 1)</code>, and picks the destination that
+gives the minimal hash value.  If it needs <code>k</code> destinations for
+redundancy, it can pick the destinations that yield the least <code>k</code> hash
+values.  If there are ties (unlikely with a good hash function), it
+breaks them arbitrarily but consistently, e.g., by imposing a total
+order on hostnames.</p>
 
-<ol>
-  <li>returns a solution;</li>
-  <li>returns a non-empty subset of variables that must be 0 in any feasible solution;</li>
-  <li>returns a non-empty subset of variables \(x\sb{i}\) that always
-satisfy \(x\sb{i} \leq u\) in feasible solutions with \(x\sp{\star} \in [0, 1]\),
-for some constant \(u &lt; 1\) (Chubanov sets \(u = \frac{1}{2}\)).</li>
-</ol>
+<p>A Python implementation could look like the following.</p>
 
-<p>The class of homogeneous problems seems useless (never mind the
-nondeterministic return value), but we can convert “regular” 0/1
-problems to that form with a bit of algebra.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>basic rendezvous hashing </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="n">Destination</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s">&#39;Destination&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s">&#39;host&#39;</span><span class="p">,</span> <span class="s">&#39;hash&#39;</span><span class="p">])</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">merge_hashes</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;murmurhash3 mix.  Alternatively, ((x | 1) * (y | 1)) % 2**64 should</span>
+</span><span class="line"><span class="sd">    be fine.</span>
+</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
+</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="n">x</span> <span class="o">^</span> <span class="n">y</span>
+</span><span class="line">    <span class="n">acc</span> <span class="o">^=</span> <span class="n">acc</span> <span class="o">&gt;&gt;</span> <span class="mi">33</span>
+</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="p">(</span><span class="n">acc</span> <span class="o">*</span> <span class="mh">0xff51afd7ed558ccd</span><span class="p">)</span> <span class="o">%</span> <span class="mi">2</span><span class="o">**</span><span class="mi">64</span>
+</span><span class="line">    <span class="n">acc</span> <span class="o">^=</span> <span class="n">acc</span> <span class="o">&gt;&gt;</span> <span class="mi">33</span>
+</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="p">(</span><span class="n">acc</span> <span class="o">*</span> <span class="mh">0xc4ceb9fe1a85ec53</span><span class="p">)</span> <span class="o">%</span> <span class="mi">2</span><span class="o">**</span><span class="mi">64</span>
+</span><span class="line">    <span class="n">acc</span> <span class="o">^=</span> <span class="n">acc</span> <span class="o">&gt;&gt;</span> <span class="mi">33</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">acc</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">pick_destinations</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">destinations</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+</span><span class="line">    <span class="n">key_hash</span> <span class="o">=</span> <span class="n">hash_key</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>  <span class="c"># hash the key once, instead of hash(key + host)</span>
+</span><span class="line">    <span class="n">annotated</span> <span class="o">=</span> <span class="p">[(</span><span class="n">merge_hashes</span><span class="p">(</span><span class="n">key_hash</span><span class="p">,</span> <span class="n">dest</span><span class="o">.</span><span class="n">hash</span><span class="p">),</span> <span class="n">dest</span><span class="o">.</span><span class="n">host</span><span class="p">)</span>
+</span><span class="line">                 <span class="k">for</span> <span class="n">dest</span> <span class="ow">in</span> <span class="n">destinations</span><span class="p">]</span>
+</span><span class="line">    <span class="n">ordered</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">annotated</span><span class="p">)</span>  <span class="c"># lexicographic sort on merged hash, host.</span>
+</span><span class="line">    <span class="k">return</span> <span class="p">[</span><span class="n">host</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">ordered</span><span class="p">[:</span><span class="n">k</span><span class="p">]]</span>  <span class="c"># grab host from the first k</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Let’s start with \(Ax = b\), \(0 \leq x \leq 1\), we can
-reformulate that in the homogeneous form:</p>
+<p>We only need to store the list of destinations, and we can convince
+ourselves that data distribution is pretty good (close to uniform) and
+that small changes in the set of destinations only affects a small
+fraction of keys (those going to destinations added/removed), either
+with pen and paper or with a few simulations.  That compares
+positively with consistent hashing, where a practical implementation
+has to create a lot (sometimes hundreds) of pseudo-nodes for each real
+destination in order to mitigate clumping in the hash ring.</p>
 
-<p>\[Ax - by = 0,\]
-\[x + s - \mathbf{1}y = 0,\]
-\[x, s, y \geq 0.\]</p>
+<p>The downside is that we must iterate over all the nodes, while
+consistent hashing is easily \(\mathcal{O}(\log n)\) time, or even
+\(\mathcal{O}(\log \log n)\), with respect to the number of (pseudo-)nodes.
+However, that’s only a problem if you have a lot of nodes, and
+rendezvous hashing, unlike consistent hashing, does not inflate the
+number of nodes.</p>
 
-<p>Any solution to the original problem in \([0, 1]\) may be translated
-to the homogeneous form (let \(y = 1\) and \(s = 1 - x\)).
-Crucially, any 0/1 (binary) solution to the original problem is still
-0/1 in the homogeneous form.  In the other direction, any solution
-with \(y &gt; 0\) may be converted to the box-constrained problem by
-dividing everything by \(y\).</p>
+<p>Another thing I like about rendezvous hashing is that it naturally
+handles weights.  With consistent hashing, if I want a node to receive
+ten times as much load as another, I create ten times more
+pseudo-nodes.  As the greatest common divisor of weights
+shrinks, the number of pseudo-node per node grows, which makes
+distribution a bit slower, and, more importantly, increases memory
+usage (linear in the number of pseudo-nodes).  Worse, if you hit the
+<a href="https://en.wikipedia.org/wiki/Fundamental_theorem_of_arithmetic">fundamental theorem of arithmetic</a>
+(as a coworker once snarked out in a commit message), you may have
+to rescale <em>everything</em>, potentially causing massive data movement.</p>
 
-<p>If we try to solve the homogenous form with Chubanov’s subroutine, we
-may get:</p>
+<p>Rendezvous hashing generates pseudorandom scores by hashing, and ranks
+them to find the right node(s).  Intuitively, we want to use weights
+so that the distribution of pseudorandom scores generated for a node A
+with twice the weight as another node B has the same shape as that of
+node B, but is linearly stretched so that the average hash value for A is
+twice that for B.  We also want the distribution to cover <code>[0, infty)</code>, 
+otherwise a proportion of hashes will always go to the heavier node,
+regardless of what the lighter node hashes to, and that seems wrong.</p>
 
-<ol>
-  <li>a strictly positive (for all elements) solution.  In that case,
-\(y &gt; 0\) and we can recover a solution to the box-constrained
-problem.</li>
-  <li>a subset of variables that must be 0 in any feasible solution.  If
-that subset includes \(y\), the box-constrained problem is
-infeasible.  Otherwise, we can take out the variables and try
-again.</li>
-  <li>a subset of variables that are always strictly less than 1 in
-feasible solutions.  We exploit the fact that we only really care
-about 0/1 solutions (to the original problem or to the homogenous
-reformulation) to also fix these variables to 0; if the subset
-includes \(y\), the <em>0/1</em> problem is infeasible.</li>
-</ol>
+<p>The <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.414.9353&amp;rep=rep1&amp;type=pdf">trick</a>,
+as explained by <a href="http://www.snia.org/sites/default/files/SDC15_presentations/dist_sys/Jason_Resch_New_Consistent_Hashings_Rev.pdf">Jason Resch</a>
+at Cleversafe, is to map our hashes from uniform in <code>[0, 1)</code> to
+<code>[0, infty)</code> not as an exponential, but with <code>-weight / log(h)</code>.  If you
+simulate just using an exponential, you can quickly observe that it
+doesn’t reweigh things correctly: while the mean is correctly scaled,
+the mass of the probability density function isn’t shifted quite right.
+Resch’s proof of correctness for this tweaked exponential fits on a
+<a href="https://twitter.com/pkhuong/status/799759031896309760">single page</a>.</p>
 
-<p>As soon as we invoke the third case to recursively solve a smaller
-problem, we end up solving an interesting ill-specified relaxation of
-the initial 0/1 linear program: it’s still a valid relaxation of the
-binary problem, but is stricter than the usual box linear relaxation.</p>
+<p>The Python code becomes something like:</p>
 
-<p>That’s more than enough to drive a branch-and-bound process.  In
-practice, branch-and-bound is much more about proving the (near-)
-optimality of an existing solution than coming up with strong feasible
-solutions.  That’s why the fact that the subroutine “only” solves
-feasibility isn’t a blocker.  We only need to prove the absence of 0/1
-solutions (much) better than the incumbent solution, and that’s a
-constraint on the objective value.  If we get such a proof, we can
-prune away that whole search subtree; if we don’t, the subroutine
-might have fixed some variables 0 or 1 (always useful), and we
-definitely have a fractional solution.  That solution to the
-relaxation could be useful for primal heuristics, and will definitely
-be used for branching (solving the natural LP relaxation of constraint
-satisfaction problems ends up performing basic propagation for us, so
-we get some domain propagation for free by only branching on variables
-with fractional values).</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>weighted rendezvous hashing </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="n">Destination</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s">&#39;Destination&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s">&#39;host&#39;</span><span class="p">,</span> <span class="s">&#39;hash&#39;</span><span class="p">,</span> <span class="s">&#39;weight&#39;</span><span class="p">])</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">score</span><span class="p">(</span><span class="n">hash_value</span><span class="p">,</span> <span class="n">weight</span><span class="p">):</span>
+</span><span class="line">    <span class="k">return</span> <span class="o">-</span><span class="n">weight</span> <span class="o">/</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">hash_value</span> <span class="o">/</span> <span class="n">HASH_MAX</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">pick_destinations</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">destinations</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+</span><span class="line">    <span class="n">key_hash</span> <span class="o">=</span> <span class="n">hash_key</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+</span><span class="line">    <span class="n">annotated</span> <span class="o">=</span> <span class="p">[(</span><span class="n">score</span><span class="p">(</span><span class="n">merge_hashes</span><span class="p">(</span><span class="n">key_hash</span><span class="p">,</span> <span class="n">dest</span><span class="o">.</span><span class="n">hash</span><span class="p">),</span> <span class="n">dest</span><span class="o">.</span><span class="n">weight</span><span class="p">),</span> <span class="n">dest</span><span class="o">.</span><span class="n">host</span><span class="p">)</span>
+</span><span class="line">                 <span class="k">for</span> <span class="n">dest</span> <span class="ow">in</span> <span class="n">destinations</span><span class="p">]</span>
+</span><span class="line">    <span class="n">ordered</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">annotated</span><span class="p">)</span>
+</span><span class="line">    <span class="k">return</span> <span class="p">[</span><span class="n">host</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">ordered</span><span class="p">[:</span><span class="n">k</span><span class="p">]]</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>At the root, if we don’t have any primal solution yet, we should
-probably run some binary search on the objective value at the root
-node and feed the resulting fractional solutions to rounding
-heuristics.  However, we can’t use the variables fixed by the
-subroutine: until we have a feasible binary solution with objective
-value \(Z\sp{\star}\), we can’t assume that we’re only interested in
-binary solutions with object value \(Z &lt; Z\sp{\star}\), so the
-subroutine might fix some variables simply because there is no 0/1
-solution that satisfy \(Z &lt; k\) (case 3 is vacuously valid if there
-is no 0/1 solution to the homogeneous problem).</p>
+<p>There are obvious micro-optimisations here (for example, computing
+the inverse of the score lets us precompute the reciprocal of each
+destination’s weight), but that’s all details.  The salient part to me
+is that space and time are still linear in the number of nodes,
+regardless of the weights; consistent hashing instead needs space
+pseudolinear(!) in the weights, and is thus a bit slower than its
+\(\mathcal{O}(\log n)\) runtime would have us believe.</p>
 
-<p>That suffices to convince me of correctness.  I still have to
-understand Chubanov’s “Basic Subroutine.”</p>
+<p>The linear-time computation for weighted rendezvous hashing is also
+CPU friendly.  The memory accesses are all linear and easily
+prefetchable (load all metadata from an array of nodes), and the
+computational kernel is standard vectorisable floating point
+arithmetic.</p>
 
-<h2 id="understanding-the-basic-subroutine">Understanding the basic subroutine</h2>
+<p>In practice, I’m also not sure I ever really want to distribute
+between hundreds of machines: what kind of failure/resource allocation
+domain encompasses that many equivalent nodes?  For example, when
+distributing data, I would likely want a hierarchical
+consistent distribution scheme, like <a href="https://www.crss.ucsc.edu/media/papers/weil-sc06.pdf">Ceph’s CRUSH</a>:
+something that first assigns data to sections of a datacenter, then to
+racks, and only then to individual machines.  I should never blindly
+distribute data across hundreds of machines; I need to distribute
+between a handful of sections of the network, then one of a dozen
+racks, and finally to one of twenty machines.  The difference between
+linear and logarithmic time at each level of this “failure trie” is
+marginal and is easily compensated by a bit of programming.</p>
 
-<p>This
-<a href="https://pdfs.semanticscholar.org/d55f/3e7a49012930320aff836e737533726c78d8.pdf">note by Cornelis/Kees Roos</a>
-helped me understand what makes the subroutine tick.</p>
-
-<p>The basic procedure updates a dual vector \(y\) (not the same
-\(y\) as the one I had in the reformulation… sorry) such that \(y
-\geq 0\) and \(|y|_1 = 1\), and constantly derives from the dual
-vector a tentative solution \(z = P\sb{A}y\), where \(P\sb{A}\)
-projects (orthogonally) in the null space of the homogeneous
-constraint matrix \(A\) (the tentative solution is \(x\) in
-Chubanov’s paper).</p>
-
-<p>At any time, if \(z &gt; 0\), we have a solution to the homogenous
-system.</p>
-
-<p>If \(z = P\sb{A}y = 0\), we can exploit the fact that, for any
-feasible solution \(x\), \(x = P\sb{A}x\): any feasible solution
-is alrady in the null space of \(A\).  We have</p>
-
-<p>\[x\sp{\top}y = x\sp{\top}P\sb{A}y = x\sp{\top}\mathbf{0} = 0\]</p>
-
-<p>(the projection matrix is symmetric).  The solution \(x\) is
-strictly positive and \(y\) is non-negative, so this must mean that,
-for every component of \(y\sb{k} &gt; 0\), \(x\sb{k} = 0\).  There is
-at least one such component since \(|y|_1 = 1\).</p>
-
-<p>The last condition is how we bound the number of iterations.  For any feasible solution
-\(x\) and any component \(j\),</p>
-
-<p>\[y\sb{j}x\sb{j} \leq y\sp{\top}x = y\sp{\top}P\sb{A}x \leq |x| |P\sb{A}y| \leq \sqrt{n} |z|.\]</p>
-
-<p>Let’s say the max element of \(y\), \(y\sb{j} \geq 2 \sqrt{n}|z|\).
-In that case, we have
-\[x\sb{j} \leq \frac{\sqrt{n}|z|}{y\sb{j}} \leq \frac{1}{2}.\]</p>
-
-<p>Chubanov uses this criterion, along with a potential argument on
-\(|z|\), to bound the number of iterations.
-However, we can apply the result at any iteration where we find that
-\(x\sp{\top}z &lt; y\sb{j}\): any such \(x\sb{j} = 0\) in binary
-solutions.  In general, we may upper bound the left-hand side with
-\(x\sp{\top}z \leq |x||z| \leq \sqrt{n}|z|\), but we can
-always exploit the structure of the problem to have a tighter bound
-(e.g., by encoding clique constraints
-\(x\sb{1} + x\sb{2} + … = 1\) directly in the homogeneous
-reformulation).</p>
-
-<p>The rest is mostly applying lines 9-12 of the basic procedure in
-<a href="https://pdfs.semanticscholar.org/d55f/3e7a49012930320aff836e737533726c78d8.pdf">Kees’s note</a>.
-Find the set \(K\) of all indices such that
-\(\forall k\in K,\ z\sb{k} \leq 0\) (Kees’s criterion is more relaxed,
-but that’s what he uses in experiments), project the vector
-\(\frac{1}{|K|} \sum\sb{k\in K}e\sb{k}\) in the null space of
-\(A\) to obtain \(p\sb{K}\), and update \(y\) and \(z\).</p>
-
-<p>The potential argument here is that after updating \(z\),
-\(\frac{1}{|z|\sp{2}}\) has increased by at least \(|K| &gt; 1\).
-We also know that \(\max y \geq \frac{1}{n}\), so we can fix a
-variable to 0 as soon as \(\sqrt{n} |z| &lt; \frac{1}{n}\), or,
-equivalently, \(\frac{1}{|z|} &gt; n\sp{3/2}\).  We need to increment
-\(\frac{1}{|z|\sp{2}}\) to at most \(n\sp{3}\), so we will go
-through at most \(1 + n\sp{3})\) iterations of the basic procedure
-before it terminates; if the set \(K\) includes more than one
-coordinate, we should need fewer iterations to reach the same limit.</p>
-
-<p>Chubanov shows how to embed the basic procedure in a basic iterative
-method to solve binary LPs.  The interesting bit is that we reuse the
-dual vector \(y\) as much as we can in order to bound the total
-number of iterations in the basic procedure.  We fix at least one
-variable to \(0\) after a call to the basic procedure that does not
-yield a fractional solution; there are thus at most \(n\) such calls.</p>
-
-<h2 id="next-step">Next step</h2>
-
-<p>In contrast to regular numerical algorithms, the number of iterations
-and calls so far have all had exact (non asymptotic) bounds.  The
-asymptotics hide in the projection step, where we average elementary
-unit vectors and project them in the null space of \(A\).  We know
-there will be few (at most \(n\)) calls to the basic procedure, so
-we can expend a lot of time on matrix factorisation.  In fact,
-Chubanov outright computes the projection matrix in
-\(\mathcal{O}(n\sp{3})\) time to get his complexity bound of
-\(\mathcal{O}(n\sp{4})\).  In practice, this approach is likely to
-fill a lot of zeros in, and thus run out of RAM.</p>
-
-<p>I’d start with the sparse projection code in
-<a href="http://faculty.cse.tamu.edu/davis/suitesparse.html">SuiteSparse</a>.
-The direct sparse solver spends less time on precomputation than fully
-building the projection matrix (good if we don’t expect to always hit
-the worst case iteration bound), and should preserve sparsity (good
-for memory usage).  In return, computing projections is slower, which
-brings the worst-case complexity to something like
-\(\mathcal{O}(n\sp{5})\), but that can be parallelised, should be
-more proportional to the number of non-zeros in the constraint matrix
-(\(\mathcal{O}(n)\) in practice), and may even exploit sparsity in
-the right-hand side.  Moreover, we can hope that the \(n\sp{3}\)
-iteration bound is pessimistic; that certainly seems to be the case
-for most experiments with random matrices.</p>
-
-<p>The worst-case complexity, between \(\mathcal{O}(n\sp{4})\) and
-\(\mathcal{O}(n\sp{5})\), doesn’t compare that well to interior
-point methods (\(\mathcal{O}(\sqrt{n})\) sparse linear solutions).
-However, that’s all worst-case (even for IPMs).  We also have
-different goals when embedding linear programming solvers in
-branch-and-bound methods.  Warm starts and the ability to find
-solution close to their bounds are key to efficient branch-and-bound;
-that’s why we still use simplex methods in such methods.  Chubanov’s
-projection routine seems like it might come close to the simplex’s
-good fit in branch-and-bound, while improving efficiency and
-parallelisability on large LPs.</p>
+<p>The simplicity of basic rendezvous hashing, combined with its minimal
+space usage and the existence of a weighted extension, makes me
+believe it’s a better initial/default implementation of consistent
+hash functions than consistent hashing.  Moreover, consistent
+hashing’s main advantage, sublinear-time distribution, isn’t
+necessarily compelling when you think about the whole datacenter (or
+even many datacenters) as a resilient system of failure-prone domains.
+Maybe rendezvous hashing deserves a rebranding campaign (:</p>
 </div>
   
   

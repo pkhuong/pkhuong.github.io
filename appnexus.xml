@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/Blog/categories/appnexus/"/>
-  <updated>2020-07-13T22:04:32-04:00</updated>
+  <updated>2020-10-31T09:44:27-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -78,7 +78,7 @@ be <em>read</em> heavy.</p>
 
 <p>Some time later, I revisited a <a href="http://www.cs.au.dk/~gerth/papers/soda02.pdf">paper by Brodal, Fagerberg, and Jacob (PDF)</a>.  They
 do a lot of clever things to get interesting performance bounds, but
-I’m really not convinced it’s all worth the complexity<sup id="fnref:1"><a href="#fn:1" class="footnote">1</a></sup>… especially in
+I’m really not convinced it’s all worth the complexity<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote">1</a></sup>… especially in
 the context of our desert island challenge.  I did find one trick very
 interesting: they preserve logarithmic time lookups when binary
 searching arrays with missing values by recasting these arrays as
@@ -224,7 +224,7 @@ interpolate to skip the first iterations of the search.  If we can
 also assume that the keys are uniformly distributed once mapped to
 integers, we can use a linear Robin Hood hash table: with a linear
 (but small) space overhead, we get constant time expected inserts and
-lookups, and what seems to be \( O(\lg \lg n) \) worst case<sup id="fnref:2"><a href="#fn:2" class="footnote">2</a></sup>
+lookups, and what seems to be \( O(\lg \lg n) \) worst case<sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote">2</a></sup>
 lookups with high probability.</p>
 
 <p>Something else is bothering me.  We embed in full binary trees, and
@@ -238,13 +238,14 @@ to a power of three or to find the remainder by such a number?</p>
 
 <p>I don’t know!  Can anyone offer insights or suggest new paths to explore?</p>
 
-<div class="footnotes">
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:1">
-      <p>I think jumping the van Emde Boa[s] is a thing, but they at least went for the minor version, the van Emde Boas layout ;) <a href="#fnref:1" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:1" role="doc-endnote">
+      <p>I think jumping the van Emde Boa[s] is a thing, but they at least went for the minor version, the van Emde Boas layout ;) <a href="#fnref:1" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:2">
-      <p>The maximal distance between the interpolation point and the actual location appears to scale logarithmically with the number of elements.  We perform a binary search over a logarithmic-size range, treating empty entries as \(\infty\). <a href="#fnref:2" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:2" role="doc-endnote">
+      <p>The maximal distance between the interpolation point and the actual location appears to scale logarithmically with the number of elements.  We perform a binary search over a logarithmic-size range, treating empty entries as \(\infty\). <a href="#fnref:2" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
@@ -256,7 +257,7 @@ to a power of three or to find the remainder by such a number?</p>
     <link href="https://www.pvk.ca/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/"/>
     <updated>2014-10-19T20:05:00-04:00</updated>
     <id>https://www.pvk.ca/Blog/2014/10/19/performance-optimisation-~-writing-an-essay</id>
-    <content type="html"><![CDATA[<p>&lt;a href=”#trust-no-one”“&gt;Skip to the meaty bits.&lt;/a&gt;</p>
+    <content type="html"><![CDATA[<p><a href="#trust-no-one">Skip to the meaty bits.</a></p>
 
 <p>My work at <a href="http://www.appnexus.com/">AppNexus</a> mostly involves
 performance optimisation, at any level from microarchitecture-driven

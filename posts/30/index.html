@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/03/23/what-i-look-for-in-gsoc-proposals/">What I look for in GSoC proposals</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/03/30/refactoring-with-lz77-compilation-is-compression/">Refactoring with LZ77: compression is compilation (?)</a></h1>
     
     
       <p class="meta">
@@ -99,15 +99,15 @@
 
 Mar
   
-23rd, 
+30th, 
 2014
 
 
 
 
         
-         | <a href="/Blog/2014/03/23/what-i-look-for-in-gsoc-proposals/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/03/23/what-i-look-for-in-gsoc-proposals/"
+         | <a href="/Blog/2014/03/30/refactoring-with-lz77-compilation-is-compression/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/03/30/refactoring-with-lz77-compilation-is-compression/"
 	      >Comments</a>
         
         
@@ -116,193 +116,812 @@ Mar
   </header>
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>EDIT: Added a link to a <a href="/images/2014-03-23-what-i-look-for-in-gsoc-proposals/regalloc-abarch.pdf">solid proposal from last year (PDF)</a>.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><em>This post was written under the influence of coffee ice cream and
+espresso.  It’s a magical drink ;)</em></p>
 
-<p>It’s already
-<a href="https://www.google-melange.com/gsoc/homepage/google/gsoc2014">Google Summer of Code</a>
-season; like spring, it’s slightly earlier this year.  For multiple
-reasons – including the accelerated schedule and my transition to
-having a Real Job – I did not manage to guide any of the students who
-sent in applications.  After an initial ranking, we’re left with a
-fair number of decent proposals for a Summer of
-<a href="http://sbcl.org/">SBCL</a>.  They’re of comparable quality, and all
-leave me a bit uneasy.  In this post, I’ll try to explain what I look
-for in GSoC proposals… or, really, in action plans in general.</p>
+<p><img class="right" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/espresso_ice_cream.jpg" /></p>
 
-<p>I care about the quality of GSoC plans for two reasons.  First,
-because it reassures me that the applicant understands the
-difficulties they’ll have to overcome to complete their project.
-Second, because, like TDD, a good plan makes it easier to feel when
-we’re making concrete progress.  To me, these two factors are
-necessary conditions for a good success rate.</p>
+<p>I don’t really follow the compression scene, and only pay minimal
+attention to machine learning.  Nevertheless, the “Compression is
+Learning” slogan feels more and more right to me.  In this post, I’ll
+explore another relationship that I find surprising: one between
+compression and compilation.</p>
 
-<p>We’ll probably allow additional time to update the proposals we have
-already received, so hopefully this post can be immediately useful.  I
-have a single vote, and other mentors no doubt have different
-criteria.  I only hope that this post can give ideas to applicants
-looking to review their proposal.</p>
+<p>Five years ago, I took Marc Feeley’s compiler class, and he let us
+choose our term project.  I settled on generating traces from
+recursive algorithms (typical of cache-oblivious algorithms) and
+<a href="http://discontinuity.info/~pkhuong/ift6232/">reordering them to get iterative code</a>
+that was better suited to the first level of cache.  I came up with a
+gnarly CL-accented research-quality prototype, but the result was
+surprisingly effective.  Sadly, I never really managed to recover
+loops or function calls from the fully inlined trace, so even
+medium-size kernels would exhaust the instruction cache.</p>
 
-<h1 id="why-software-development-cant-be-planned">Why? Software development can’t be planned!</h1>
+<p>I believe I now see a practical and scalable solution, thanks to Artur
+Jez’s work on
+<a href="http://arxiv.org/abs/1403.4445">“A really simple approximation of smallest grammar.”</a>
+His work might lead to a function-oriented analogue of trace
+compilation.  Trace compilers are notoriously weak on recursion
+(recursive function calls don’t map well to loops), so it would be
+nifty to have an alternative that identifies functions rather than
+loops.</p>
 
-<p>This is a common objection to any form of planning for software
-projects.  I don’t understand where it comes from.</p>
+<p>This makes me quip that “(Trace) Compilation is Compression.”  We
+can see trace compilers as lazily unpacking traces from the source
+program, rewriting them a bit, and recompressing traces in an
+executable format.  Admittedly, the analogy is a bit of a stretch for
+classical compilers: they are less aggressive in decompressing source
+code and directly translate from one compressed representation (a
+small source file may describe billions of execution paths) to
+another.</p>
 
-<p>Software development should be <em>easier</em> to plan than most endeavours:
-we have to deal with relatively few people, and, when we do, it’s
-rarely in an adversarial setting… and I’m willing to bet most of us
-can better forecast the behaviour of programs than that of people.
-There’s currently an electoral campaign in Québec, and I’m certain
-that, before the date was even announced, every single party had a
-precise plan for each day, at the riding, regional, and provincial
-levels.  Politicians can do it; why can’t software developers?</p>
+<p>Anyway… this is extremely hypothetical and Jez’s work is fun
+independently of my weekend speculations.</p>
 
-<p>Of course, there will be constant adjustments to the initial plan.
-The reason I think it’s important to spend time and thought on that
-plan isn’t to stick to it, but primarily because it forces us to
-systematically consider all sorts of potential issues, challenges,
-failure modes, etc.  This exercise becomes useful when problems crop
-up: rather than making decisions in the heat of the moment, we can
-rely on our past (well rested and composed) self’s research, notes, and
-ideas.</p>
+<h1 id="how-to-fail-with-lz77">How to fail with LZ77</h1>
 
-<p>I also find plans tend to become much more handwavy as we get farther
-in the future.  That’s a normal tendency.  I think we’re usually
-pretty good at short-term planning; most people can cook a meal
-without sitting down to figure out how they’ll cause awesome chemical
-reactions to occur without burning their house down.  It’s a different
-matter when it comes to month-long camping trips or feeding a thousand
-people.</p>
+<p>Once we cast a program trace as a sequence of opcodes (perhaps
+without operands, to expose more redundancy), it’s obvious that
+reducing code size is “just” compression, and
+<a href="http://en.wikipedia.org/wiki/LZ77_and_LZ78">LZ-type algorithms</a>
+quickly come to mind: they compress strings by referring to earlier
+substrings.</p>
 
-<p>The difference is one of scale, and it’s exactly when we’re out of our
-comfort zone that mindful planning becomes useful.  I expect an action
-plan to be as thorough in its last week as in its first.  Most of it
-will be fiction, but, as I wrote above, the thinking involved in
-writing that fiction is what I’m after.</p>
+<p>The heart of LZ77 is a loop that streams through the input sequence
+and finds the longest common subsequence earlier in the input.  In
+practice, the search usually considers a fixed-size window; when I
+write LZ77 here, I instead refer to the theoretical approach with an
+unbounded search window.  Repeated LCS searches on an unbounded window
+sounds slow, but, in sophisticated implementations, the bottleneck is
+sorting the input string to generate a suffix array.</p>
 
-<h1 id="the-overall-structure-im-used-to">The overall structure I’m used to</h1>
+<p>I don’t feel like being sophisticated and will implement a
+quadratic-time LCS search.</p>
 
-<p>There are tons of ways to describe a plan.  I like this one, but the
-main thing is what I have in mind when I read each section.  For
-instance, <a href="/images/2014-03-23-what-i-look-for-in-gsoc-proposals/regalloc-abarch.pdf">last year’s proposal for register allocation via graph colouring (PDF)</a> had:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun longest-subseq (seq start)
+</span><span class="line">  "Find the longest subseq of seq[start...] that begins before start."
+</span><span class="line">  (let ((best 1)
+</span><span class="line">        (index nil))
+</span><span class="line">    (dotimes (i start (values index best))
+</span><span class="line">      (let ((length (mismatch seq seq :start1 i :start2 start
+</span><span class="line">                                      :test #'equal)))
+</span><span class="line">        (assert length)
+</span><span class="line">        (decf length i)
+</span><span class="line">        (when (&gt; length best)
+</span><span class="line">          (setf best length
+</span><span class="line">                index i))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<ol>
-  <li>the project’s aim, with a description of the high level goal (better
-register allocation) and of mechanisms to implement (new allocation
-heuristic, live range splitting and coalescing, etc.);</li>
-  <li>a plan section, describing each proposed step (find examples of bad
-allocation, write a new simple allocator, write a visualisation tool,
-…) in details;</li>
-  <li>a schedule at a 2-week granularity, with references to the detailed
-descriptions and deliverables for each step;</li>
-  <li>a list of risks and challenges in the project;</li>
-  <li>a short cv;</li>
-  <li>why the student felt motivated and suitable for the project.</li>
-</ol>
+<p>Some backreferences clearly look like function calls.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (longest-subseq "abab" 0)
+</span><span class="line">NIL ; There is no match to the left of abab
+</span><span class="line">1   ;                                  ^
+</span><span class="line">CL-USER&gt; (longest-subseq "abab" 2)
+</span><span class="line">0   ; There is a match for the second ab, starting
+</span><span class="line">2   ; at index 0 and spanning 2 characters.</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>It’s a different structure than what I suggest below, but both mostly
-present the same information.  My wish is to feel confident that the
-student has done the work to have that information.</p>
+<p>It’s a bit surprising at first, but some also correspond to <code>repeat</code> loops.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (longest-subseq "abababa" 2)
+</span><span class="line">0 ; There is a match for "ababa", starting
+</span><span class="line">5 ; at index 0 and spanning 5 characters.</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>First, a description of the goal.  SBCL offers
-<a href="http://www.sbcl.org/gsoc2014/ideas/">prefab proposals</a>, and it’s
-tempting to just copy-paste.  However, I feel much more confident in
-the intrinsic motivation of a student who’s made the project their
-own.  Many of our suggestions are skeletons for projects; it should be
-easy to come up with ways to extend and better specify them according
-to the student’s interests.  Others are already fleshed out; those
-are a bit harder, but even small variations on the initial theme
-are encouraging.  In all cases, if I don’t feel like the student owns
-the project, I probably won’t rank the proposal highly, and certainly
-won’t be inclined to mentor them.  The problem statement is a simple
-way to demonstrate one’s understanding of – and interest for – the
-project.</p>
+<p>This last patch is strange because it’s self-referential.  However, if
+we decompress character by character, its meaning becomes obvious: we
+replicate the substring in <code>[0, 1]</code> to generate exactly 5 characters.
+This is basically a loop; we can handle partial copies with, e.g.,
+rotation and entering the middle of the loop (like Duff’s device).</p>
 
-<p>Second, a review of the current environment.  What currently exists,
-in SBCL or elsewhere? Can we exploit interesting research or code?
-Has there been previous efforts, and how/why did they not pan out?
-Perhaps there’s a relevant post-mortem from a similar project that
-will help understand the problem domain.  What potential difficulties
-do we know of?  What don’t we know (known unknowns)?  How bad do we
-estimate unknown unknowns to be, and why?  What persons or resources
-could be helpful?  To a certain extent, this is simply demonstrating
-that one’s done their due diligence.  However, it also tells other
-people (e.g., potential mentors) how they can best work with the
-applicant.  This section should be a good resource to re-read when bad
-things happen.</p>
+<p>Lempel and Ziv’s result tells us that we can look for references
+greedily in an unbounded window and obtain asymptotically optimal
+(proportional to the string’s entropy) compression.  Again, there are
+algorithms to do that in linear time – via radix sort – but I’ll just
+bruteforce my way in cubic time.</p>
 
-<p>Third, the suggested course of action at a high level.  Not only what
-would happen in a perfect execution, but, ideally, ways to address (ahead
-of time or when/if they occur) some of the difficulties and unknowns
-listed in the previous section.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defstruct factor start length subseq)
+</span><span class="line">
+</span><span class="line">(defun factorise (seq)
+</span><span class="line">  (let ((index 0)
+</span><span class="line">        (length (length seq)))
+</span><span class="line">    (loop while (&lt; index length)
+</span><span class="line">          collect
+</span><span class="line">          (multiple-value-bind (start length)
+</span><span class="line">              (longest-subseq seq index)
+</span><span class="line">            (prog1
+</span><span class="line">                (if (null start)
+</span><span class="line">                    (elt seq index)
+</span><span class="line">                    (make-factor :start start :length length
+</span><span class="line">                                 :subseq (subseq seq start (+ start length))))
+</span><span class="line">              (incf index length))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Fourth, success indicators, a translation of the initial goal
-description into a few checkboxes.  Ideally, the criteria are
-falsifiable… much like an experiment, with the null hypothesis being
-project failure.  I find that checking even a few of these boxes gives
-me a good sense of closure on a project.</p>
+<p>Here’s the problem with converting an LZ77 factorisation into calls and
+loops: there is no guarantee that patches nest sanely.</p>
 
-<p>Finally the calendar, to show how one might execute the third section
-and satisfy the success indicators in the fourth section.  The first
-few weeks are usually easy to envision, but proposals tend to become
-fuzzier with time.  I’m more confident in proposals that only use one
-or two -week periods, with <em>actions</em> and a few testable for each
-period.  Shorter periods make fuzziness more obvious, but, more
-importantly, they combine with the milestones to let us tell that
-we’re (or aren’t) getting traction.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (factorise "ababac||bac")
+</span><span class="line">(#\a #\b #S(FACTOR :START 0 :LENGTH 3 :SUBSEQ "aba") #\c #\| #\|
+</span><span class="line"> #S(FACTOR :START 3 :LENGTH 3 :SUBSEQ "bac"))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>In the unfortunate case that we’re somehow not making the expected
-progress, frequent milestones means we can tell more quickly that
-something is off.  We only have to make up for a one week setback
-rather than for a month, i.e., one quarter of the GSoC program.  The
-odds of outright project failure are lower, and we don’t risk feeling
-(as) down for wasting a month of work.</p>
+<p>This factorisation encodes “ababac||bac” by repeating “ab” two and a
+half times, inserting “c||”, and then repeating “bac.”  The issue is
+that we wish to convert “ababa” into a loop, but the last patch would
+then need to enter that loop in its last iteration.  We could also
+have the opposite problem, with a patch that only covers a prefix of
+an earlier patch (a few iterations of a loop).  The sketch below shows
+how we might even have to deal with both issues in the same factor.</p>
 
-<p>One thing that I find particularly scary in project calendars are
-“Magic Happens” steps.  This seems more common with longer planning
-periods.  Many proposals are quite detailed with respect to
-preliminary work and research, and to final integration and
-documentation.  The issue is that most of the work is stashed in a 3-5
-week interval during which the actual project becomes completed.  It’s
-not clear what the student will do to get there (or even who will do
-the work ;).  Planning each week individually makes such steps
-obvious.</p>
+<p><img class="center" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/nasty-factor.jpg" /></p>
 
-<p>I know that it’s hard to determine how we’ll achieve a goal when
-we’ve never done something similar before.  But we can pretend.  I
-want to feel that an applicant has a clear idea how to execute the
-task they propose, if only in an artificial perfect world.  Otherwise,
-why should I believe they can do so in reality?</p>
+<h1 id="jezs-solution">Jez’s solution</h1>
 
-<h1 id="planning-is-fiction">Planning is fiction</h1>
+<p><a href="http://arxiv.org/abs/1403.4445">Jez’s paper</a> analyses a method to
+recover a CFL with a single member, the string we wish to compress.
+The CFL is described by a fully deterministic (it produces exactly one
+string) CFG in Chomsky normal form, i.e., a straight-line program.</p>
 
-<p>That’s it. I’m told that writers should show rather than tell.  I feel
-the same about plans.  I like to be shown how goals could be achieved
-in ideal and less-than-ideal worlds rather than told when steps will
-be completed.  I think the most important point is that I don’t
-appreciate detailed plans because we should (or can) stick to them.
-Rather, I believe that the exercise of coming up with such a plan is
-an efficient way to ensure we can fruitfully respond to what’ll
-actually happen when we execute it.</p>
+<p>This “really simple” approach takes a step back from LZ compression
+and instead starts with the easiest, greedy, way to generate a
+straight-line program from a string: just pair characters as you
+encounter them, left-to-right.</p>
 
-<p>The regalloc proposal was one of the longest ones last year, but I
-felt confident that the student had a good idea of what challenges
-made the task non-trivial.  In the end, we followed only a small part
-of the plan: it’s hard to come up with a suite of bad regalloc
-examples, visualisation turned out not to scale to real code, and
-there was too little time to work on live range splitting.  However,
-every time there was a change, Alexandra had no problem determining
-how to adjust the schedule and figuring out the next step.  On my end,
-I could easily follow the modified schedule and see that we were
-making progress.</p>
+<p>For example, on “abab,” this would pair “(ab)(ab)” and then
+“((ab)(ab)),” and generate the following grammar:</p>
 
-<p>This planning exercise is not easy, and it’s certainly not quick.
-(FWIW, I find it useful to get someone else, even without relevant
-experience, to look at the plan and ask questions.)  Action plans have
-helped me countless times: when I needed to react to problems; when I
-felt like I was running in circles but could tell <em>for sure</em> that I
-was making progress; when a project forcibly came to an end but I
-still had a sense of closure… Hopefully, they can do the same for SBCL
-GSoC students.</p>
+<pre><code>G -&gt; XX
+X -&gt; ab
+</code></pre>
+
+<p>We got lucky: the repetition synced up with the greedy pairing.
+That’s not always the case; for example, “abcab” becomes “(ab)(ca)b” – which
+exposes no redundancy – rather than “(ab)c(ab).”</p>
+
+<p>Jez addresses this issue by using LZ77 factorisation as an oracle to
+synchronise pairings.</p>
+
+<p>First, we simplify the algorithm by assuming that there are no factors that
+begin exactly one character before their output.  Such factors correspond to
+repetitions of that one character (e.g., “aaaa” = “a” x 4) and we can easily 
+turn them into repetitions of a pair (e.g., “aa” x 2).</p>
+
+<p>It’s then simply a matter of not pairing when it would prevent the
+next character from synchronising with its backreference.  For
+example, in “abcab,” we’d skip pairing “ca” so that “ab” could pair
+like the first occurrence did.  We also don’t force a pair when the
+backreference only includes the first letter, but not the second.
+Finally, we opportunistically match consecutive unpaired letters.</p>
+
+<p><img class="center" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/jez.jpg" /></p>
+
+<p>Each such pass creates a new, shorter, string of literals and production rules. 
+We iteratively apply the guided pairing loop until we’re left with a single
+production rule.</p>
+
+<p>That’s it.  Jez’s paper is mostly concerned with showing that we only
+have to run LZ compression once and with proving suboptimality bounds.
+The key is that we can convert factors for the input into factors for
+the output, and that each pass shrinks the string by a multiplicative
+factor.  I’ll simplify things further by recomputing a factorisation
+(in cubic time!) from scratch in each pass.</p>
+
+<h1 id="now-the-code">Now, the code</h1>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+<span class="line-number">61</span>
+<span class="line-number">62</span>
+<span class="line-number">63</span>
+<span class="line-number">64</span>
+<span class="line-number">65</span>
+<span class="line-number">66</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">;; specials for shared state (quick-and-dirty REPL style)
+</span><span class="line">
+</span><span class="line">;; For each character position, whether it's the first or
+</span><span class="line">;; second of a pair, or just a singleton (nil)
+</span><span class="line">(defvar *state*)
+</span><span class="line">;; The sequence to compress.
+</span><span class="line">(defvar *sequence*)
+</span><span class="line">;; Cursor in the sequence.
+</span><span class="line">(defvar *index*)
+</span><span class="line">
+</span><span class="line">(defmacro with-sequence ((seq) &amp;body body)
+</span><span class="line">  (let ((temp (gensym "SEQ")))
+</span><span class="line">    `(let* ((,temp ,seq)
+</span><span class="line">            (*sequence* ,temp)
+</span><span class="line">            (*state* (make-array (length *sequence*)
+</span><span class="line">                                 :initial-element nil))
+</span><span class="line">            (*index* 0))
+</span><span class="line">       ,@body)))
+</span><span class="line">
+</span><span class="line">;; No pair begins here, but we might still fuse with the previous
+</span><span class="line">;; singleton.
+</span><span class="line">(defun single ()
+</span><span class="line">  (let ((i *index*))
+</span><span class="line">    (when (and (plusp i)
+</span><span class="line">               (null (aref *state* (1- i))))
+</span><span class="line">      (setf (aref *state* (1- i)) 'first
+</span><span class="line">            (aref *state* i) 'second)))
+</span><span class="line">  (incf *index*))
+</span><span class="line">
+</span><span class="line">;; Force a pair.
+</span><span class="line">(defun pair ()
+</span><span class="line">  (let ((i *index*))
+</span><span class="line">    ;; we mustn't be at the end of the sequence
+</span><span class="line">    (assert (&lt; (1+ i) (length *sequence*)))
+</span><span class="line">    (setf (aref *state* i) 'first)
+</span><span class="line">    (setf (aref *state* (1+ i)) 'second)
+</span><span class="line">    (incf *index* 2)))
+</span><span class="line">
+</span><span class="line">(defun sync-and-pair ()
+</span><span class="line">  (multiple-value-bind (begin length)
+</span><span class="line">      (longest-subseq *sequence* *index*)
+</span><span class="line">    (cond ((null begin)
+</span><span class="line">           ;; No factor; advance and merge greedily.
+</span><span class="line">           (single))
+</span><span class="line">          ((= begin (1- *index*))
+</span><span class="line">           ;; Single-character repetition.
+</span><span class="line">           (loop repeat length do (single)))
+</span><span class="line">          (t
+</span><span class="line">           (let ((end (+ begin length)))
+</span><span class="line">             (assert (&lt;= end (length *sequence*)))
+</span><span class="line">             (assert (&lt; begin (1- *index*)))
+</span><span class="line">             (when (eql 'second (aref *state* begin))
+</span><span class="line">               ;; The first character is the second half of a pair;
+</span><span class="line">               ;; leave it by itself.
+</span><span class="line">               (single)
+</span><span class="line">               (incf begin))
+</span><span class="line">             ;; Mimic the pairing decisions of the backref.
+</span><span class="line">             (loop with expected = (+ *index* (- end begin))
+</span><span class="line">                   for i from begin below end
+</span><span class="line">                   do (ecase (aref *state* i)
+</span><span class="line">                        (second)
+</span><span class="line">                        (first (if (= (1+ i) end) ; Last character
+</span><span class="line">                                   (single)       ; can't force
+</span><span class="line">                                   (pair)))       ; a pair.
+</span><span class="line">                        ((nil) (single)))
+</span><span class="line">                   finally (assert (= *index* expected))))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>My implementation is exceedingly naïve and runs in cubic time in the
+worst case.  With a lot more work, the bottleneck (LZ77 factorisation)
+runs at the speed of sort… but constructing a suffix array would only
+get in the way of this post.  Let’s just see what pairing the code
+generates.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (with-sequence ("abcab")
+</span><span class="line">           (loop while (&lt; *index* (length *sequence*))
+</span><span class="line">                 do (sync-and-pair)
+</span><span class="line">                 finally (return *state*)))
+</span><span class="line">#(FIRST SECOND NIL FIRST SECOND)
+</span><span class="line">CL-USER&gt; (with-sequence ("abababa")
+</span><span class="line">           (loop while (&lt; *index* (length *sequence*))
+</span><span class="line">                 do (sync-and-pair)
+</span><span class="line">                 finally (return *state*)))
+</span><span class="line">#(FIRST SECOND FIRST SECOND FIRST SECOND NIL)
+</span><span class="line">CL-USER&gt; (with-sequence ("ababac||bac")
+</span><span class="line">           (loop while (&lt; *index* (length *sequence*))
+</span><span class="line">                 do (sync-and-pair)
+</span><span class="line">                 finally (return *state*)))
+</span><span class="line">#(FIRST SECOND FIRST SECOND FIRST SECOND FIRST SECOND NIL FIRST SECOND)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>In short, “abcab” becomes “(ab)c(ab)”, “abababa” “(ab)(ab)(ab)a”,
+and “ababac||bac” “(ab)(ab)(ac)(||)b(ac)”.</p>
+
+<h1 id="programs-from-pairs">Programs from pairs</h1>
+
+<p>So far, we’ve only made pairing decisions.  The next step is to
+translate them into production rules (i.e., functions), and to merge
+equivalent rules to actually save space.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defvar *counter* 0)
+</span><span class="line">(defvar *rules* (make-array 0 :adjustable t :fill-pointer 0))
+</span><span class="line">
+</span><span class="line">(defstruct rule
+</span><span class="line">  (id (incf *counter*))
+</span><span class="line">  a b)
+</span><span class="line">
+</span><span class="line">;; Hash-consing naturally merges equivalent rules.
+</span><span class="line">(fare-memoization:define-memo-function rule (a b)
+</span><span class="line">  (let ((rule (make-rule :a a :b b)))
+</span><span class="line">    (vector-push-extend rule *rules*)
+</span><span class="line">    rule))
+</span><span class="line">
+</span><span class="line">(defun reset-rules ()
+</span><span class="line">  (setf *counter* 0)
+</span><span class="line">  ;; Sorry, this is ugly.
+</span><span class="line">  (fare-memoization:unmemoize 'rule)
+</span><span class="line">  (fare-memoization:memoize 'rule)
+</span><span class="line">  (setf *rules* (make-array 0 :adjustable t :fill-pointer 0)))
+</span><span class="line">
+</span><span class="line">(defun pair-cfg (sequence state)
+</span><span class="line">  (loop with acc = '()
+</span><span class="line">        for i upfrom 0
+</span><span class="line">        for character across sequence
+</span><span class="line">        for choice across state
+</span><span class="line">        do (ecase choice
+</span><span class="line">             (second)
+</span><span class="line">             (first (push (rule character (aref sequence (1+ i)))
+</span><span class="line">                          acc))
+</span><span class="line">             ((nil) (push character acc)))
+</span><span class="line">        finally (return (coerce (nreverse acc) 'simple-vector))))
+</span><span class="line">
+</span><span class="line">(defun compress-1 (sequence)
+</span><span class="line"> (with-sequence (sequence)
+</span><span class="line">    (loop with length = (length sequence)
+</span><span class="line">          while (&lt; *index* length)
+</span><span class="line">          do (sync-and-pair)
+</span><span class="line">          finally (return (pair-cfg *sequence* *state*)))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>On the examples above, we find:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (reset-rules)
+</span><span class="line">#()
+</span><span class="line">CL-USER&gt; (compress-1 "abcab")
+</span><span class="line">#(#S(RULE :ID 1 :A #\a :B #\b) #\c #S(RULE :ID 1 :A #\a :B #\b))
+</span><span class="line">CL-USER&gt; (compress-1 "abababa")
+</span><span class="line">#(#S(RULE :ID 1 :A #\a :B #\b) #S(RULE :ID 1 :A #\a :B #\b)
+</span><span class="line">  #S(RULE :ID 1 :A #\a :B #\b) #\a)
+</span><span class="line">CL-USER&gt; (compress-1 "ababac||bac")
+</span><span class="line">#(#S(RULE :ID 1 :A #\a :B #\b) #S(RULE :ID 1 :A #\a :B #\b)
+</span><span class="line">  #S(RULE :ID 2 :A #\a :B #\c) #S(RULE :ID 3 :A #\| :B #\|) #\b
+</span><span class="line">  #S(RULE :ID 2 :A #\a :B #\c))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We only have to pair production rules further until the sequence
+consists of a single rule (or literal).</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun refactor (sequence)
+</span><span class="line">  (if (&lt;= (length sequence) 1)
+</span><span class="line">      sequence
+</span><span class="line">      (refactor (compress-1 sequence))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (refactor "ababac||bac")
+</span><span class="line">#(#S(RULE
+</span><span class="line">     :ID 8
+</span><span class="line">     :A #S(RULE
+</span><span class="line">           :ID 7
+</span><span class="line">           :A #S(RULE
+</span><span class="line">                 :ID 4
+</span><span class="line">                 :A #S(RULE :ID 1 :A #\a :B #\b)
+</span><span class="line">                 :B #S(RULE :ID 1 :A #\a :B #\b))
+</span><span class="line">           :B #S(RULE
+</span><span class="line">                 :ID 5
+</span><span class="line">                 :A #S(RULE :ID 2 :A #\a :B #\c)
+</span><span class="line">                 :B #S(RULE :ID 3 :A #\| :B #\|)))
+</span><span class="line">     :B #S(RULE :ID 6 :A #\b :B #S(RULE :ID 2 :A #\a :B #\c))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The “call graph” below shows there’s a lot of sharing for such a short string.</p>
+
+<p><img class="center" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/call_graph.png" /></p>
+
+<h1 id="enough-with-the-strings">Enough with the strings</h1>
+
+<p>I started by writing about compiling program traces, but so far I’ve only been
+working with strings of characters.  Let’s pretend the following PostScript file
+was written by someone who’s never heard of functions or loops.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">%!PS
+</span><span class="line">270 315 translate
+</span><span class="line">1.5 setlinewidth
+</span><span class="line">
+</span><span class="line">gsave
+</span><span class="line">newpath
+</span><span class="line">  0 36 moveto
+</span><span class="line"> 72 0  rlineto
+</span><span class="line">  0 72 rlineto
+</span><span class="line">-72 0  rlineto
+</span><span class="line">closepath
+</span><span class="line">stroke
+</span><span class="line">grestore
+</span><span class="line">
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">
+</span><span class="line">showpage</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Phew, programming <em>is</em> hard!  That’s a lot of copy-paste to produce a
+simple pattern.</p>
+
+<p><img class="center" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/squares.png" /></p>
+
+<p>Let’s see what our (simplified) implementation of Jez’s algorithm can do.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (reset-rules)
+</span><span class="line">#()
+</span><span class="line">;; READ, the poor man's tokenizer.
+</span><span class="line">CL-USER&gt; (refactor #(
+</span><span class="line">270 315 translate
+</span><span class="line">1.5 setlinewidth
+</span><span class="line">
+</span><span class="line">gsave
+</span><span class="line">newpath
+</span><span class="line">  0 36 moveto
+</span><span class="line"> 72 0  rlineto
+</span><span class="line">  0 72 rlineto
+</span><span class="line">-72 0  rlineto
+</span><span class="line">closepath
+</span><span class="line">stroke
+</span><span class="line">grestore
+</span><span class="line">
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
+</span><span class="line">
+</span><span class="line">showpage
+</span><span class="line">))
+</span><span class="line">#(#S(RULE
+</span><span class="line">     :ID 35
+</span><span class="line">   ...))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>35 functions that each contain two literals or function calls. Not bad (:
+It’s an actual <a href="http://c2.com/cgi/wiki?SimpleMatterOfProgramming">SMOP</a>
+to convert this grammar into a PostScript program.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun emit-one-rule (stream rule)
+</span><span class="line">  (flet ((emit-subrule (x)
+</span><span class="line">           (if (rule-p x)
+</span><span class="line">               (format nil "R~A" (rule-id x))
+</span><span class="line">               (format nil "~(~a~)" x))))
+</span><span class="line">    (format stream "/R~A { ~A ~A } def~%"
+</span><span class="line">            (rule-id rule)
+</span><span class="line">            (emit-subrule (rule-a rule))
+</span><span class="line">            (emit-subrule (rule-b rule)))))
+</span><span class="line">
+</span><span class="line">(defun emit-rules (stream rules)
+</span><span class="line">  (map nil (lambda (rule)
+</span><span class="line">             (emit-one-rule stream rule))
+</span><span class="line">       rules)
+</span><span class="line">  (format stream "R~A~%" (rule-id (elt rules (1- (length rules))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (emit-rules *standard-output* *rules*)
+</span><span class="line">/R1 { 270 315 } def
+</span><span class="line">/R2 { translate 1.5 } def
+</span><span class="line">/R3 { setlinewidth gsave } def
+</span><span class="line">/R4 { newpath 0 } def
+</span><span class="line">/R5 { 36 moveto } def
+</span><span class="line">/R6 { 72 0 } def
+</span><span class="line">/R7 { rlineto 0 } def
+</span><span class="line">/R8 { 72 rlineto } def
+</span><span class="line">/R9 { -72 0 } def
+</span><span class="line">/R10 { rlineto closepath } def
+</span><span class="line">/R11 { stroke grestore } def
+</span><span class="line">/R12 { 45 rotate } def
+</span><span class="line">/R13 { R1 R2 } def
+</span><span class="line">/R14 { R3 R4 } def
+</span><span class="line">/R15 { R5 R6 } def
+</span><span class="line">/R16 { R7 R8 } def
+</span><span class="line">/R17 { R9 R10 } def
+</span><span class="line">/R18 { R11 R12 } def
+</span><span class="line">/R19 { gsave R4 } def
+</span><span class="line">/R20 { R11 showpage } def
+</span><span class="line">/R21 { R13 R14 } def
+</span><span class="line">/R22 { R15 R16 } def
+</span><span class="line">/R23 { R17 R18 } def
+</span><span class="line">/R24 { R17 R20 } def
+</span><span class="line">/R25 { R21 R22 } def
+</span><span class="line">/R26 { R23 R19 } def
+</span><span class="line">/R27 { R22 R24 } def
+</span><span class="line">/R28 { R25 R26 } def
+</span><span class="line">/R29 { R22 R26 } def
+</span><span class="line">/R30 { R28 R29 } def
+</span><span class="line">/R31 { R29 R29 } def
+</span><span class="line">/R32 { R29 R27 } def
+</span><span class="line">/R33 { R30 R31 } def
+</span><span class="line">/R34 { R31 R32 } def
+</span><span class="line">/R35 { R33 R34 } def
+</span><span class="line">R35</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>This second PostScript program comprises 211 tokens, rather than the
+original’s 156, but 105 of those are “{ } def” noise to define
+functions.  Arguably, the number of meaningful tokens was reduced from
+156 to slightly more than 100.  Crucially, the output remains the
+same.</p>
+
+<p><img class="center" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/squares2.png" /></p>
+
+<p>Stack programs seem particularly well suited to this rewriting
+approach: explicit operands (e.g., registers) introduce trivial
+discrepancies.  In a VM, I would consider “compressing” the opcode
+stream separately from the operands.  Compiling only the former to
+native code would already reduce interpretative overhead, and
+extracting function calls from the instruction stream should avoid
+catastrophic size explosions.</p>
+
+<p>There are several obvious deficiencies in the direct LZ77-guided
+pairing.  Just breaking Chomsky normalisation to inline single-use
+function would already help.  It might also make sense to special-case
+repetitions as <code>repeat n</code> loops, instead of hiding that in
+\(\log n\) levels of recursion.  In a real program, it would also be
+useful to inline the bottom-most rules so as not to drown in control
+flow.  The thing is, destroying structure in the name of performance
+is well understood compiler tech; recovering it <em>efficiently</em> was the
+hard part.</p>
 </div>
   
   

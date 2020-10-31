@@ -182,10 +182,10 @@ point.</p>
 <h1 id="affine-scaling-in-30-minutes">Affine scaling in 30 minutes</h1>
 
 <p>I’ll solve linear problems of the form
-<script type="math/tex">\min\sb{x} cx</script>
+\(\min\sb{x} cx\)
 subject to
-<script type="math/tex">Ax = b</script>
-<script type="math/tex">l \leq x \leq u.</script></p>
+\(Ax = b\)
+\(l \leq x \leq u.\)</p>
 
 <p>I will assume that we already have a feasible point that is strictly
 inside the box \([l, u]\) and that <em>A</em> has full row rank.  Full rank
@@ -197,9 +197,9 @@ smooth function subject to affine equalities.  We could then easily
 find a feasible descent direction by projecting \(-c\) (the opposite
 of the gradient) in the nullspace of <em>A</em>, i.e., by solving the linear
 equality-constrained least squares
-<script type="math/tex">\min\sb{d} \|(-c)-d\|\sb{2}</script>
+\(\min\sb{d} \|(-c)-d\|\sb{2}\)
 subject to
-<script type="math/tex">Ad = 0,</script>
+\(Ad = 0,\)
 e.g. with LAPACK’s <a href="http://www.netlib.org/lapack/lug/node28.html">xGGLSE</a>.</p>
 
 <p>The problem with this direction is that it doesn’t take into account
@@ -242,14 +242,14 @@ bound makes the next longer, and such situations resolve themselves
 after a couple iterations.</p>
 
 <p>Formally, let
-<script type="math/tex">s = \min\\{x-l, u-x\\} > 0</script>
+\(s = \min\\{x-l, u-x\\} &gt; 0\)
 be the slack vector (computed element wise) for the distance from <em>x</em>
 to its bounds.  We’ll just scale <em>d</em> and <em>c</em> elementwise by <em>S</em>
 (<em>S</em> is the diagonal matrix with the elements of <em>s</em> on its diagonal).
 The scaled least square system is
-<script type="math/tex">\min\sb{d\sb{s}} \|(-Sc)-d\sb{s}\|</script>
+\(\min\sb{d\sb{s}} \|(-Sc)-d\sb{s}\|\)
 subject to
-<script type="math/tex">ASd\sb{s} = 0.</script></p>
+\(ASd\sb{s} = 0.\)</p>
 
 <p>Now that we have a descent direction \(d=Sd\sb{s}\), we only
 have to decide how far along to go in that direction.  We determine
@@ -288,11 +288,11 @@ finding a feasible solution is as hard as optimising a linear program.</p>
 <p>I’ll now assume that <em>x</em> is strictly inside its box and repair it
 toward feasibility, again with a scaled least squares solution.  This
 time, we’re looking for the least norm (the system is underdetermined)
-solution of <script type="math/tex">Ad = (b - Ax).</script></p>
+solution of \(Ad = (b - Ax).\)</p>
 
 <p>We rescale the norm to penalise movements in coordinates that are
 already close to their bound by instead solving
-<script type="math/tex">ASd\sb{s} = (b - Ax),</script>
+\(ASd\sb{s} = (b - Ax),\)
 for example with
 <a href="http://www.netlib.org/lapack/lug/node27.html">xGELSD</a>.</p>
 
@@ -502,11 +502,11 @@ solves.  That function is much too general.</p>
 <p>We can do the same for the optimisation phase’s constrained least squares.
 Some doodling around with Lagrange multipliers shows that the solution
 of
-<script type="math/tex">\min\sb{x} \|x-c\|\sb{2}\sp{2}</script>
+\(\min\sb{x} \|x-c\|\sb{2}\sp{2}\)
 subject to
-<script type="math/tex">Ax = 0</script>
+\(Ax = 0\)
 is
-<script type="math/tex">x = A\sp{t}(AA\sp{t})\sp{-1}Ac - c.</script></p>
+\(x = A\sp{t}(AA\sp{t})\sp{-1}Ac - c.\)</p>
 
 <p>This is a series of matrix-vector multiplications and a single linear
 solve,

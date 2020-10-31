@@ -424,7 +424,7 @@ That question can’t be answered with the memory model, and worst-case
 execution time bounds are a joke on contemporary x86.</p>
 
 <p>I found an answer by remembering that <code>IRET</code>, the instruction used to
-return from interrupt handlers, <a href="https://www.felixcloutier.com/x86/IRET:IRETD.html">is a full barrier</a>.<sup id="fnref:model-ooe"><a href="#fn:model-ooe" class="footnote">1</a></sup>
+return from interrupt handlers, <a href="https://www.felixcloutier.com/x86/IRET:IRETD.html">is a full barrier</a>.<sup id="fnref:model-ooe" role="doc-noteref"><a href="#fn:model-ooe" class="footnote">1</a></sup>
 We also know that interrupts happen at frequent and regular intervals,
 if only for the preemption timer (every 4-10ms on stock Linux/x86oid).</p>
 
@@ -734,7 +734,7 @@ observe the timestamp update from a different core than the updater,
 in which case TSO saves us, or after the handler has returned with a
 serialising IRET.</p>
 
-<p>We can bundle all that logic in a <a href="https://github.com/pkhuong/barrierd/blob/master/signal.ebpf.inc">short eBPF program</a>.<sup id="fnref:ebpf"><a href="#fn:ebpf" class="footnote">2</a></sup>
+<p>We can bundle all that logic in a <a href="https://github.com/pkhuong/barrierd/blob/master/signal.ebpf.inc">short eBPF program</a>.<sup id="fnref:ebpf" role="doc-noteref"><a href="#fn:ebpf" class="footnote">2</a></sup>
 The program has a map of thread-local arrays (of 1 CLOCK_MONOTONIC
 timestamp each), a map of perf event queues (one per CPU), and an
 array of 1 “watermark” timestamp.  Whenever the program runs, it gets
@@ -831,7 +831,7 @@ membarrier (<code>IPI</code>) is usually slightly faster than <code>mprotect</co
 <p>The performance of IPI-based barriers should be roughly independent of
 system load. However, we did observe a slowdown for expedited
 membarrier (between \(68.4-73.0\%\) of the time, 
-\(p &lt; 10\sp{-12}\) according to a binomial test<sup id="fnref:CSM"><a href="#fn:CSM" class="footnote">3</a></sup>) on the same 
+\(p &lt; 10\sp{-12}\) according to a binomial test<sup id="fnref:CSM" role="doc-noteref"><a href="#fn:CSM" class="footnote">3</a></sup>) on the same 
 4-way system, when all CPUs were running CPU-intensive code at low
 priority.  In this second experiment, we have a sample size of one
 million observations for each method, and the worst case for <code>IPI</code> via
@@ -1001,16 +1001,16 @@ warrants the maintenance burden.</p>
 <p>But, we’ll see, maybe we can make the above work on AArch64 or POWER.</p>
 
 <p><hr style="width: 50%" /></p>
-<div class="footnotes">
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:model-ooe">
-      <p>I actually prefer another, more intuitive, explanation that isn’t backed by official documentation.The store buffer in x86-TSO doesn’t actually exist in silicon: it represents the instructions waiting to be retired in the out-of-order execution engine. Precise interrupts seem to imply that even entering the interrupt handler flushes the OOE engine’s state, and thus acts as a full barrier that flushes the conceptual store buffer. <a href="#fnref:model-ooe" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:model-ooe" role="doc-endnote">
+      <p>I actually prefer another, more intuitive, explanation that isn’t backed by official documentation.The store buffer in x86-TSO doesn’t actually exist in silicon: it represents the instructions waiting to be retired in the out-of-order execution engine. Precise interrupts seem to imply that even entering the interrupt handler flushes the OOE engine’s state, and thus acts as a full barrier that flushes the conceptual store buffer. <a href="#fnref:model-ooe" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:ebpf">
-      <p>I used raw eBPF instead of the C frontend because that frontend relies on a ridiculous amount of runtime code that parses an ELF file <em>when loading the eBPF snippet</em> to know what eBPF maps to setup and where to backpatch their <code>fd</code> number. I also find there’s little advantage to the C frontend for the scale of eBPF programs (at most 4096 instructions, usually much fewer). I did use <code>clang</code> to generate a starting point, but it’s not that hard to tighten 30 instructions in ways that a compiler can’t without knowing what part of the program’s semantics is essential. The <code>bpf</code> syscall can also <a href="https://github.com/pkhuong/barrierd/blob/00dfded07b1ee86ab171757f2270e71849474d73/setup.c#L294">populate a string buffer with additional information</a> when loading a program. That’s helpful to know that something was assembled wrong, or to understand why the verifier is rejecting your program. <a href="#fnref:ebpf" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:ebpf" role="doc-endnote">
+      <p>I used raw eBPF instead of the C frontend because that frontend relies on a ridiculous amount of runtime code that parses an ELF file <em>when loading the eBPF snippet</em> to know what eBPF maps to setup and where to backpatch their <code>fd</code> number. I also find there’s little advantage to the C frontend for the scale of eBPF programs (at most 4096 instructions, usually much fewer). I did use <code>clang</code> to generate a starting point, but it’s not that hard to tighten 30 instructions in ways that a compiler can’t without knowing what part of the program’s semantics is essential. The <code>bpf</code> syscall can also <a href="https://github.com/pkhuong/barrierd/blob/00dfded07b1ee86ab171757f2270e71849474d73/setup.c#L294">populate a string buffer with additional information</a> when loading a program. That’s helpful to know that something was assembled wrong, or to understand why the verifier is rejecting your program. <a href="#fnref:ebpf" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:CSM">
-      <p>I computed these extreme confidence intervals with my <a href="/Blog/2018/07/06/testing-slo-type-properties-with-the-confidence-sequence-method/">old code to test statistical SLOs</a>. <a href="#fnref:CSM" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:CSM" role="doc-endnote">
+      <p>I computed these extreme confidence intervals with my <a href="/Blog/2018/07/06/testing-slo-type-properties-with-the-confidence-sequence-method/">old code to test statistical SLOs</a>. <a href="#fnref:CSM" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

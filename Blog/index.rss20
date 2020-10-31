@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-07-13T22:04:32-04:00</updated>
+  <updated>2020-10-31T09:44:27-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -14,6 +14,748 @@
 
   
   <entry>
+    <title type="html"><![CDATA[UMASH: a fast and universal enough hash]]></title>
+    <link href="https://www.pvk.ca/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/"/>
+    <updated>2020-08-24T00:00:15-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting</id>
+    <content type="html"><![CDATA[<p><small>Originally posted on the <a href="https://engineering.backtrace.io/2020-08-24-umash-fast-enough-almost-universal-fingerprinting/">Backtrace I/O tech blog</a>.</small></p>
+
+<p>We accidentally a whole hash function… but we had a good reason!
+Our
+<a href="https://github.com/backtrace-labs/umash">MIT-licensed UMASH hash function</a>
+is a decently fast non-cryptographic hash function that guarantees
+a worst-case bound on the  probability of collision
+<a href="https://en.wikipedia.org/wiki/Universal_hashing#Mathematical_guarantees">between any two inputs generated independently of the UMASH parameters</a>.</p>
+
+<p>On the
+<a href="https://en.wikichip.org/wiki/intel/xeon_platinum/8175m">2.5 GHz Intel 8175M</a>
+servers that power <a href="https://backtrace.io/">Backtrace</a>’s hosted
+offering, UMASH computes a 64-bit hash for short cached inputs of up
+to 64 bytes in 9-22 ns, and for longer ones at up to 22 GB/s, while
+guaranteeing that two distinct inputs of at most \(s\) bytes collide
+with probability less than \(\lceil s / 2048 \rceil \cdot 2^{-56}\).
+If that’s not good enough, we can also reuse most of the parameters to
+compute two independent UMASH values. The resulting 128-bit
+<a href="https://en.wikipedia.org/wiki/Fingerprint_(computing)">fingerprint function</a>
+offers a short-input latency of 9-26 ns, a peak throughput of 11.2
+GB/s, and a collision probability of \(\lceil s / 2048 \rceil^2 \cdot
+2^{-112}\) (better than \(2^{-70}\) for input size up to 7.5 GB).
+These collision bounds hold for all inputs constructed without any
+feedback about the randomly chosen UMASH parameters.</p>
+
+<p>The latency on short cached inputs (9-22 ns for 64 bits, 9-26 ns for
+128) is somewhat worse than the state of the art for non-cryptographic
+hashes—
+<a href="https://github.com/wangyi-fudan/wyhash">wyhash</a> achieves
+8-15 ns and <a href="http://fastcompression.blogspot.com/2019/03/presenting-xxh3.html">xxh3</a>
+ 8-12 ns—but still in the same ballpark.  It also
+compares well with latency-optimised hash functions like
+<a href="https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function#FNV-1a_hash">FNV-1a</a>
+(5-86 ns) and
+<a href="https://en.wikipedia.org/wiki/MurmurHash#MurmurHash2">MurmurHash64A</a>
+(7-23 ns).</p>
+
+<p>Similarly, UMASH’s peak throughput (22 GB/s) does not match
+the current best hash throughput (37 GB/s with
+<a href="https://github.com/Cyan4973/xxHash">xxh3</a>
+and <a href="https://github.com/gamozolabs/falkhash">falkhash</a>, apparently
+10% higher with <a href="https://github.com/cmuratori/meow_hash">Meow hash</a>),
+but does comes within a factor of two; it’s actually higher than that of
+some performance-optimised hashes, like
+<a href="https://github.com/wangyi-fudan/wyhash">wyhash</a> (16 GB/s) and
+<a href="https://github.com/google/farmhash">farmhash32</a>
+(19 GB/s).  In fact, even the 128-bit fingerprint (11.2 GB/s) is
+comparable to respectable options like
+<a href="https://github.com/aappleby/smhasher/blob/master/src/MurmurHash2.cpp#L89">MurmurHash64A</a>
+(5.8 GB/s) and
+<a href="https://burtleburtle.net/bob/hash/spooky.html">SpookyHash</a> (11.6 GB/s).</p>
+
+<p>What sets UMASH apart from these other non-cryptographic hash
+functions is its proof of a collision probability bound.  In the
+absence of an adversary that adaptively constructs pathological inputs
+as it infers more information about the randomly chosen parameters, we
+know that two distinct inputs of \(s\) or fewer bytes will have the
+same 64-bit hash with probability at most \(\lceil s / 2048 \rceil
+\cdot 2^{-56},\) where the expectation is taken over the random
+“key” parameters.</p>
+
+<p>Only one non-cryptographic hash function in
+<a href="https://github.com/rurban/smhasher">Reini Urban’s fork of SMHasher</a>
+provides this sort of bound: <a href="https://github.com/lemire/clhash">CLHash</a>
+<a href="https://arxiv.org/abs/1503.03465">guarantees a collision probability \(\approx 2^{-63}\)</a>
+in the same
+<a href="https://en.wikipedia.org/wiki/Universal_hashing#Mathematical_guarantees">universal hashing</a>
+model as UMASH.  While CLHash’s peak throughput (22 GB/s) is
+equal to UMASH’s, its latency on short inputs is worse (23-25 ns
+instead of 9-22ns).  We will also see that its stronger collision
+bound remains too weak for many practical applications.  In order to
+compute a <a href="https://en.wikipedia.org/wiki/Fingerprint_(computing)">fingerprint</a>
+with CLHash, one would have to combine multiple hashes, exactly like
+we did for the 128-bit UMASH fingerprint.</p>
+
+<p>Actual cryptographic hash functions provide stronger bounds in a much
+more pessimistic model; however they’re also markedly slower than
+non-cryptographic hashes.  <a href="https://github.com/BLAKE3-team/BLAKE3">BLAKE3</a>
+needs at least 66 ns to hash short inputs, and achieves a peak throughput
+of 5.5 GB/s.  Even the <a href="https://github.com/rust-lang/rust/issues/29754">reduced-round SipHash-1-3</a>
+hashes short inputs in 18-40 ns and longer ones at a peak throughput
+of 2.8 GB/s.  That’s the price of their pessimistically adversarial
+security model.  Depending on the application, it can make sense to
+consider a more restricted adversary that must prepare its dirty deed
+before the hash function’s parameters are generated at random, and
+still ask for provable bounds on the probability of collisions.
+That’s the niche we’re targeting with UMASH.</p>
+
+<p>Clearly, the industry is comfortable with no bound at all.
+However, even in the absence of
+<a href="https://www.131002.net/siphash/#at">seed-independent collisions</a>,
+timing side-channels in a data structure implementation could
+theoretically leak information about colliding inputs, and iterating
+over a hash table’s entries to print its contents can divulge even more
+bits.  A sufficiently motivated adversary could use something like
+that to learn more about the key and deploy an algorithmic denial of
+service attack.  For example, the linear structure of UMASH (and of
+other polynomial hashes like CLHash) makes it easy to combine known
+collisions to create exponentially more colliding inputs.  There is no
+universal answer; UMASH is simply another point in the solution space.</p>
+
+<p>If reasonable performance coupled with an actual bound on collision
+probability <em>for data that does not adaptively break the hash</em> sounds
+useful to you,
+<a href="https://github.com/backtrace-labs/umash">take a look at UMASH on GitHub</a>!</p>
+
+<p>The <a href="#but-why">next section</a> will explain why we found it useful to
+design another hash function.  The rest of the post
+<a href="#umash-high-level">sketches how UMASH works</a> and
+<a href="#implementation-tricks">how it balances short-input latency and strength</a>,
+before <a href="#usage">describing a few interesting usage patterns.</a></p>
+
+<p><small>The latency and throughput results above were all measured on
+the same unloaded 2.5 GHz Xeon 8175M.  While we did not disable
+frequency scaling (#cloud), the clock rate seemed stable at 3.1
+GHz during our run.</small></p>
+
+<h2 id="how-did-we-even-get-here"><a id="but-why"></a>How did we even get here?</h2>
+
+<p>Engineering is the discipline of satisficisation: crisply defined
+problems with perfect solutions rarely exist in reality, so we must
+resign ourselves to satisfying approximate constraint sets “well
+enough.”  However, there are times when all options are not only
+imperfect, but downright sucky.  That’s when one has to put on a
+different hat, and question the problem itself: are our constraints
+irremediably at odds, or are we looking at an under-explored
+solution space?</p>
+
+<p>In the former case, we simply have to want something else.  In the
+latter, it might make sense to spend time to really understand the
+current set of options and hand-roll a specialised approach.</p>
+
+<p>That’s the choice we faced when we started caching intermediate
+results in
+<a href="https://help.backtrace.io/en/articles/2428859-web-console-overview">Backtrace’s database</a>
+and found a dearth of acceptable hash functions.  Our in-memory
+columnar database is a core component of the backend, and, like most
+analytics databases, it tends to process streams of similar queries.
+However, a naïve query cache would be ineffective: our more heavily
+loaded servers handle a constant write load of more than 100 events
+per second with dozens of indexed attributes (populated column values)
+each.  Moreover, queries invariably select a large number of data
+points with a time windowing predicate that excludes old data… and
+the endpoints of these time windows advance with each wall-clock
+second.  The queries evolve over time, and must usually consider newly
+ingested data points.</p>
+
+<p><a href="https://www.gsd.inesc-id.pt/~rodrigo/slider_middleware14.pdf">Bhatotia et al’s Slider</a>
+show how we can specialise the idea of
+<a href="http://adapton.org/">self-adjusting or incremental computation</a>
+for repeated MapReduce-style queries over a sliding window.
+The key idea is to split the data set at stable boundaries (e.g., on
+date change boundaries rather than 24 hours from the beginning of the
+current time window) in order to expose memoisation opportunities, and
+to do so recursively to repair around point mutations to older data.</p>
+
+<p>Caching fully aggregated partial results works well for static
+queries, like scheduled reports… but the first step towards creating
+a great report is interactive data exploration, and that’s an activity
+we strive to support well, even when drilling down tens of millions of
+rich data points.  That’s why we want to also cache intermediate
+results, in order to improve response times when tweaking a saved
+report, or when crafting ad hoc queries to better understand how and
+when an application fails.</p>
+
+<p>We must go back to a
+<a href="http://www.umut-acar.org/self-adjusting-computation">more general incremental computation strategy</a>:
+rather than only splitting up inputs, we want to stably partition the
+data dependency graph of each query, in order to identify shared
+subcomponents whose results can be reused.  This finer grained
+strategy surfaces opportunities to “resynchronise” computations, to
+recognize when different expressions end up generating a subset of
+identical results, enabling reuse in later steps.  For example, when
+someone updates a query by adding a selection predicate that only
+rejects a small fraction of the data, we can expect to reuse some of
+the post-selection work executed for earlier incarnations of the
+query, if we remember to key on the selected data points rather than
+the predicates.</p>
+
+<p>The complication here is that these intermediate results tend to be
+large.  Useful analytical queries start small (a reasonable query
+coupled with cache/transaction invalidation metadata to stand in for
+the full data set), grow larger as we select data points, arrange them
+in groups, and materialise their attributes, and shrink again at the
+end, as we summarise data and throw out less interesting groups.</p>
+
+<p>When caching the latter shrinking steps, where resynchronised reuse
+opportunities abound and can save a lot of CPU time, we often
+find that storing a fully materialised representation of the cache key
+would take up more space than the cached result.</p>
+
+<p>A classic approach in this situation is to fingerprint cache keys with
+a cryptographic hash function like
+<a href="https://en.wikipedia.org/wiki/BLAKE_(hash_function)">BLAKE</a>
+or <a href="https://en.wikipedia.org/wiki/SHA-3">SHA-3</a>, and store a
+compact (128 or 256 bits) fingerprint instead of the cache key: the
+probability of a collision is then so low that we might as well assume
+any false positive will have been caused by a bug in the code or a
+hardware failure.  For example,
+<a href="https://users.ece.cmu.edu/~omutlu/pub/memory-errors-at-facebook_dsn15.pdf#page=3">a study of memory errors at Facebook</a>
+found that uncorrectable memory errors affect 0.03% of servers each
+month.  Assuming a generous clock rate of 5 GHz, this means each
+clock cycle may be afflicted by such a memory error with probability
+\(\approx 2.2\cdot 10^{-20} &gt; 2^{-66}.\) If we can guarantee that
+distinct inputs collide with probability significantly less than
+\(2^{-66}\), e.g., \(&lt; 2^{-70},\) any collision is far
+more likely to have been caused by a bug in our code or by
+hardware failure than by the fingerprinting algorithm itself.</p>
+
+<p>Using cryptographic hashes is certainly safe enough, but requires a lot of
+CPU time, and, more importantly, worsens latency on smaller keys (for
+which caching may not be that beneficial, such that our goal should be
+to minimise overhead).  It’s not that state-of-the-art cryptographic
+hash functions are wasteful, but that they defend against attacks like key
+recovery or collision amplification that we may not care to consider
+in our design.</p>
+
+<p>At the other extreme of the hash spectrum, there is a plethora of fast
+hash functions with no proof of collision probability.  However, most
+of them are keyed on just a 64-bit “seed” integer, and that’s already
+<a href="https://arxiv.org/pdf/1503.03465.pdf#page=4">enough for a pigeonhole argument</a>
+to show we can construct sets of strings of length \(64m\) bits
+where any two members collide with probability at least \(m/
+2^{64}\). In practice, <a href="https://131002.net/siphash/#at">security researchers seem to find key-independent collisions wherever they look</a>
+(i.e., the collision probability is on the order of 1 for some
+particularly pathological sets of inputs), so it’s safe to assume that
+lacking a proof of collision probability implies a horrible worst
+case.  I personally wouldn’t put too much faith in “security claims”
+taking the form of failed attempts at breaking a proposal.</p>
+
+<p><a href="https://arxiv.org/abs/1503.03465">Lemire and Kaser’s CLHash</a> is one
+of the few exceptions we found: it achieves a high throughput of 22
+GB/s and comes with a proof of \(2^{-63}\)-almost-universality.
+However, its finalisation step is slow (23 ns for one-byte inputs), due
+to a <a href="https://en.wikipedia.org/wiki/Barrett_reduction">Barrett reduction</a>
+followed by
+<a href="https://github.com/lemire/clhash/blob/742f81a66c8e2ae7889d1bc4c4b4d8734bdcd5af/src/clhash.c#L243">three rounds of <code>xorshift</code>/multiply mixing</a>.
+<a href="https://eprint.iacr.org/2007/338">Dai and Krovetz’s VHASH</a>,
+which inspired CLHash, offers similar guarantees, with worse
+performance.</p>
+
+<p>Unfortunately, \(2^{-63}\) is also not quite good enough for our
+purposes: we estimate that the probability of uncorrectable memory
+errors is on the order of \(2^{-66}\) per clock cycle, so we want
+the collision probability for any two distinct inputs to be
+comfortably less than that, around \(2^{-70}\) (i.e., \(10^{-21}\)) or
+less.  This also tells us that any acceptable fingerprint must consist
+of more than 64 bits, so we will have to either work in slower
+multi-word domains, or combine independent hashes.</p>
+
+<p>Interestingly, we also don’t need much more than that for
+(non-adversarial) fingerprinting: at some point, the theoretical
+probability of a collision is dominated by the practical possibility of
+a hardware or networking issue making our program execute the
+fingerprinting function incorrectly, or pass the wrong data to
+that function.</p>
+
+<p>While CLHash and VHASH aren’t quite what we want, they’re pretty
+close, so we felt it made sense to come up with a specialised solution
+for our fingerprinting use case.</p>
+
+<p><a href="https://tools.ietf.org/html/rfc4418">Krovetz et al’s RFC 4418</a> brings
+an interesting idea: we can come up with a fast 64-bit hash function
+structured to make it easy to compute a second independent hash value,
+and concatenate two independent 64-bit outputs.  The hash function can
+heavily favour computational efficiency and let each 64-bit half
+collide with probability \(\varepsilon\) significantly worse than
+\(2^{-64}\), as long as the collision probability for the
+concatenated fingerprint, \(\varepsilon^2\), is small enough, i.e.,
+as long as
+\(\varepsilon^2 &lt; 2^{-70} \Longleftrightarrow \varepsilon &lt; 2^{-35}\).
+We get a more general purpose hash function out of the deal, and the
+fingerprint comparison logic is now free to only compute and look at
+half the fingerprint when it makes sense (e.g., in a prepass that
+tolerates spurious matches).</p>
+
+<h2 id="umash-at-a-high-level"><a id="umash-high-level"></a>UMASH, at a high level</h2>
+
+<p>The design of UMASH is driven by two observations:</p>
+
+<ol>
+  <li>
+    <p>CLHash achieves a high throughput, but introduces a lot of
+latency to finalise its 127-bit state into a 64 bits result.</p>
+  </li>
+  <li>
+    <p>We can get away with a significantly weaker hash, since we plan to
+combine two of them when we need a strong fingerprint.</p>
+  </li>
+</ol>
+
+<p>That’s why we started with the high-level structure diagrammed below,
+the same as
+<a href="https://web.cs.ucdavis.edu/~rogaway/papers/umac.html">UMAC</a>,
+<a href="https://eprint.iacr.org/2007/338">VHASH</a>, and
+<a href="https://arxiv.org/abs/1503.03465">CLHash</a>:
+a fast first-level block compression function based on
+<a href="https://dl.acm.org/doi/10.1109/TC.1968.227420">Winograd’s pseudo dot-product</a>,
+and a second-level <a href="https://link.springer.com/chapter/10.1007/3-540-55719-9_77">Carter-Wegman polynomial hash function</a>
+to accumulate the compressed outputs in a fixed-size state.</p>
+
+<iframe frameborder="0" style="width:100%;height:523px;" src="https://viewer.diagrams.net/?highlight=0000ff&amp;edit=_blank&amp;layers=1&amp;nav=1&amp;title=UMASH%20overview#R7VzLcqM4FP0aL5MCIR5ZxulMuxepTpWre5ZTipGNJgJRIGJ7vn4kA7ZB6jSpsgUN2SRwAQHnHMR94ZnzEO%2B%2BZiiNnliI6QxY4W7mfJkBEHie%2BCsN%2B9Lg%2BVZp2GQkLE32ybAk%2F%2BHKWO9WkBDnjR05Y5STtGlcsSTBK96woSxj2%2BZua0abZ03RBiuG5QpR1fo3CXlU3ZZrnewLTDZRfWbbqrbEqN65MuQRCtn2zOQ8zpyHjDFeLsW7B0wldjUu5XF%2F%2FWLr8cIynPAuBxTwpxMvof9j8f0nCZ4eg%2BTVugmqYd4QLao7rq6W72sIxDACbbEyF7eQSuOKskKMOt9GhONlilbSuBX8C1vEYyrWbLFYDY0zjne%2FvGj7CIWQEGYx5tle7FId4MMKvX0ti2p9eyLDrrUSnRFxV9lQxf%2FmOPQJIrFQofQBxODvActYkYRYDmIZAckOmiBBTwXJczQgedcCyVVA%2BpakBT%2FAlJFkIxbYWvyRA73suXjA2xgKNHgTKHEke8UPjLJMWBKWSEWuCaUtE6Jkk0iRCvSwsM8ltkQ80ffVhpiEoTyNlpkmdxcgB7gtcgKVnKPtnBxwLXKC4SvYgZrHHJhU8J0CEnC9G6lVKVnKVq%2Fjlax95zbZ0MwndyYVW0%2FwQ5KsYw9Nsrb6Lp%2BOZh0wNM2C4WkWwsFp1pmwZqE7NM0O0Ll1%2FcFpVvVup6NZNxiaZr3hada3OmhWF7VeT7O%2BgtIzEjpC8kichOMXrt%2F213oXrhpiKOifw16njyQeIcqjIzjdga7zN%2FFuI5N1t2WCDJT%2F5bASG%2BvW8eSyxA2IFShXSIZXnLDkQG8m8ZonjK%2Biy%2FEDbP%2B2ObVAW2UIuipD8FoMgQ7JsQkx5MDhMdTByZ4QQ9AfHkOqgz9lhjxreAx1cPonxJDvgKEx5HTwFE7%2Bkm3ExQVNbwrq6jJGo7Ia%2FTOQliklsuZQpPLgpPZxR1xsaOV3dMrVlRquplzYwYPqWblAU48xrFzViXlezGRJO04znOcyQkNiiht9iNZS7zEc6029n77L%2BxGajiGjb0b46bu8H6H1z5CaLJ0yQ2qE1j9DHRKoE2LIs9r%2Bf%2F8MqcnbKTOkRmj9MzTEnppWFwdwVJB0CW%2F3aiCpYax9LJsdPF5W8EOX2FgdXIWSWqR91SBcNWjuXbftTo7edeuqQezEdKtQ0rtuO0Rmxptr3KHpVg2OJqZbhZLeddshGjLeYNPqve1ft2pAMjHdKpT0rtsOEYjxJht7aLpVg4CJ6VahpHfdDr9yZvuqbM3WHzw1CHhmVF5xhHJZdghqEUeIvo35W532x2aa0pDRAoT3ofKZITfXaYEEetcvUFDy4M3LofSLaMxyflMkRNx0fuh2LEU9WgnDpstra1pPjU7BXodQrcS6%2Fr4WtIhopSLXlG1XEcr4LUoSxpFMNv4DzpigeC25pOgF02eWkyobmZU3O08ZkUw9vglE88s9F3Z78tDM60a%2FwfQ61MbGCLyuFcUs8B2CvDECr%2BukMAt8hyy8oTrJv0Wcfkvuz6sltlvXSpxAnkNuW2Akz%2Bm6F3It23OQ7t3sayg5foxwcU581bn8gzhZU5IuLvfEtL9l0vKj8zCvyM%2Bf4GJ29DCvFtn773iYP57ul1OI7WHrdwyAGtob%2FRUD%2F7M5q0GP124s0fifRmvi%2Fody3b3kXjSfgJkNXX011f1EdsIg5hbZ95lhGbaSF7of8cTS5EQjW6M5F79DqnuM3rvmWTDqvAeqo7gTqgUWxcmGyzTkoYOfoly%2BdaeRTvd%2Bn8vxLvPOFaunXyI7bDv7OTfn8X8%3D"></iframe>
+
+<p>The inner loop in this two-level strategy is the block compressor,
+which divides each 256-byte block \(m\) into 32 64-bit values
+\(m_i\), combines them with randomly generated parameters \(k_i\),
+and converts the resulting sequence of machine words to a 16-byte
+output.  The performance of that component will largely determine the
+hash function’s global peak throughput.  After playing around with
+<a href="https://web.cs.ucdavis.edu/~rogaway/umac/umac_thesis.pdf#page=41">the <code>NH</code> inner loop</a>,</p>
+
+<div>
+\[ \mathtt{NH}_k(m) = \sum_{i=0}^{|m| / 2 - 1} (m_{2i} + k_{2i} \bmod 2^{64})\cdot(m_{2i + 1} + k_{2i + 1} \bmod 2^{64})\mod 2^{128},\]
+</div>
+
+<p>we came to the
+<a href="https://arxiv.org/pdf/1503.03465.pdf#page=13">same conclusion as Lemire and Kaser</a>:
+the scalar operations, the outer 128-bit ones in particular, map to too
+many µops.  We thus focused on the
+<a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.105.9929&amp;rep=rep1&amp;type=pdf#page=3">same <code>PH</code> inner loop</a>
+as CLHash,</p>
+
+<div>
+\[ \mathtt{PH}_k(m) = \bigoplus_{i=0}^{|m| / 2 - 1} (m_{2i} \oplus k_{2i})\odot (m_{2i + 1} \oplus k_{2i + 1}).\]
+</div>
+
+<p>While the similarity to <code>NH</code> is striking, analysing <code>PH</code> is actually
+much simpler: we can see the <code>xor</code> and carry-less multiplications as
+working in the same ring of polynomials over \(\mathrm{GF}(2)\), unlike
+<code>NH</code>’s mixing of \(\bmod 2^{64}\) for the innermost additions with
+\(\bmod 2^{128}\) for the outer multiplications and sum.  In
+fact, as
+<a href="http://cr.yp.to/antiforgery/pema-20071022.pdf#page=6">Bernstein points out</a>,
+<code>PH</code> is a direct application of
+<a href="https://dl.acm.org/doi/10.1109/TC.1968.227420">Winograd’s pseudo dot-product</a>
+to compute a multiplicative vector hash in half the multiplications.</p>
+
+<p>CLHash uses an aggressively throughput-optimised block size of 1024
+bytes.  We found diminishing returns after 256 bytes, and stopped
+there.</p>
+
+<p>With modular or polynomial ring arithmetic, the collision probability
+is \(2^{-64}\) for any pair of blocks.  Given this fast compression
+function, the rest of the hashing algorithm must chop the input in
+blocks, accumulate compressed outputs in a constant-size state, and
+handle the potentially shorter final block while avoiding
+<a href="https://en.wikipedia.org/wiki/Length_extension_attack">length extension issues</a>.</p>
+
+<p>Both VHASH and CLHash accumulate compressed outputs in a
+polynomial string hash over a large field
+(\(\mathbb{Z}/M_{127}\mathbb{Z}\) for VHASH, and
+\(\mathrm{GF}(2^{127})\) with irreducible polynomial \(x^{127} + x + 1\)
+for CLHash): the collision probability for polynomial string hashes is
+inversely proportional to the field size and grows with the string
+length (number of compressed blocks), so working in fields much larger
+than \(2^{64}\) lets the <code>NH</code>/<code>PH</code> term dominate.</p>
+
+<p>Arithmetic in such large fields is slow, and reducing the 127-bit
+state to 64 bits is also not fast.  CLHash and VHASH make the
+situation worse by zero-padding the final block, and CLHash defends
+against length extension attacks with
+<a href="https://arxiv.org/pdf/1503.03465.pdf#page=10">a more complex mechanism</a>
+than <a href="https://eprint.iacr.org/2007/338">the one in VHASH</a>.</p>
+
+<p>Similarly to VHASH, UMASH uses a polynomial hash over the (much
+smaller) prime field \(\mathbb{F} = \mathbb{Z}/M_{61}\mathbb{Z},\)</p>
+
+<div>
+\[ CW_f(y) = \left(\sum_{j=0}^{d - 1} y_j \cdot f^{d - j}\right) \mod 2^{61} - 1, \]
+</div>
+
+<p>where \(f\in\mathbb{F}\) is the randomly chosen point at which we
+evaluate the polynomial, and \(y\), the polynomial’s coefficients, is
+the stream of 64-bit values obtained by splitting in half the <code>PH</code>
+output for each block.  This choice saves 20-30 cycles of latency in
+the final block, compared to CLHash: modular multiplications have
+lower latency than carry-less multiplications for judiciously picked
+machine-integer-sized moduli, and integer multiplications seem to mix
+better, so we need less work in the finaliser.</p>
+
+<p>Of course, UMASH sacrifices a lot of strength by working in
+\(\mathbb{F} =\, \bmod 2^{61} - 1:\) the resulting field is much
+smaller than \(2^{127}\), and we now have to update the polynomial
+twice for the same number of blocks.  This means the collision
+probability starts worse \((\approx 2^{-61}\) instead of \(\approx
+2^{-127})\), and grows twice as fast with the number of blocks
+\(n\) \((\approx 2n\cdot 2^{-61}\) instead of \(\approx n\cdot
+2^{-61})\).  But remember, we’re only aiming for collision
+probability \(&lt; 2^{-35}\) and each block represents 256 bytes of
+input data, so this is acceptable, assuming that multi-gigabyte inputs
+are out of scope.</p>
+
+<p>We protect against <a href="https://en.wikipedia.org/wiki/Length_extension_attack">length extension collisions</a>
+by <code>xor</code>ing (adding, in the polynomial ring) the original byte size of
+the final block to its compressed <code>PH</code> output.  This <code>xor</code> is simpler
+than CLHash’s finalisation step with a carry-less multiplication, but
+still sufficient: we can adapt
+<a href="http://krovetz.net/csus/papers/vmac.pdf#page=11">Krovetz’s proof for VHASH</a>
+by replacing <code>NH</code>’s almost-\(\Delta\)-universality with <code>PH</code>’s
+almost-XOR-universality.</p>
+
+<p>Having this protection means we can extend short final blocks however
+we want.  Rather than conceptually zero-padding our inputs (which adds
+complexity and thus latency on short inputs), we allow redundant
+reads.  We bifurcate inputs shorter than 16 bytes to a completely
+different latency-optimised code path, and let the final <code>PH</code>
+iteration read the last 16 bytes of the input, regardless of how
+redundant that might be.</p>
+
+<p>The
+<a href="https://github.com/backtrace-labs/umash/blob/master/umash_reference.py">semi-literate Python reference implementation</a>
+has the full code and includes more detailed analysis and rationale
+for the design decisions.</p>
+
+<h2 id="internal-implementation-tricks"><a id="implementation-tricks"></a>Internal implementation tricks</h2>
+
+<p>The previous section already showed how we let micro-optimisation
+inform the high-level structure of UMASH.  The use of <code>PH</code> over
+<code>NH</code>, our choice of a polynomial hash in a small modular field, and
+the way we handle short blocks all aim to improve the performance of
+production implementations.  We also made sure to enable a couple more
+implementation tricks with lower level design decisions.</p>
+
+<p>The block size is set to 256 bytes because we observed diminishing
+returns for larger blocks… but also because it’s reasonable to cache
+the <code>PH</code> loop’s parameters in 8 AVX registers, if we need to shave load
+µops.</p>
+
+<p>More importantly, it’s easy to implement a
+<a href="https://en.wikipedia.org/wiki/Horner%27s_method">Horner update</a>
+with the prime modulus \(2^{61} - 1\).  Better, that’s also true for a
+“double-pumped” Horner update, \(h^\prime = H_f(h, a, b) = af + (b +
+h)f^2.\)</p>
+
+<p>The trick is to work in \(\bmod 2^{64} - 8 = \bmod 8\cdot(2^{-61} -
+1),\) which lets us implement modular multiplication of an arbitrary
+64-bit integer \(a\) by a multiplier \(0 &lt; f &lt; 2^{61} - 1\)
+without worrying too much about overflow. \(2^{64} \equiv 8 \mod
+2^{64} - 8,\) so we can reduce a value \(x\) to a smaller
+representative with</p>
+
+<div>
+\[af = x \equiv 8\lfloor x / 2^{64}\rfloor + (x\bmod 2^{64}) \mod 2^{64} - 8;\]
+</div>
+
+<p>this equivalence is particularly useful when \(x &lt; 2^{125}\): in that
+case, \(x / 2^{64} &lt; 2^{61},\) and the intermediate product
+\(8\lfloor x / 2^{64}\rfloor &lt; 2^{64}\) never overflows 64 bits.
+That’s exactly what happens when \(x = af\) is the product of
+\(0\leq a &lt; 2^{64}\) and \(0 &lt; f &lt; 2^{61} - 1\).  This also
+holds when we square the multiplier \(f\): it’s sampled from the
+field \(\mathbb{Z}/(2^{61} - 1)\mathbb{Z},\) so its square also
+satisfies \(f^2 &lt; 2^{61}\) once fully reduced.</p>
+
+<p>Integer multiplication instructions for 64-bit values will naturally
+split the product \(x = af\) in its high and low 64-bit half; we get
+\(\lfloor x / 2^{64}\rfloor\) and \(x\bmod 2^{64}\) for free.  The
+rest of the double-pumped Horner update is a pair of modular
+additions, where only the final sum must be reduced to fit in \(\bmod
+2^{64} - 8\).  The resulting instruction-parallel double Horner
+update is only a few cycles slower than a single Horner update.</p>
+
+<p>We also never fully reduce to \(\bmod 2^{61} - 1\). While the
+collision bound assumes that prime field, we simply work in its \(\bmod
+2^{64} - 8\) extension.  This does not affect the collision bound,
+and the resulting expression is still amenable to algebraic
+manipulation: modular arithmetic is a well defined ring even for
+composite moduli.</p>
+
+<h2 id="smhasher-tricks">SMHasher tricks</h2>
+
+<p>A proof of almost-universality doesn’t mean a hash passes the SMHasher
+test suite.  It should definitely guarantee collisions are (probably)
+rare enough, but SMHasher also looks at bit avalanching and bias, and
+universality is oblivious to these issues.  Even XOR- or
+\(\Delta\)-universality doesn’t suffice: the hash values for a
+given string are well distributed when parameters are chosen
+uniformly at random, but this does not imply that hashes are always (or
+usually) well distributed for fixed parameters.</p>
+
+<p>The most stringent SMHasher tests focus on short inputs: mostly up to
+128 or 256 bits, unless “Extra” torture testing is enabled.  In a way,
+this makes sense, given that arbitrary-length string hashing is
+provably harder than the bounded-length vector case.  Moreover, a
+specialised code path for these inputs is beneficial, since they’re
+relatively common and deserve strong and low-latency hashes.  That’s
+why UMASH uses a completely different code path for inputs of at
+most 8 bytes, and a specialised <code>PH</code> iteration for inputs of 9 to 16
+bytes.</p>
+
+<p>However, this means that SMHasher’s best avalanche and
+bias tests often tell us very little about the general case.  For
+UMASH, the medium length (9 to 16 bytes) code path at least
+shares the same structure and finalisation logic as the code for
+longer inputs.</p>
+
+<p>There may also be a bit of co-evolution between the test harness and
+the design of hash functions: the sort of <code>xorshift</code>/multiply mixers
+favoured by Appleby in the various versions of MurmurHash tends to do
+well on SMHasher.  These mixers are also invertible, so we can take
+any hash function with good collision properties, mix its output with
+someone else’s series of <code>xorshift</code> and multiplications (in UMASH’s
+case, the
+<a href="http://prng.di.unimi.it/splitmix64.c">SplitMix64 update function</a>
+or a subset thereof), and usually find that the result satisfies
+SMHasher’s bias and avalanche tests.</p>
+
+<p>It definitely looks like interleaving rightward bitwise operations and
+integer multiplications is a good mixing strategy.  However, I find it
+interesting that the hash evaluation harness created by the author of
+MurmurHash steers implementations towards MurmurHash-syle mixing code.</p>
+
+<h2 id="fun-things-to-do-with-umash"><a id="usage"></a>Fun things to do with UMASH</h2>
+
+<p>The structure of UMASH lets us support more sophisticated usage
+patterns than merely hashing or fingerprinting an array of bytes.</p>
+
+<p>The <code>PH</code> loop needs less than 17 bytes of state for its 16-byte
+accumulator and an iteration count, and the polynomial hash also needs
+17 bytes, for its own 8-byte accumulator, the 8-byte “seed,” and a
+counter for the final block size (up to 256 bytes).  The total comes up to
+34 bytes of state, plus a 16-byte input buffer, since the <code>PH</code> loop
+consumes 16-byte chunks at a time.  Coupled with the way we only
+consider the input size at the end of UMASH, this makes it easy to
+implement incremental hashing.</p>
+
+<p>In fact, the state is small enough that our implementation stashes some
+parameter data inline in the state struct, and uses the same
+layout for hashing and fingerprinting with a pair of hashes (and thus
+double the state): most of the work happens in <code>PH</code>, which only
+accesses the constant parameter array, the shared input buffer and iteration
+counter, and its private 16-byte accumulator.</p>
+
+<p>Incremental fingerprinting is a crucial capability for our caching
+system: cache keys may be large, so we want to avoid serialising them
+to an array of contiguous bytes just to compute a fingerprint.
+Efficient incrementality also means we can hash NUL-terminated C
+strings with a fused UMASH / <code>strlen</code> loop, a nice speed-up when the
+data is in cache.</p>
+
+<p>The outer polynomial hash in UMASH is so simple to analyse that we
+can easily process blocks out of order.  In my experience, such a
+“parallel hashing” capability is more important than peak
+throughput when checksumming large amounts of data coming over the
+wire.  We usually maximise transfer throughput by asking for several
+ranges of data in parallel.  Having to checksum these ranges in
+order introduces a serial bottleneck and the usual head-of-line
+blocking challenges; more importantly, checksumming in order adds
+complexity to code that should be as obviously correct as possible.
+The polynomial hash lets us hash an arbitrary subsequence of 256-byte
+aligned blocks and use modular exponentiation to figure out its impact
+on the final hash value, given the subsequence’s position in the
+checksummed data.  Parallel hashing can exploit multiple cores (more
+cores, more bandwidth!) with simpler code.</p>
+
+<p>The <a href="https://tools.ietf.org/html/rfc4418">UMAC RFC</a> uses a Toeplitz
+extension scheme to compute independent <code>NH</code> values while recycling
+most of the parameters.  We do the same with <code>PH</code>, by adapting
+<a href="https://web.cs.ucdavis.edu/~rogaway/umac/umac_thesis.pdf#page=51">Krovetz’s proof</a>
+to exploit <code>PH</code>’s almost-XOR-universality instead of <code>NH</code>’s
+almost-\(\Delta\)-universality.  Our fingerprinting code reuses all
+but the first 32 bytes of <code>PH</code> parameters for the second hash: that’s
+the size of an AVX register, which makes is trivial to avoid loading
+parameters twice in a fused <code>PH</code> loop.</p>
+
+<p>The same RFC also points out that concatenating the output of fast
+hashes lets validation code decide which speed-security trade-off
+makes sense for each situation: some applications may be willing to
+only compute and compare half the hashes.</p>
+
+<p>We use that freedom when reading from large hash tables keyed on
+the UMASH fingerprint of strings.  We compute a single UMASH
+hash value to probe the hash tables, and only hash the second half
+of the fingerprint when we find a probable hit.  The idea is that
+hashing the search key (now hot in cache) a second time will be faster
+than comparing it against the hash entry’s string key in cold storage.</p>
+
+<p>When we add this sort of trickery to our code base, it’s important to
+make sure the interfaces are hard to misuse.  For example, it would be
+unfortunate if only one half of the 128-bit fingerprint were well
+distributed and protected against collisions: this would make it far
+too easy to implement the two-step lookup-by-fingerprint above
+<em>correctly but inefficiently</em>.  That’s why we maximise the symmetry in
+the fingerprint: the two 64-bit halves are computed with the same
+algorithm to guarantee the same worst-case collision probability and
+distribution quality.  This choice leaves fingerprinting throughput on
+the table when a weaker secondary hash would suffice.  However, I
+prefer a safer if slightly slower interface to one ripe for silent
+performance bugs.</p>
+
+<h2 id="caveat-programmator">Caveat programmator</h2>
+
+<p>While we intend for UMASH to become our default hash and fingerprint
+function, it can’t be the right choice for every application.</p>
+
+<p>First, it shouldn’t be used for authentication or similar
+cryptographic purposes: the implementation is probably riddled with
+side-channels, the function has no protection against parameter
+extraction or adaptive attacks, and collisions are too frequent
+anyway.</p>
+
+<p>Obviously, this rules out using UMASH in a
+<a href="https://en.wikipedia.org/wiki/Message_authentication_code">MAC</a>, but
+might also be an issue for, e.g., hash tables where attackers control
+the keys and can extrapolate the hash values.  A timing side-channel
+may let attackers determine when keys collide; once a set of colliding
+keys is known, the linear structure of UMASH makes it trivial to
+create more collisions by combining keys from that set.  Worse,
+iterating over the hash table’s entries can leak the hash values,
+which would let an attacker slowly extract the parameters.  We
+conservatively avoid non-cryptographic hashes and even hashed data
+structures for sections of the <a href="https://backtrace.io">Backtrace</a> code
+base where such attacks are in scope.</p>
+
+<p>Second, the performance numbers reported by
+<a href="https://github.com/rurban/smhasher">SMHasher</a> (up to 22 ns when
+hashing 64 bytes or less, and 22 GB/s peak throughput) are probably a
+lie for real applications, even when running on the exact same 2.5 GHz
+Xeon 8175M hardware.  These are best-case values, when the code and
+the parameters are all hot in cache… and that’s a fair amount of
+bytes for UMASH.  The instruction footprint for a 64-bit hash is 1435
+bytes (comparable to heavier high-throughput hashes, like the
+1600-byte <a href="https://github.com/Cyan4973/xxHash">xxh3_64</a> or 1350-byte
+<a href="https://github.com/google/farmhash">farmhash64</a>), and the parameters
+span 288 bytes (320 for a fingerprint).</p>
+
+<p>There is a saving grace for UMASH and other complex hash functions:
+the amount of bytes executed is proportional to the input size (e.g.,
+the code for 8 or fewer byte only needs 141 bytes, and would inline to
+around 100 bytes), and the number of parameters read is bounded by the
+input length.  Although UMASH can need a lot of instruction and
+parameter bytes, the worst case only happens for larger inputs, where
+the cache misses can hopefully be absorbed by the work of loading and
+hashing the data.</p>
+
+<p>The numbers are also only representative of powerful CPUs with
+carry-less multiplication in hardware.  The <code>PH</code> inner loop has 50%
+higher throughput than <code>NH</code> (22 vs 14 GB/s) on contemporary Intel
+servers.  The carry-less approach still has an edge over 128-bit
+modular arithmetic on <a href="https://en.wikichip.org/wiki/amd/cores/naples">AMD’s Naples</a>,
+but less so, around 20-30%. We did not test on ARM (the
+<a href="https://help.backtrace.io/en/articles/2428859-web-console-overview">Backtrace database</a>
+only runs on x86-64), but I would assume the situation there is closer
+to AMD’s than Intel’s.</p>
+
+<p>However, I also believe we’re more likely to observe improved
+performance for <code>PH</code> than <code>NH</code> in future micro-architectures: the core
+of <code>NH</code>, full-width integer multiplication, has been aggressively
+optimised by now, while the gap between Intel and AMD shows there
+may still be low-hanging fruits for the carry-less multiplications
+at the heart of <code>PH</code>.  So, <code>NH</code> is probably already as good as
+it’s going to be, but we can hope that <code>PH</code> will continue to benefit from
+hardware optimisations, as chip designers improve the performance of
+cryptographic algorithms like
+<a href="https://en.wikipedia.org/wiki/Galois/Counter_Mode">AES-GCM</a>.</p>
+
+<p>Third and last, UMASH isn’t fully stabilised yet.  We do not plan to
+modify the high level structure of UMASH, a <code>PH</code> block compressor
+that feeds into a polynomial string hash.  However, we are looking for
+suggestions to improve its latency on short inputs, and to simplify
+the finaliser while satisfying SMHasher’s distribution tests.</p>
+
+<h2 id="help-us-improve-umash">Help us improve UMASH</h2>
+
+<p>We believe UMASH is ready for non-persistent usage: we’re confident in
+its quality, but the algorithm isn’t set in stone yet, so hash or
+fingerprint values should not reach long-term storage.  We do not
+plan to change anything that will affect the proof of collision
+bound, but improvements to the rest of the code are more than
+welcome.</p>
+
+<p>In particular:</p>
+
+<ol>
+  <li>The short (8 or fewer bytes) input code can hopefully be simpler.</li>
+  <li>The medium-length (9-15 bytes) input code path is a micro-optimised
+version of the general case, but does not actually share any machine
+code; can we improve the latency and maintain the collision bound
+by replacing it with something completely different?</li>
+  <li>It’s already nice that we can get away with a single round of
+<code>xorshift</code> / multiply in the finaliser, but can we shave even
+more latency there?</li>
+  <li>We only looked at straightforward x86-64 implementations; we will
+consider tweaks that improve performance on x86-64, or on
+other platforms without penalising x86-64.</li>
+  <li>We currently only use incremental and one-shot hashing interfaces.
+If someone needs parallel hashing, we can collaborate to find out
+what that interface could look like.</li>
+</ol>
+
+<p>A hash function is a perfect target for automated correctness and
+performance testing.  I hope to use UMASH as a test bed for the
+automatic evaluation (and approval?!) of pull requests.</p>
+
+<p>Of course, you’re also welcome to just use
+<a href="https://github.com/backtrace-labs/umash/blob/master/umash.c">UMASH as a single-file C library</a>
+or re-implement it to fit your requirements.
+<a href="https://github.com/backtrace-labs/umash">The MIT-licensed C code is on GitHub</a>,
+and we can definitely discuss validation strategies for alternative
+implementations.</p>
+
+<p>Finally, our fingerprinting use case shows collision rates are
+probably not something to minimise, but closer to soft constraints.
+We estimate that, once the probability reaches \(2^{-70}\),
+collisions are rare enough to only compare fingerprints instead of the
+fingerprinted values.  However, going lower than \(2^{-70}\)
+doesn’t do anything for us.</p>
+
+<p>It would be useful to document other back-of-the-envelope requirements
+for a hash function’s output size or collision rate.  Now that most
+developers work on powerful 64-bit machines, it seems far too easy to
+add complexity and waste resources for improved collision bounds that
+may not unlock any additional application.</p>
+
+<h2 id="acknowledgements">Acknowledgements</h2>
+
+<p>Any error in the analysis or the code is mine, but a few people
+helped improve UMASH and its presentation.</p>
+
+<p><a href="https://www.daemonology.net/blog/">Colin Percival</a> scanned an earlier
+version of the reference implementation for obvious issues, encouraged
+me to simplify the parameter generation process, and prodded us to
+think about side channels, even in data structures.</p>
+
+<p>Joonas Pihlaja helped streamline my initial attempt while making the
+reference implementation easier to understand.</p>
+
+<p><a href="https://github.com/jshufro">Jacob Shufro</a> independently confirmed
+that he too found the reference implementation understandable, and
+tightened the natural language.</p>
+
+<p>Phil Vachon helped me gain more confidence in the implementation
+tricks borrowed from VHASH after replacing the <code>NH</code> compression
+function with <code>PH</code>.</p>
+]]></content>
+  </entry>
+  
+  <entry>
     <title type="html"><![CDATA[Flatter wait-free hazard pointers]]></title>
     <link href="https://www.pvk.ca/Blog/2020/07/07/flatter-wait-free-hazard-pointers/"/>
     <updated>2020-07-07T14:30:26-04:00</updated>
@@ -21,14 +763,14 @@
     <content type="html"><![CDATA[<p><small>2020-07-09: we can fix <a href="#hp_read_swf-relaxed">time-travel in <code>hp_read_swf</code></a> without changing the fast path. See <a href="#addendum-2020-07-09">the addendum</a>.</small></p>
 
 <p>Back in February 2020, Blelloch and Wei submitted this cool preprint: <a href="https://arxiv.org/abs/2002.07053">Concurrent Reference Counting and Resource Management in Wait-free Constant Time</a>.
-Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also"><a href="#fn:but-also" class="footnote">1</a></sup>
-<a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">Safe memory reclamation (PDF)</a> is a key component in lock-free algorithms when garbage collection isn’t an option,<sup id="fnref:it-is-gc"><a href="#fn:it-is-gc" class="footnote">2</a></sup>
+Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also" role="doc-noteref"><a href="#fn:but-also" class="footnote">1</a></sup>
+<a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">Safe memory reclamation (PDF)</a> is a key component in lock-free algorithms when garbage collection isn’t an option,<sup id="fnref:it-is-gc" role="doc-noteref"><a href="#fn:it-is-gc" class="footnote">2</a></sup>
 and <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">hazard pointers (PDF)</a> let us bound the amount of resources stranded by delayed cleanups much more tightly than, e.g., <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf">epoch reclamation (PDF)</a>.
 However the usual implementation has a <em>loop</em> in its <a href="https://www.iecc.com/gclist/GC-algorithms.html">read barriers (in the garbage collection sense)</a>,
 which can be annoying for code generation and bad for worst-case time bounds.</p>
 
 <p>Blelloch and Wei’s wait-free algorithm eliminates that loop… with a construction that stacks <a href="https://arxiv.org/abs/1911.09671">two emulated primitives—strong LL/SC, and atomic copy, implemented with the former—</a>on top of what real hardware offers.
-I see the real value of the construction in proving that wait-freedom is achievable,<sup id="fnref:not-obvious"><a href="#fn:not-obvious" class="footnote">3</a></sup>
+I see the real value of the construction in proving that wait-freedom is achievable,<sup id="fnref:not-obvious" role="doc-noteref"><a href="#fn:not-obvious" class="footnote">3</a></sup>
 and that the key is atomic memory-memory copies.</p>
 
 <p>In this post, I’ll show how to flatten down that abstraction tower into something practical with a bit of engineering elbow grease,
@@ -55,22 +797,22 @@ The introduction includes a concise explanation of the safe memory reclamation (
 once all links to these resources have been removed from that data structure (<a href="http://concurrencykit.org/presentations/ebr.pdf#page=8">after “logical deletion”</a>).
 The problem makes intuitive sense for dynamically managed memory,
 but it applies equally well to any resource (e.g., file descriptors),
-and its solutions can even be seen as extremely read-optimised reader/writer locks.<sup id="fnref:RCU"><a href="#fn:RCU" class="footnote">4</a></sup></p>
+and its solutions can even be seen as extremely read-optimised reader/writer locks.<sup id="fnref:RCU" role="doc-noteref"><a href="#fn:RCU" class="footnote">4</a></sup></p>
 
 <p>The basic idea behind Hazard Pointers is to have
-each thread publish to permanently allocated<sup id="fnref:stable-alloc"><a href="#fn:stable-alloc" class="footnote">5</a></sup> hazard pointer records (HP records) the set of resources (pointers) it’s temporarily borrowing from a lock-free data structure.
+each thread publish to permanently allocated<sup id="fnref:stable-alloc" role="doc-noteref"><a href="#fn:stable-alloc" class="footnote">5</a></sup> hazard pointer records (HP records) the set of resources (pointers) it’s temporarily borrowing from a lock-free data structure.
 That’s enough information for a background thread to snapshot the current list of resources that have been logically deleted but not yet physically released (the limbo list),
 scan all records for all threads,
 and physically release all resources in the snapshot that aren’t in any HP record.</p>
 
 <p>With just enough batching of the limbo list, this scheme can be practical:
 in practice, lock-free algorithms only need to pin a few (usually one or two) nodes at a time to ensure memory safety.  As long as we avoid running arbitrary code while holding hazardous references, we can bound the number of records each thread may need at any one time.
-Scanning the records thus takes time roughly linear in the number of active threads, and we can amortise that to constant time per deleted item by waiting until the size of the limbo list is greater than a multiple of the number of active threads.<sup id="fnref:even-with-pinned-nodes"><a href="#fn:even-with-pinned-nodes" class="footnote">6</a></sup></p>
+Scanning the records thus takes time roughly linear in the number of active threads, and we can amortise that to constant time per deleted item by waiting until the size of the limbo list is greater than a multiple of the number of active threads.<sup id="fnref:even-with-pinned-nodes" role="doc-noteref"><a href="#fn:even-with-pinned-nodes" class="footnote">6</a></sup></p>
 
 <p>The tricky bit is figuring out how to reliably publish to a HP record without locking.
 Hazard pointers simplify that challenge with three observations:</p>
 <ol>
-  <li>It’s OK to have arbitrary garbage in a record (let’s disregard language-level<sup id="fnref:or-hw-level"><a href="#fn:or-hw-level" class="footnote">7</a></sup> undefined behaviour), since protected values are only ever subtracted from the limbo list: a garbage record simply doesn’t protect anything.</li>
+  <li>It’s OK to have arbitrary garbage in a record (let’s disregard language-level<sup id="fnref:or-hw-level" role="doc-noteref"><a href="#fn:or-hw-level" class="footnote">7</a></sup> undefined behaviour), since protected values are only ever subtracted from the limbo list: a garbage record simply doesn’t protect anything.</li>
   <li>It’s also OK to leave a false positive in a record: correctness arguments for hazard pointers already assume each record keeps a different node (resource) alive, and that’s the worst case.</li>
   <li>1 and 2 mean it doesn’t matter what pinned value we read in a record whose last update was started after we snapshotted the limbo list: resources in the limbo list are unreachable, so freshly pinned resources can’t refer to anything in the snapshot.</li>
 </ol>
@@ -78,7 +820,7 @@ Hazard pointers simplify that challenge with three observations:</p>
 <p>This is where the clever bit of hazard pointers comes in:
 we must make sure that any resource (pointer to a node, etc.) we borrow from a lock-free data structure is immediately protected by a HP record.
 We can’t make two things happen atomically without locking.
-Instead, we’ll <em>guess</em><sup id="fnref:guessing-is-fine"><a href="#fn:guessing-is-fine" class="footnote">8</a></sup> what resource we will borrow,
+Instead, we’ll <em>guess</em><sup id="fnref:guessing-is-fine" role="doc-noteref"><a href="#fn:guessing-is-fine" class="footnote">8</a></sup> what resource we will borrow,
 publish that guess,
 and then actually borrow the resource.
 If we guessed correctly, we can immediately use the borrowed resource;
@@ -106,7 +848,7 @@ record that will protect the value borrowed from <code>cell</code>.</p>
 </span><span class="line">            <span class="k">return</span> <span class="n">guess</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>In practice, we must make sure that our write to <code>record.pin</code> is visible before re-reading the <code>cell</code>’s value, and we should also make sure the pointer read is ordered with respect to the rest of the calling read-side code.<sup id="fnref:beware-accidental-success"><a href="#fn:beware-accidental-success" class="footnote">9</a></sup></p>
+<p>In practice, we must make sure that our write to <code>record.pin</code> is visible before re-reading the <code>cell</code>’s value, and we should also make sure the pointer read is ordered with respect to the rest of the calling read-side code.<sup id="fnref:beware-accidental-success" role="doc-noteref"><a href="#fn:beware-accidental-success" class="footnote">9</a></sup></p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_explicit.py </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -171,7 +913,7 @@ resource only enters the limbo list once <em>all</em> its persistent
 references have been cleared (in particular, this means circular
 backreferences must be broken before scheduling a node for
 destruction), so any newly pinned value cannot refer to any resource
-awaiting destruction in the limbo list.<sup id="fnref:DEBRA-plus"><a href="#fn:DEBRA-plus" class="footnote">10</a></sup></p>
+awaiting destruction in the limbo list.<sup id="fnref:DEBRA-plus" role="doc-noteref"><a href="#fn:DEBRA-plus" class="footnote">10</a></sup></p>
 
 <p>The following sequence diagrams shows how the fencing guarantees that any
 iteration of <code>hp_read_explicit</code> will fail if it starts before <code>C1</code>
@@ -184,7 +926,7 @@ when it reads the record in <code>C2</code>.</p>
     <img src="/images/2020-07-07-flatter-wait-free-hazard-pointers/fenced-hp.png" />
 </a></p>
 
-<p>This all works, but it’s slow:<sup id="fnref:travis-says-its-fine"><a href="#fn:travis-says-its-fine" class="footnote">11</a></sup> we added an <em>atomic</em> write instruction (or worse, a fence) to a read-only operation.  We can do better with a little help from our operating system.</p>
+<p>This all works, but it’s slow:<sup id="fnref:travis-says-its-fine" role="doc-noteref"><a href="#fn:travis-says-its-fine" class="footnote">11</a></sup> we added an <em>atomic</em> write instruction (or worse, a fence) to a read-only operation.  We can do better with a little help from our operating system.</p>
 
 <h2 id="injecting-fences-with-os-support">Injecting fences with OS support</h2>
 
@@ -213,7 +955,7 @@ Windows has <a href="https://docs.microsoft.com/en-us/windows/win32/api/processt
 on other operating systems, we can probably <a href="https://github.com/pkhuong/barrierd">do something useful with scheduler statistics</a> or ask for a new syscall.</p>
 
 <p>Armed with these new blocking system calls, we can replace the store-load fence in <code>R1</code> with a compiler barrier, and execute a slow <code>membarrier</code>/<code>FlushProcessWriteBuffers</code> after <code>C1</code>.
-The cleanup function will then wait long enough<sup id="fnref:arguably-lock-ful"><a href="#fn:arguably-lock-ful" class="footnote">12</a></sup> to ensure that any
+The cleanup function will then wait long enough<sup id="fnref:arguably-lock-ful" role="doc-noteref"><a href="#fn:arguably-lock-ful" class="footnote">12</a></sup> to ensure that any
 read-side operation that had executed before <code>R1</code> at the time we read the limbo list in <code>C1</code> will be visible (e.g., because the operating system knows a preemption interrupt executed at least once on each core).</p>
 
 <p>The pseudocode for this asymmetric strategy follows.</p>
@@ -751,7 +1493,7 @@ pointers without crashing.  One might think mutual exclusion in the
 cleanup function fixes that, but programs often mix and match
 different reclamation schemes, as well as lock-free and lock-ful code.
 On Linux, we could
-abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;<sup id="fnref:no-guarantees"><a href="#fn:no-guarantees" class="footnote">13</a></sup>
+abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;<sup id="fnref:no-guarantees" role="doc-noteref"><a href="#fn:no-guarantees" class="footnote">13</a></sup>
 in general I suppose we could install signal handlers to catch <code>SIGSEGV</code> and <code>SIGBUS</code>.</p>
 
 <div id="hp_read_swf-relaxed"></div>
@@ -772,7 +1514,7 @@ the hazard pointer implementation is technically correct.  However,
 this scenario shows that <code>hp_read_swf</code> can violate memory ordering and
 causality, and even let long-overwritten values time travel into the future.  The
 simpler read-side code sequence comes at a cost: its load is extremely
-relaxed, much more so than any intuitive mental model might allow.<sup id="fnref:hybrid-swf"><a href="#fn:hybrid-swf" class="footnote">14</a></sup></p>
+relaxed, much more so than any intuitive mental model might allow.<sup id="fnref:hybrid-swf" role="doc-noteref"><a href="#fn:hybrid-swf" class="footnote">14</a></sup></p>
 
 <p>EDIT 2020-07-09: However, see <a href="#addendum-2020-07-09">this addendum</a> for a way to fix that race
 without affecting the fast (read) path.</p>
@@ -988,7 +1730,7 @@ from realistic (if I found an inner loop that <em>only</em> traversed a
 singly linked list, I’d consider a different data structure), but helps
 establish an upper bound on the overhead from different hazard pointer
 read sides.  I would usually show a faceted graph of the latency
-distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen"><a href="#fn:did-not-randomize-codegen" class="footnote">15</a></sup>
+distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen" role="doc-noteref"><a href="#fn:did-not-randomize-codegen" class="footnote">15</a></sup>
 that I doubt there’s any additional information to be found in the graphs,
 compared to the tables below.</p>
 
@@ -1263,52 +2005,52 @@ latency from 4 membarriers to 3, and that’s not negligible when each
 <code>membarrier</code> can block for 30ms.</p>
 
 <p><hr style="width: 50%" /></p>
-<div class="footnotes">
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:but-also">
-      <p>I also tend to read anything by <a href="https://dblp.uni-trier.de/pers/b/Blelloch:Guy_E=.html">Guy Blelloch</a>. <a href="#fnref:but-also" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:but-also" role="doc-endnote">
+      <p>I also tend to read anything by <a href="https://dblp.uni-trier.de/pers/b/Blelloch:Guy_E=.html">Guy Blelloch</a>. <a href="#fnref:but-also" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:it-is-gc">
-      <p>In fact, I’ve often argued that SMR <em>is</em> garbage collection, just not fully tracing GC.  Hazard pointers in particular look a lot like deferred reference counting, <a href="https://web.eecs.umich.edu/~weimerw/2012-4610/reading/bacon-garbage.pdf">a form of tracing GC</a>. <a href="#fnref:it-is-gc" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:it-is-gc" role="doc-endnote">
+      <p>In fact, I’ve often argued that SMR <em>is</em> garbage collection, just not fully tracing GC.  Hazard pointers in particular look a lot like deferred reference counting, <a href="https://web.eecs.umich.edu/~weimerw/2012-4610/reading/bacon-garbage.pdf">a form of tracing GC</a>. <a href="#fnref:it-is-gc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:not-obvious">
-      <p>Something that wasn’t necessarily obvious until then. See, for example, <a href="https://arxiv.org/abs/2001.01999">this article presented at PPoPP 2020</a>, which conjectures that “making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;” Blelloch was in attendance, so this must have been a fun session. <a href="#fnref:not-obvious" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:not-obvious" role="doc-endnote">
+      <p>Something that wasn’t necessarily obvious until then. See, for example, <a href="https://arxiv.org/abs/2001.01999">this article presented at PPoPP 2020</a>, which conjectures that “making the original Hazard Pointers scheme or epoch-based reclamation completely wait-free seems infeasible;” Blelloch was in attendance, so this must have been a fun session. <a href="#fnref:not-obvious" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:RCU">
-      <p>The SMR problem is essentially the same problem as determining when it’s safe to return from <code>rcu_synchronize</code> or execute a <code>rcu_call</code> callback.  Hence, the same <a href="https://www.usenix.org/legacy/publications/library/proceedings/usenix03/tech/freenix03/full_papers/arcangeli/arcangeli.pdf#page=5">reader-writer lock analogy</a> holds. <a href="#fnref:RCU" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:RCU" role="doc-endnote">
+      <p>The SMR problem is essentially the same problem as determining when it’s safe to return from <code>rcu_synchronize</code> or execute a <code>rcu_call</code> callback.  Hence, the same <a href="https://www.usenix.org/legacy/publications/library/proceedings/usenix03/tech/freenix03/full_papers/arcangeli/arcangeli.pdf#page=5">reader-writer lock analogy</a> holds. <a href="#fnref:RCU" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:stable-alloc">
-      <p>Hazard pointer records must still be managed separately, e.g., with a type stable allocator, but we can bootstrap everything else once we have a few records per thread. <a href="#fnref:stable-alloc" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:stable-alloc" role="doc-endnote">
+      <p>Hazard pointer records must still be managed separately, e.g., with a type stable allocator, but we can bootstrap everything else once we have a few records per thread. <a href="#fnref:stable-alloc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:even-with-pinned-nodes">
-      <p>We can even do that without keeping track of the number of nodes that were previously pinned by hazard pointer records and kept in the limbo list: each record can only pin at most one node, so we can wait until the limbo list is, e.g., twice the size of the record set. <a href="#fnref:even-with-pinned-nodes" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:even-with-pinned-nodes" role="doc-endnote">
+      <p>We can even do that without keeping track of the number of nodes that were previously pinned by hazard pointer records and kept in the limbo list: each record can only pin at most one node, so we can wait until the limbo list is, e.g., twice the size of the record set. <a href="#fnref:even-with-pinned-nodes" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:or-hw-level">
-      <p>Let’s also hope efforts like <a href="https://www.cl.cam.ac.uk/research/security/ctsrd/cheri/">CHERI</a> don’t have to break lock-free code. <a href="#fnref:or-hw-level" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:or-hw-level" role="doc-endnote">
+      <p>Let’s also hope efforts like <a href="https://www.cl.cam.ac.uk/research/security/ctsrd/cheri/">CHERI</a> don’t have to break lock-free code. <a href="#fnref:or-hw-level" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:guessing-is-fine">
-      <p>The scheme is correct with any actual guess; we could even use a random number generator. However, performance is ideal (the loop exits) when we “guess” by reading current value of the pointer we want to borrow safely. <a href="#fnref:guessing-is-fine" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:guessing-is-fine" role="doc-endnote">
+      <p>The scheme is correct with any actual guess; we could even use a random number generator. However, performance is ideal (the loop exits) when we “guess” by reading current value of the pointer we want to borrow safely. <a href="#fnref:guessing-is-fine" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:beware-accidental-success">
-      <p>I tend to implement lock-free algorithms with a heavy dose of inline assembly, or <a href="http://concurrencykit.org/">Concurrency Kit</a>’s wrappers: it’s far too easy to run into subtle undefined behaviour.  For example, comparing a pointer after it has been freed is UB in C and C++, even if we don’t access the pointee.  Even if we compare as <code>uintptr_t</code>, it’s apparently debatable whether the code is well defined when the comparison happens to succeed because the pointee was freed, then recycled in an allocation and published to <code>cell</code> again. <a href="#fnref:beware-accidental-success" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:beware-accidental-success" role="doc-endnote">
+      <p>I tend to implement lock-free algorithms with a heavy dose of inline assembly, or <a href="http://concurrencykit.org/">Concurrency Kit</a>’s wrappers: it’s far too easy to run into subtle undefined behaviour.  For example, comparing a pointer after it has been freed is UB in C and C++, even if we don’t access the pointee.  Even if we compare as <code>uintptr_t</code>, it’s apparently debatable whether the code is well defined when the comparison happens to succeed because the pointee was freed, then recycled in an allocation and published to <code>cell</code> again. <a href="#fnref:beware-accidental-success" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:DEBRA-plus">
-      <p>In <a href="http://www.cs.utoronto.ca/~tabrown/debra/fullpaper.pdf">Reclaiming Memory for Lock-Free Data Structures: There has to be a Better Way</a>, Trevor Brown argues this requirement is a serious flaw in all hazard pointer schemes.  I think it mostly means applications should be careful to coarsen the definition of resource in order to ensure the resulting condensed heap graph is a DAG.  In extreme cases, we end up proxy collecting an epoch, but we can usually do much better. <a href="#fnref:DEBRA-plus" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:DEBRA-plus" role="doc-endnote">
+      <p>In <a href="http://www.cs.utoronto.ca/~tabrown/debra/fullpaper.pdf">Reclaiming Memory for Lock-Free Data Structures: There has to be a Better Way</a>, Trevor Brown argues this requirement is a serious flaw in all hazard pointer schemes.  I think it mostly means applications should be careful to coarsen the definition of resource in order to ensure the resulting condensed heap graph is a DAG.  In extreme cases, we end up proxy collecting an epoch, but we can usually do much better. <a href="#fnref:DEBRA-plus" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:travis-says-its-fine">
-      <p>That’s what <a href="https://travisdowns.github.io/blog/2020/07/06/concurrency-costs.html">Travis Downs classifies as a Level 1 concurrency cost</a>, which is usually fine for writes, but adds a sizable overhead to simple read-only code. <a href="#fnref:travis-says-its-fine" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:travis-says-its-fine" role="doc-endnote">
+      <p>That’s what <a href="https://travisdowns.github.io/blog/2020/07/06/concurrency-costs.html">Travis Downs classifies as a Level 1 concurrency cost</a>, which is usually fine for writes, but adds a sizable overhead to simple read-only code. <a href="#fnref:travis-says-its-fine" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:arguably-lock-ful">
-      <p>I suppose this means the reclamation path isn’t wait-free, or even lock-free, anymore, in the strict sense of the words. In practice, we’re simply waiting for periodic events that would occur regardless of the syscalls we issue.  People who really know what they’re doing might have fully isolated cores.  If they do, they most likely have a watchdog on their isolated and latency-sensitive tasks, so we can still rely on running some code periodically, potentially after some instrumentation: if an isolated task fails to check in for a short while, the whole box will probably be presumed wedged and taken offline. <a href="#fnref:arguably-lock-ful" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:arguably-lock-ful" role="doc-endnote">
+      <p>I suppose this means the reclamation path isn’t wait-free, or even lock-free, anymore, in the strict sense of the words. In practice, we’re simply waiting for periodic events that would occur regardless of the syscalls we issue.  People who really know what they’re doing might have fully isolated cores.  If they do, they most likely have a watchdog on their isolated and latency-sensitive tasks, so we can still rely on running some code periodically, potentially after some instrumentation: if an isolated task fails to check in for a short while, the whole box will probably be presumed wedged and taken offline. <a href="#fnref:arguably-lock-ful" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:no-guarantees">
-      <p>With the caveat that the public documentation for <code>process_vm_readv</code> does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I’m pretty sure the kernel’s build flags prevent GCC/clang from converting it to <code>memcpy</code>. We could rely on the strong “don’t break userspace” culture, but it’s probably a better idea to try and get that guarantee in writing. <a href="#fnref:no-guarantees" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:no-guarantees" role="doc-endnote">
+      <p>With the caveat that the public documentation for <code>process_vm_readv</code> does not mention any atomic load guarantee. In practice, I saw a long-by-long copy loop the last time I looked at the code, and I’m pretty sure the kernel’s build flags prevent GCC/clang from converting it to <code>memcpy</code>. We could rely on the strong “don’t break userspace” culture, but it’s probably a better idea to try and get that guarantee in writing. <a href="#fnref:no-guarantees" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:hybrid-swf">
-      <p>This problem feels like something we could address with a coarse epoch-based versioning scheme.  It’s however not clear to me that the result would be much simpler than <code>hp_read_wf</code>, and we’d have to steal even more bits (2 bits, I expect) from <code>cell_or_pin</code> to make room for the epoch.  EDIT 2020-07-09: it turns out <a href="#addendum-2020-07-09">we only need to steal one bit</a>. <a href="#fnref:hybrid-swf" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:hybrid-swf" role="doc-endnote">
+      <p>This problem feels like something we could address with a coarse epoch-based versioning scheme.  It’s however not clear to me that the result would be much simpler than <code>hp_read_wf</code>, and we’d have to steal even more bits (2 bits, I expect) from <code>cell_or_pin</code> to make room for the epoch.  EDIT 2020-07-09: it turns out <a href="#addendum-2020-07-09">we only need to steal one bit</a>. <a href="#fnref:hybrid-swf" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:did-not-randomize-codegen">
-      <p>Although I did compare several independent executions and confirmed the reported cycle counts were stable, I did not try to randomise code generation… mostly because I’m not looking for super fine differences as much as close enough runtimes.  Hopefully, aligning functions to 256 bytes leveled some bias away. <a href="#fnref:did-not-randomize-codegen" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:did-not-randomize-codegen" role="doc-endnote">
+      <p>Although I did compare several independent executions and confirmed the reported cycle counts were stable, I did not try to randomise code generation… mostly because I’m not looking for super fine differences as much as close enough runtimes.  Hopefully, aligning functions to 256 bytes leveled some bias away. <a href="#fnref:did-not-randomize-codegen" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
@@ -1345,7 +2087,7 @@ value matches any of the follow nine cases:</p>
   <li><code>0b00000000</code></li>
 </ul>
 
-<p>Looking at the bit patterns,<sup id="fnref:b-for-bit-literal"><a href="#fn:b-for-bit-literal" class="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
+<p>Looking at the bit patterns,<sup id="fnref:b-for-bit-literal" role="doc-noteref"><a href="#fn:b-for-bit-literal" class="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
 is pretty natural.  These instructions are somewhat complex (latency
 closer to 3 cycles than 1, and often port restricted),
 and it seems like the sort of problem that would have had efficient
@@ -1366,7 +2108,7 @@ or bitscan.  There’s also a simpler classic solution to this problem:</p>
 <p><code>x == 0 || is_power_of_two(x) &lt;==&gt; (x &amp; (x - 1)) == 0</code></p>
 
 <p>How does that expression work?  Say <code>x</code> is a power of two. Its binary
-representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian"><a href="#fn:big-endian" class="footnote">2</a></sup>
+representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian" role="doc-noteref"><a href="#fn:big-endian" class="footnote">2</a></sup>
 a single “1” bit, and trailing zeros (maybe none).  Let’s see what happens when
 we subtract 1 from <code>x</code>:</p>
 
@@ -1413,7 +2155,7 @@ ends.  Let’s focus on the fast path, when the encoded ULEB fits in a
 machine register.</p>
 
 <p>We have <code>uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...</code>:
-a sequence of bytes<sup id="fnref:remember-endianness"><a href="#fn:remember-endianness" class="footnote">3</a></sup> with the topmost bit equal to 1,
+a sequence of bytes<sup id="fnref:remember-endianness" role="doc-noteref"><a href="#fn:remember-endianness" class="footnote">3</a></sup> with the topmost bit equal to 1,
 terminated by a byte with the top bit set to 0,
 and, finally, arbitrary nuisance bytes (<code>m...m</code>, <code>n...n</code>, etc.) we wish to ignore.
 Ideally, we’d extract <code>data = 0b0000000000000000...?zzzzzzz?yyyyyyy?...</code> from <code>uleb</code>: we want to clear the
@@ -1543,16 +2285,16 @@ That’s another nice primitive to generate bitmasks dynamically.</p>
 <p><small>Thank you Ruchir for helping me clarify the notation around the ULEB section.</small></p>
 
 <p><hr style="width: 50%" /></p>
-<div class="footnotes">
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:b-for-bit-literal">
-      <p>I use the <code>0b...</code> syntax throughout this post to denote bit literals, similarly to the usual <code>0x...</code> hexadecimal literals. <a href="#fnref:b-for-bit-literal" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:b-for-bit-literal" role="doc-endnote">
+      <p>I use the <code>0b...</code> syntax throughout this post to denote bit literals, similarly to the usual <code>0x...</code> hexadecimal literals. <a href="#fnref:b-for-bit-literal" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:big-endian">
-      <p>While I prefer to work with little-endian bytes, I find everything makes more sense with big-endian bits. <a href="#fnref:big-endian" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:big-endian" role="doc-endnote">
+      <p>While I prefer to work with little-endian bytes, I find everything makes more sense with big-endian bits. <a href="#fnref:big-endian" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:remember-endianness">
-      <p>Remember, while ULEB is little-endian, we use big bit-endianness. <a href="#fnref:remember-endianness" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:remember-endianness" role="doc-endnote">
+      <p>Remember, while ULEB is little-endian, we use big bit-endianness. <a href="#fnref:remember-endianness" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
@@ -1580,7 +2322,7 @@ and the same with additional branch coverage feedback (“bts”, for Intel Bran
 
 <p>On average, knowing the grammar for Heartbeat requests lets Hypothesis find
 the vulnerability after 535 calls to OpenSSL;
-when we add branch coverage feedback, the average goes down to 473<sup id="fnref:realtime"><a href="#fn:realtime" class="footnote">1</a></sup> calls, 11.5% faster.
+when we add branch coverage feedback, the average goes down to 473<sup id="fnref:realtime" role="doc-noteref"><a href="#fn:realtime" class="footnote">1</a></sup> calls, 11.5% faster.
 The plot shows that,
 as long as we have time for more than 100 calls to OpenSSL,
 branch coverage information makes it more likely that Hypothesis will find Heartbleed
@@ -1598,9 +2340,9 @@ There’s a place for them, same as there is for manual QA testing… but their 
 
 <p>Here are the sort of things I want to know when I look at typical unit test code:</p>
 <ol>
-  <li>Why do we make this exact assertion; what makes a result acceptable?<sup id="fnref:matchers"><a href="#fn:matchers" class="footnote">2</a></sup></li>
+  <li>Why do we make this exact assertion; what makes a result acceptable?<sup id="fnref:matchers" role="doc-noteref"><a href="#fn:matchers" class="footnote">2</a></sup></li>
   <li>Why do we feed this or that input; what makes input data useful or interesting?</li>
-  <li>What is expected to change when I tweak the external behaviour of the system under test;<sup id="fnref:change-detector"><a href="#fn:change-detector" class="footnote">3</a></sup> how are answers to the previous two questions encoded?</li>
+  <li>What is expected to change when I tweak the external behaviour of the system under test;<sup id="fnref:change-detector" role="doc-noteref"><a href="#fn:change-detector" class="footnote">3</a></sup> how are answers to the previous two questions encoded?</li>
 </ol>
 
 <p>As programmers, I think it’s natural to say that,
@@ -1770,7 +2512,7 @@ Falsifying example: test_u64_block_bitmask(
 </code></pre>
 
 <p>Hypothesis finds the bug in a fraction of a second,
-but, more importantly, it then works harder to report a minimal counter-example.<sup id="fnref:unless-examples"><a href="#fn:unless-examples" class="footnote">4</a></sup>
+but, more importantly, it then works harder to report a minimal counter-example.<sup id="fnref:unless-examples" role="doc-noteref"><a href="#fn:unless-examples" class="footnote">4</a></sup>
 With all but the last mask set to 0,
 it’s easy to guess that we’re probably ignoring the value of
 the last mask (and maybe more), which would be why we found a bitmask of
@@ -1953,7 +2695,7 @@ This approach to defining the input data is decidedly non-magical,
 compared to the way I work with fuzzers.
 However, fuzzers also tend to be slow and somewhat fickle.
 I think it makes sense to ask programmers to think about how their own code should be tested,
-instead of hoping a computer program will eventually intuit what edge cases look like.<sup id="fnref:no-preconception"><a href="#fn:no-preconception" class="footnote">5</a></sup></p>
+instead of hoping a computer program will eventually intuit what edge cases look like.<sup id="fnref:no-preconception" role="doc-noteref"><a href="#fn:no-preconception" class="footnote">5</a></sup></p>
 
 <p>It’s pretty cool that Hypothesis will now generate a bunch of API calls for me, but,
 again, what makes Hypothesis really valuable is the way it
@@ -2009,7 +2751,7 @@ control:    UINT64_MAX - 2 (payload)    UINT64_MAX - 2 (sentinel)
 and convert to a heap-allocated vector whenever the row value would be interpreted as a sentinel,
 and now Hypothesis doesn’t find anything wrong.
 We also know that this specific failure is fixed,
-because Hypothesis retries examples from its <a href="https://hypothesis.readthedocs.io/en/latest/database.html">failure database</a><sup id="fnref:failure-in-ci"><a href="#fn:failure-in-ci" class="footnote">6</a></sup> on every rerun.</p>
+because Hypothesis retries examples from its <a href="https://hypothesis.readthedocs.io/en/latest/database.html">failure database</a><sup id="fnref:failure-in-ci" role="doc-noteref"><a href="#fn:failure-in-ci" class="footnote">6</a></sup> on every rerun.</p>
 
 <h3 id="but-hypothesis-is-a-python-library">But Hypothesis is a Python library?!</h3>
 <p>There are multiple language-specific libraries under the <a href="https://github.com/HypothesisWorks/hypothesis">Hypothesis project</a>;
@@ -2527,25 +3269,25 @@ languages like Python, and which we can now test it like any other
 Python module.</p>
 
 <p><hr style="width: 50%" /></p>
-<div class="footnotes">
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:realtime">
-      <p>The graph shows time in terms of calls to the SUT, not real time. However, the additional overhead of gathering and considering coverage information is small enough that the feedback also improves wallclock and CPU time. <a href="#fnref:realtime" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:realtime" role="doc-endnote">
+      <p>The graph shows time in terms of calls to the SUT, not real time. However, the additional overhead of gathering and considering coverage information is small enough that the feedback also improves wallclock and CPU time. <a href="#fnref:realtime" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:matchers">
-      <p>High level <a href="https://github.com/google/googletest">matchers like GMock’s</a> help, but they don’t always explain why a given matcher makes sense. <a href="#fnref:matchers" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:matchers" role="doc-endnote">
+      <p>High level <a href="https://github.com/google/googletest">matchers like GMock’s</a> help, but they don’t always explain why a given matcher makes sense. <a href="#fnref:matchers" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:change-detector">
-      <p>There’s also a place for <a href="https://github.com/approvals/ApprovalTests.cpp/blob/master/doc/Overview.md">smart change detectors, especially when refactoring ill understood code</a>. <a href="#fnref:change-detector" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:change-detector" role="doc-endnote">
+      <p>There’s also a place for <a href="https://github.com/approvals/ApprovalTests.cpp/blob/master/doc/Overview.md">smart change detectors, especially when refactoring ill understood code</a>. <a href="#fnref:change-detector" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:unless-examples">
-      <p>I had to disable the exhaustive list of examples to benefit from minimisation. Maybe one day I’ll figure out how to make Hypothesis treat explicit examples more like an initial test corpus. <a href="#fnref:unless-examples" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:unless-examples" role="doc-endnote">
+      <p>I had to disable the exhaustive list of examples to benefit from minimisation. Maybe one day I’ll figure out how to make Hypothesis treat explicit examples more like an initial test corpus. <a href="#fnref:unless-examples" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:no-preconception">
-      <p>That reminds me of an AI Lab Koan. «In the days when Sussman was a novice, Minsky once came to him as he sat hacking at the PDP-6. “What are you doing?” asked Minsky. “I am training a randomly wired neural net to play Tic-tac-toe,” Sussman replied. “Why is the net wired randomly?” asked Minsky. Sussman replied, “I do not want it to have any preconceptions of how to play.” Minsky then shut his eyes. “Why do you close your eyes?” Sussman asked his teacher. “So that the room will be empty,” replied Minsky. At that moment, Sussman was enlightened.» <a href="#fnref:no-preconception" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:no-preconception" role="doc-endnote">
+      <p>That reminds me of an AI Lab Koan. «In the days when Sussman was a novice, Minsky once came to him as he sat hacking at the PDP-6. “What are you doing?” asked Minsky. “I am training a randomly wired neural net to play Tic-tac-toe,” Sussman replied. “Why is the net wired randomly?” asked Minsky. Sussman replied, “I do not want it to have any preconceptions of how to play.” Minsky then shut his eyes. “Why do you close your eyes?” Sussman asked his teacher. “So that the room will be empty,” replied Minsky. At that moment, Sussman was enlightened.» <a href="#fnref:no-preconception" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:failure-in-ci">
-      <p>The database is a directory of files full of binary data.  The specific meaning of these bytes depends on the Hypothesis version and on the test code, so the database should probably not be checked in.  Important examples (e.g., for regression testing) should instead be made persistent with <code>@example</code> decorators.  Hypothesis does guarantee that tese files are always valid (i.e., any sequence of bytes in the database will result in an example that can be generated by the version of Hypothesis and of the test code that reads it), so we don’t have to invalidate the cache when we update the test harness. <a href="#fnref:failure-in-ci" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:failure-in-ci" role="doc-endnote">
+      <p>The database is a directory of files full of binary data.  The specific meaning of these bytes depends on the Hypothesis version and on the test code, so the database should probably not be checked in.  Important examples (e.g., for regression testing) should instead be made persistent with <code>@example</code> decorators.  Hypothesis does guarantee that tese files are always valid (i.e., any sequence of bytes in the database will result in an example that can be generated by the version of Hypothesis and of the test code that reads it), so we don’t have to invalidate the cache when we update the test harness. <a href="#fnref:failure-in-ci" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
@@ -2560,7 +3302,7 @@ Python module.</p>
     <content type="html"><![CDATA[<p><small>Apologies for the failed <a href="https://www.youtube.com/watch?v=K3DRkVjuqmc">Cake reference</a>.<br />
 2020-02-02: Refer to Travis Downs’s investigation into this pathological case for forwarding.</small></p>
 
-<p>I’ve been responsible for <a href="https://backtrace.io/">Backtrace.io</a>’s crash analytic database<sup id="fnref:started-work"><a href="#fn:started-work" class="footnote">1</a></sup> for a couple months now.
+<p>I’ve been responsible for <a href="https://backtrace.io/">Backtrace.io</a>’s crash analytic database<sup id="fnref:started-work" role="doc-noteref"><a href="#fn:started-work" class="footnote">1</a></sup> for a couple months now.
 I have focused my recent efforts on improving query times for in-memory grouped aggregations, i.e.,
 the archetypal MapReduce use-case where we generate key-value pairs, and <a href="https://en.wikipedia.org/wiki/Fold_(higher-order_function)">fold</a> over the values
 for each key in some <a href="https://en.wikipedia.org/wiki/Semigroup">(semi)</a><a href="https://en.wikipedia.org/wiki/Group_(mathematics)">group</a>.
@@ -2568,7 +3310,7 @@ We have a cute cache-efficient data structure for this type of workload;
 the inner loop simply inserts in a small hash table with <a href="/Blog/more_numerical_experiments_in_hashing.html">Robin Hood linear probing</a>,
 in order to guarantee entries in the table are ordered by hash value.  This
 ordering lets us easily dump the entries in sorted order, and <a href="https://www2.eecs.berkeley.edu/Pubs/TechRpts/1993/6309.html">block</a> the merge loop for an arbitrary number of sorted arrays
-into a unified, larger, ordered hash table (which we can, again, dump to a sorted array).<sup id="fnref:more-later"><a href="#fn:more-later" class="footnote">2</a></sup></p>
+into a unified, larger, ordered hash table (which we can, again, dump to a sorted array).<sup id="fnref:more-later" role="doc-noteref"><a href="#fn:more-later" class="footnote">2</a></sup></p>
 
 <h1 id="observation">Observation</h1>
 
@@ -2596,7 +3338,7 @@ B2.
 C2.
 </code></pre>
 
-<p>and the <code>movdqu</code> happens in step C, to copy the element that step B just constructed.<sup id="fnref:dont-copy"><a href="#fn:dont-copy" class="footnote">3</a></sup></p>
+<p>and the <code>movdqu</code> happens in step C, to copy the element that step B just constructed.<sup id="fnref:dont-copy" role="doc-noteref"><a href="#fn:dont-copy" class="footnote">3</a></sup></p>
 
 <p>At this point, an important question suggests itself: does it matter?
 We could simply increase the size of the base case and speed up the rest of the bottom-up recursion… eventually, the latency for the random accesses in the initial hash table will dominate the inner loop.</p>
@@ -2610,7 +3352,7 @@ That’s why I wanted to make sure this hash table insertion loop worked on as w
 
 <p>Back to the original question. Why do we spend so many cycles loading data we just wrote to cache?</p>
 
-<p>The answer is in the question and in the title of this post: too little time elapses between the instructions that write data to the cache and the ones that read the same data.<sup id="fnref:but-forwarding"><a href="#fn:but-forwarding" class="footnote">4</a></sup>
+<p>The answer is in the question and in the title of this post: too little time elapses between the instructions that write data to the cache and the ones that read the same data.<sup id="fnref:but-forwarding" role="doc-noteref"><a href="#fn:but-forwarding" class="footnote">4</a></sup>
 A modern out-of-order machine (e.g., most amd64 chips) can execute multiple instructions at the same time, and will start executing instructions as soon as their operands are ready, even when earlier instructions in program order are still waiting for theirs.
 Machine code is essentially a messy way to encode a <a href="https://fgiesen.wordpress.com/2018/03/05/a-whirlwind-introduction-to-dataflow-graphs/">dataflow graph</a>, 
 which means our job as micro-optimisers is, at a high level, to avoid long dependency chains and make the dataflow graph as wide as possible.
@@ -2708,7 +3450,7 @@ Moreover, they come from a block of code that was pipelined in software and exec
 It doesn’t really matter if these instructions are slow: they’re still far from being on the critical path!  This last restructuring yielded a 20% speed-up on a few slow queries.</p>
 
 <p>I described two tools that I use regularly when optimising code for contemporary hardware.
-Finding ways to scatter around scheduling slack is always useful, both in software and in real life planning.<sup id="fnref:unless-people"><a href="#fn:unless-people" class="footnote">5</a></sup>
+Finding ways to scatter around scheduling slack is always useful, both in software and in real life planning.<sup id="fnref:unless-people" role="doc-noteref"><a href="#fn:unless-people" class="footnote">5</a></sup>
 One simple way to do so is to add bounded buffers, and to flush buffers as soon as they fill up (or refill when they become empty), instead of waiting until the next write to the buffer.
 However, I think the more powerful transformation is using buffering to expose bulk operations, which tends to open up more opportunities than just doing the same thing in a loop.
 In the case above, we found a 20% speed-up; for someone who visit their <a href="https://help.backtrace.io/en/articles/2765535-triage">Backtrace dashboard</a> a couple times a day, that can add up to an hour or two at the end of the year.</p>
@@ -2716,563 +3458,22 @@ In the case above, we found a 20% speed-up; for someone who visit their <a href=
 <p>TL;DR: When a function is hot enough to look into, it’s worth asking why it’s called so often, in order to focus on higher level bulk operations.</p>
 
 <p><hr style="width: 50%" /></p>
-<div class="footnotes">
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:started-work">
-      <p>And by that, I mean I started working there a couple months ago (: <a href="#fnref:started-work" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:started-work" role="doc-endnote">
+      <p>And by that, I mean I started working there a couple months ago (: <a href="#fnref:started-work" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:more-later">
-      <p>I think that’s a meaty idea, and am planning a longer post on that data structure and where it fits in the hash/sort join continuum. <a href="#fnref:more-later" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:more-later" role="doc-endnote">
+      <p>I think that’s a meaty idea, and am planning a longer post on that data structure and where it fits in the hash/sort join continuum. <a href="#fnref:more-later" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:dont-copy">
-      <p>Would I have avoided this issue if I had directly passed by value? The resulting code might have been friendlier to store-to-load forwarding than loading a whole 128 bit SSE register, but see the next footnote. <a href="#fnref:dont-copy" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:dont-copy" role="doc-endnote">
+      <p>Would I have avoided this issue if I had directly passed by value? The resulting code might have been friendlier to store-to-load forwarding than loading a whole 128 bit SSE register, but see the next footnote. <a href="#fnref:dont-copy" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:but-forwarding">
-      <p>Store-to-load forwarding can help improve the performance of this pattern, when we use forwarding patterns that the hardware supports. However, this mechanism can only decrease the penalty of serial dependencies, e.g., by shaving away some or all of the time it takes to store a result to cache and load it back; even when results can feed directly into dependencies, we still have to wait for inputs to be computed. This is fundamentally a scheduling issue. <a href="#fnref:but-forwarding" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:but-forwarding" role="doc-endnote">
+      <p>Store-to-load forwarding can help improve the performance of this pattern, when we use forwarding patterns that the hardware supports. However, this mechanism can only decrease the penalty of serial dependencies, e.g., by shaving away some or all of the time it takes to store a result to cache and load it back; even when results can feed directly into dependencies, we still have to wait for inputs to be computed. This is fundamentally a scheduling issue. <a href="#fnref:but-forwarding" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:unless-people">
-      <p>Unless you’re writing schedule optimising software and people will look at the result. A final hill climbing pass to make things look artificially tight often makes for an easier sale in that situation. <a href="#fnref:unless-people" class="reversefootnote">&#8617;</a></p>
-    </li>
-  </ol>
-</div>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Lazy Linear Knapsack]]></title>
-    <link href="https://www.pvk.ca/Blog/2020/01/20/lazy-linear-knapsack/"/>
-    <updated>2020-01-20T23:10:19-05:00</updated>
-    <id>https://www.pvk.ca/Blog/2020/01/20/lazy-linear-knapsack</id>
-    <content type="html"><![CDATA[<p>The <a href="https://en.wikipedia.org/wiki/Continuous_knapsack_problem">continuous knapsack problem</a> may be the simplest non-trivial linear
-programming problem:</p>
-
-<p>\[\max_{x \in [0, 1]^n} p’x\]
-subject to
-\[w’x \leq b.\]</p>
-
-<p>It has a linear objective, one constraint, and each decision variable
-is bounded to ensure the optimum exists.  Note the key difference from
-the <a href="https://en.wikipedia.org/wiki/Knapsack_problem#0/1_knapsack_problem">binary knapsack problem</a>: decision variables are allowed to take any
-value between 0 and 1.  In other words, we can, e.g., stick half of
-a profitable but large item in the knapsack. That’s why this knapsack
-problem can be solved in linear time.</p>
-
-<h2 id="dual-to-primal-is-reasonable">Dual to primal is reasonable</h2>
-
-<p>Duality also lets us determine the shape of all optimal solutions to
-this problem.  For each item \(i\) with weight \(w_i\) and profit
-\(p_i\), let its profit ratio be \(r_i = p_i / w_i,\)
-and let \(\lambda^\star\) be the optimal dual (Lagrange or linear)
-multiplier associated with the capacity constraint \(w’x \leq b.\)
-If \(\lambda^\star = 0,\) we simply take all items with a positive
-profit ratio (\(r_i &gt; 0\)) and a non-negative weight \(w_i \geq 0.\)
-Otherwise, every item with a profit ratio \(r_i &gt; \lambda^\star\)
-will be at its weight upper bound (1 if \(w_i \geq 0\), 0
-otherwise), and items with \(r_i &lt; \lambda^\star\) will instead be
-at their lower bound (0 of \(w_i \leq 0\), and 1 otherwise).</p>
-
-<p>Critical items, items with \(r_i = \lambda^\star,\) will take any value
-that results in \(w’x = b.\) Given \(\lambda^\star,\) we can
-derive the sum of weights for non-critical items; divide the
-remaining capacity for critical items by the total weight of critical
-items, and let that be the value for every critical item (with the
-appropriate sign for the weight).</p>
-
-<p>For example, if we have capacity \(b = 10,\) and the sum of weights
-for non-critical items in the knsapsack is \(8,\) we’re left with another
-two units of capacity to distribute however we want among
-critical items (they all have the same profit ratio \(r_i =
-\lambda^\star,\) so it doesn’t matter where that capacity goes).  Say
-critical items with a positive weight have a collective weight of 4;
-we could then assign a value of \(2 / 4 = 0.5\) to the corresponding
-decision variable (and 0 for critical items with a non-positive
-weight).</p>
-
-<p>We could instead have \(b = 10,\) and the sum of weights for
-non-critical items in the knapsack \(12\): we must find two units of
-capacity among critical items (they all cost \(r_i = \lambda^\star\)
-per unit, so it doesn’t matter which).  If critical items with a
-negative weight have a collective weight of \(-3,\) we could assign
-a value of \(-2 / -3 = 0.6\overline{6}\) to the corresponding decision
-variables, and 0 for critical items with a non-negative weight.</p>
-
-<p>The last case highlights something important about the knapsack: in
-general, we can’t assume that the weights <em>or profits</em> are positive.
-We could have an item with a non-positive weight and non-negative
-profit (that’s always worth taking), an item with positive weight and
-negative profit (never interesting), or weights and profits of the
-same sign.  The last case is the only one that calls for actual
-decision making.  Classically, items with negative weight and profit
-are rewritten away, by assuming they’re taken in the knapsack, and
-replacing them with a decision variable for the complementary decision
-of removing that item from the knapsack (i.e., removing the additional
-capacity in order to improve the profit).  I’ll try to treat them
-directly as much as possible, because that reduction can be a
-significant fraction of solve times in practice.</p>
-
-<p>The characterisation of optimal solutions above makes it easy to
-directly handle elements with a negative weight: just find the optimal
-multiplier, compute the contribution of non-critical elements (with
-decision variables at a bound) to the left-hand side of the capacity
-constraint, separately sums the negative and positive weights for
-critical elements, then do a final pass to distribute the remaining
-capacity to critical elements (and 0-weight / 0-value elements if one
-wishes).</p>
-
-<h2 id="solving-the-dual-looks-like-selection">Solving the dual looks like selection</h2>
-
-<p>Finding the optimal multiplier \(\lambda^\star\) is similar to a
-selection problem: the value is either 0 (the capacity constraint is
-redundant), or one of the profit ratios \(r_i,\) and, given a
-multiplier value \(\lambda,\) we can determine if it’s too high or
-too low in linear time.  If the non-critical elements yield a left-hand
-side such that critical elements
-can’t add enough capacity (i.e., no solution with the optimal form can
-be feasible), \(\lambda\) is too low.  If the maximum weight of
-potentially optimal solutions is too low, \(\lambda\) is too high.</p>
-
-<p>We can thus sort the items by profit ratio \(r_i\), compute the
-total weight corresponding to each ratio with a prefix sum (with a
-pre-pass to sum all negative weights), and perform a linear (or
-binary) search to find the critical profit ratio.
-Moreover, the status of non-critical items is monotonic as
-\(\lambda\) grows: if an item with positive weight is taken at
-\(\lambda_0\), it is also taken for every \(\lambda \leq
-\lambda_0\), and a negative-weight item that’s taken at
-\(\lambda_0\) is also taken for every \(\lambda \geq \lambda_0.\)
-This means we can adapt selection algorithms like <a href="https://en.wikipedia.org/wiki/Quickselect">Quickselect</a> to solve
-the continuous knapsack problem in linear time.</p>
-
-<p>I’m looking at large instances, so I would like to run these
-algorithms in parallel or even distributed on multiple machines, and
-ideally use GPUs or SIMD extensions.  Unfortunately, selection doesn’t
-parallelise very well: we can run a distributed quickselect where
-every processor partitions the data in its local RAM, but that still
-requires a logarithmic number of iterations.</p>
-
-<h2 id="selection-looks-like-quantile-estimation-does-the-dual">Selection looks like quantile estimation; does the dual?</h2>
-
-<p><a href="https://cs.stackexchange.com/questions/27685/can-someone-explain-lazyselect">Lazy Select</a> offers a completely different angle for the selection
-problem.  Selecting the \(k\)th smallest element from a list of
-\(n\) elements is the same as finding the \(k / n\)th quantile<sup id="fnref:abuse-of-language"><a href="#fn:abuse-of-language" class="footnote">1</a></sup> in
-that list of \(n\) elements.  We can use <a href="https://en.wikipedia.org/wiki/Hoeffding%27s_inequality">concentration bounds</a><sup id="fnref:binomial"><a href="#fn:binomial" class="footnote">2</a></sup> to estimate quantiles from a sample of, e.g.,
-\(m = n^{3/4}\) elements: the population quantile value is very
-probably between the \(qm - \frac{\log m}{\sqrt{m}}\)th and \(qm +
-\frac{\log m}{\sqrt{m}}\)th values of the sample.  Moreover, this
-range very probably includes at most \(\mathcal{O}(n^{3/4})\)
-elements<sup id="fnref:same-bounds"><a href="#fn:same-bounds" class="footnote">3</a></sup>, so a second pass suffices to buffer all the
-elements around the quantile, and find the exact quantile.  Even with
-a much smaller sample size \(m = \sqrt{n},\) we would only need four
-passes.</p>
-
-<p>Unfortunately, we can’t directly use that correspondence between
-selection and quantile estimation for the continuous knapsack.</p>
-
-<p>I tried to apply a similar idea by sampling the knapsack elements
-equiprobably, and extrapolating from a solution to the sample.  For
-every \(\lambda,\) we can derive a selection function 
-\(f_\lambda (i) = I[r_i \geq \lambda]w_i\) 
-(invert the condition if the weight is negative),
-and scale up \(\sum_i f(i)\) from the sample to the population).
-As long as we sample independently of \(f\), we can reuse the
-same sample for all \(f_\lambda.\)
-The difficulty here is that, while the error for Lazy Select
-scales as a function of \(n,\) the equivalent bounds with
-variable weights are a function of \(n(|\max_i w_i| + |\min_i w_i|)^2.\)
-That doesn’t seem necessarily practical; scaling with \(\sum_i |w_i|\)
-would be more reasonable.</p>
-
-<p>Good news: we can hit that, thanks to linearity.</p>
-
-<p>Let’s assume weights are all integers.  Any item with weight \(w_i\)
-is equivalent to \(w_i\) subitems with unit weight (or \(-w_i\)
-elements with negative unit weight), and the same profit ratio \(r_i\),
-i.e., profit \(p_i / |w_i|\).  The range of <em>subitem</em> weights is now a constant.</p>
-
-<p>We could sample uniformly from the subitems with a <a href="https://en.wikipedia.org/wiki/Bernoulli_distribution">Bernoulli</a> for each
-subitem, but that’s clearly linear time in the sum of weights, rather
-than the number of elements.  If we wish to sample roughly \(m\) elements
-from a total weight \(W = \sum_i |w_i|,\) we can instead determine how
-many subitems (units of weight) to skip before sampling with a
-<a href="https://en.wikipedia.org/wiki/Geometric_distribution">Geometric</a> of
-success probability \(m / W.\) This shows us how to lift the
-integrality constraint on weights: sample from an <a href="https://en.wikipedia.org/wiki/Exponential_distribution">Exponential</a>
-with the same parameter \(m / W!\)</p>
-
-<p>That helps, but we could still end up spending much more than constant
-time on very heavy elements.  The trick is to deterministically
-special-case these elements: stash any element with large weight
-\(w_i \geq W / m\) to the side, exactly once.  By <a href="https://en.wikipedia.org/wiki/Markov%27s_inequality">Markov’s inequality</a>,<sup id="fnref:pigeonhole"><a href="#fn:pigeonhole" class="footnote">4</a></sup>
-we know there aren’t too many heavy elements: at most \(m.\)</p>
-
-<h2 id="lets-test-this-out">Let’s test this out</h2>
-
-<p>The heart of the estimation problem can be formalised as follows:
-given a list of elements \(i \in [n]\) with weight \(w_i \geq 0\),
-generate a sample of \(m \leq n\) elements ahead of time. After the
-sample has been generated, we want to accept an arbitrary predicate
-\(p \in \{0,1\}^n\) and estimate \(\sum_{i\in [n]} p(i) w_i.\)</p>
-
-<p>We just had a sketch of an algorithm for this problem.  Let’s see
-what it looks like in Python.  The initial sample logic has to
-determine the total weight, and sample items with probability
-proportional to their weight.  Items heavier than the cutoff are not
-considered in the sample and instead saved to an auxiliary list.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>sample.py </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">total_weight</span><span class="p">(</span><span class="n">items</span><span class="p">):</span>
-</span><span class="line">    <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="n">weight</span> <span class="k">for</span> <span class="p">(</span><span class="n">_</span><span class="p">,</span> <span class="n">weight</span><span class="p">)</span> <span class="ow">in</span> <span class="n">items</span><span class="p">)</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">sample_by_weight</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">cutoff</span><span class="p">):</span>
-</span><span class="line">    <span class="sd">&quot;&quot;&quot;Samples from a list of (index, weight), with weight &gt;= 0.</span>
-</span><span class="line">
-</span><span class="line"><span class="sd">    Items with weight &gt;= cutoff are taken with probability one.</span>
-</span><span class="line"><span class="sd">    Others are sampled with rate `rate` / unit of weight.</span>
-</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
-</span><span class="line">    <span class="n">sample</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span class="line">    <span class="n">large</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span class="line">    <span class="n">next_sample</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">expovariate</span><span class="p">(</span><span class="n">rate</span><span class="p">)</span>
-</span><span class="line">    <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">items</span><span class="p">:</span>
-</span><span class="line">        <span class="n">index</span><span class="p">,</span> <span class="n">weight</span> <span class="o">=</span> <span class="n">item</span>
-</span><span class="line">        <span class="k">if</span> <span class="n">weight</span> <span class="o">&gt;=</span> <span class="n">cutoff</span><span class="p">:</span>
-</span><span class="line">            <span class="n">large</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
-</span><span class="line">        <span class="k">else</span><span class="p">:</span>
-</span><span class="line">            <span class="n">next_sample</span> <span class="o">-=</span> <span class="n">weight</span>
-</span><span class="line">            <span class="k">while</span> <span class="n">next_sample</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
-</span><span class="line">                <span class="n">sample</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
-</span><span class="line">                <span class="n">next_sample</span> <span class="o">+=</span> <span class="n">random</span><span class="o">.</span><span class="n">expovariate</span><span class="p">(</span><span class="n">rate</span><span class="p">)</span>
-</span><span class="line">    <span class="k">return</span> <span class="n">sample</span><span class="p">,</span> <span class="n">large</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>We can assemble the resulting sample (and list of “large” elements) to
-compute a lower bound on the weight of items that satisfy any
-predicate that’s independent of the sampling decisions.  The value for
-large elements is trivial: we have a list of all large elements.
-We can subtract the weight of all large elements from the total item
-weight, and determine how much we have to extrapolate up.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>extrapolate.py </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-<span class="line-number">31</span>
-<span class="line-number">32</span>
-<span class="line-number">33</span>
-<span class="line-number">34</span>
-<span class="line-number">35</span>
-<span class="line-number">36</span>
-<span class="line-number">37</span>
-<span class="line-number">38</span>
-<span class="line-number">39</span>
-<span class="line-number">40</span>
-<span class="line-number">41</span>
-<span class="line-number">42</span>
-<span class="line-number">43</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">hoeffding</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
-</span><span class="line">    <span class="sd">&quot;&quot;&quot;Determines how much we can expect a sample of n i.i.d. values</span>
-</span><span class="line"><span class="sd">    sampled from a Bernouli to differ, given an error rate of alpha.</span>
-</span><span class="line">
-</span><span class="line"><span class="sd">    Given a sample X of n i.i.d. values from a Bernoulli distribution,</span>
-</span><span class="line"><span class="sd">    let delta be \bar{X} - E[\bar{X}], the one-sided difference</span>
-</span><span class="line"><span class="sd">    between the sample average value and the expected sample average.</span>
-</span><span class="line">
-</span><span class="line"><span class="sd">    Hoeffding&#39;s upper bound (see below) is conservative when the</span>
-</span><span class="line"><span class="sd">    empirical probability is close to 0 or 1 (trivially, it can yield</span>
-</span><span class="line"><span class="sd">    confidence bounds that are outside [0, 1]!), but simple, and in</span>
-</span><span class="line"><span class="sd">    general not much worse than tighter confidence interval.</span>
-</span><span class="line">
-</span><span class="line"><span class="sd">    P(delta &gt;= eps) &lt;= exp(-2 eps^2 n) = alpha</span>
-</span><span class="line"><span class="sd">      -&gt; -2 eps^2 n = ln alpha</span>
-</span><span class="line"><span class="sd">     &lt;-&gt;        eps = sqrt[-(ln alpha) / 2n ]</span>
-</span><span class="line">
-</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
-</span><span class="line">    <span class="k">return</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="o">-</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">alpha</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">n</span><span class="p">))</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">eval_weight</span><span class="p">(</span><span class="n">total_weight</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">large</span><span class="p">,</span> <span class="n">predicate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
-</span><span class="line">    <span class="sd">&quot;&quot;&quot;Given a population&#39;s total weight, a memoryless sample (by weight)</span>
-</span><span class="line"><span class="sd">    from the population&#39;s items, and large items that were</span>
-</span><span class="line"><span class="sd">    deterministically picked, evaluates a lower bound for the sum of</span>
-</span><span class="line"><span class="sd">    weights for items in the population that satisfy predicate.</span>
-</span><span class="line"><span class="sd">    </span>
-</span><span class="line"><span class="sd">    The lower bound is taken with error rate &lt;= alpha.</span>
-</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
-</span><span class="line">    <span class="n">large_sum</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">weight</span> <span class="k">for</span> <span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">weight</span><span class="p">)</span> <span class="ow">in</span> <span class="n">large</span> <span class="k">if</span> <span class="n">predicate</span><span class="p">(</span><span class="n">index</span><span class="p">))</span>
-</span><span class="line">    <span class="c1"># The remainder was up for sampling, unit of weight at a time.</span>
-</span><span class="line">    <span class="n">sampled_weight</span> <span class="o">=</span> <span class="n">total_weight</span> <span class="o">-</span> <span class="nb">sum</span><span class="p">(</span><span class="n">weight</span> <span class="k">for</span> <span class="p">(</span><span class="n">_</span><span class="p">,</span> <span class="n">weight</span><span class="p">)</span> <span class="ow">in</span> <span class="n">large</span><span class="p">)</span>
-</span><span class="line">    <span class="k">if</span> <span class="n">sampled_weight</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">sample</span><span class="p">:</span>
-</span><span class="line">        <span class="k">return</span> <span class="n">large_sum</span>
-</span><span class="line">    <span class="c1"># Estimate the Binomial success rate with a Beta</span>
-</span><span class="line">    <span class="n">successes</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">if</span> <span class="n">predicate</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">else</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">sample</span><span class="p">)</span>
-</span><span class="line">    <span class="n">failures</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">sample</span><span class="p">)</span> <span class="o">-</span> <span class="n">successes</span>
-</span><span class="line">    <span class="c1"># We want a lower bound, and the uniform prior can result in a</span>
-</span><span class="line">    <span class="c1"># (valid) bound that&#39;s higher than the empirical rate, so take the</span>
-</span><span class="line">    <span class="c1"># min of the two.</span>
-</span><span class="line">    <span class="n">empirical_rate</span> <span class="o">=</span> <span class="n">successes</span> <span class="o">/</span> <span class="n">sampled_weight</span>
-</span><span class="line">    <span class="n">delta</span> <span class="o">=</span> <span class="n">hoeffding</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sample</span><span class="p">),</span> <span class="n">alpha</span><span class="p">)</span>
-</span><span class="line">    <span class="k">return</span> <span class="n">large_sum</span> <span class="o">+</span> <span class="n">sampled_weight</span> <span class="o">*</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">empirical_rate</span> <span class="o">-</span> <span class="n">delta</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>And finally, here’s how we can sample from an arbitrary list of items,
-compure a lower bound on the weight of items that satisfy a predicate,
-and compare that with the real lower bound.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>lower_bound.py </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">compare_bounds</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">,</span> <span class="n">predicate</span><span class="p">):</span>
-</span><span class="line">    <span class="n">total</span> <span class="o">=</span> <span class="n">total_weight</span><span class="p">(</span><span class="n">items</span><span class="p">)</span>
-</span><span class="line">    <span class="c1"># We expect a sample size of roughly rate * len(items), and</span>
-</span><span class="line">    <span class="c1"># at most rate * len(items) large items.</span>
-</span><span class="line">    <span class="n">sample</span><span class="p">,</span> <span class="n">large</span> <span class="o">=</span> <span class="n">sample_by_weight</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">rate</span> <span class="o">*</span> <span class="n">total</span><span class="p">)</span>
-</span><span class="line">    <span class="n">lower_bound</span> <span class="o">=</span> <span class="n">eval_weight</span><span class="p">(</span><span class="n">total</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">large</span><span class="p">,</span> <span class="n">predicate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">)</span>
-</span><span class="line">    <span class="c1"># Check if the lower bound is valid.</span>
-</span><span class="line">    <span class="n">actual</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">weight</span> <span class="k">for</span> <span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">weight</span><span class="p">)</span> <span class="ow">in</span> <span class="n">items</span> <span class="k">if</span> <span class="n">predicate</span><span class="p">(</span><span class="n">index</span><span class="p">))</span>
-</span><span class="line">    <span class="k">return</span> <span class="n">lower_bound</span> <span class="o">&lt;=</span> <span class="n">actual</span> <span class="o">+</span> <span class="mf">1e-8</span><span class="p">,</span> <span class="n">lower_bound</span><span class="p">,</span> <span class="n">actual</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>How do we test that? Far too often, I see tests for randomised
-algorithms where the success rate is computed over randomly generated
-inputs.  That’s too weak!  For example, this approach could lead us to accept
-that the identity function is a randomised sort function, with success
-probability \(\frac{1}{n!}.\)</p>
-
-<p>The property we’re looking for is that, for any input, the success
-rate (with the expectation over the pseudorandom sampling decisions)
-is as high as requested.</p>
-
-<p>For a given input (list of items and predicate), we can use the <a href="http://pvk.ca/Blog/2018/07/06/testing-slo-type-properties-with-the-confidence-sequence-method/">Confidence sequence method (CSM)</a>
-to confirm that the lower bound is valid at least
-\(1 - \alpha\) of the time.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>csm_test.py </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">compare_bounds_generator</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
-</span><span class="line">    <span class="n">items</span> <span class="o">=</span> <span class="p">[(</span><span class="n">i</span><span class="p">,</span> <span class="n">w</span><span class="p">)</span> <span class="k">for</span> <span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="n">_</span><span class="p">))</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">test_case</span><span class="p">)]</span>
-</span><span class="line">    <span class="n">chosen</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">i</span> <span class="k">for</span> <span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">_</span><span class="p">,</span> <span class="n">p</span><span class="p">))</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">test_case</span><span class="p">)</span> <span class="k">if</span> <span class="n">p</span><span class="p">)</span>
-</span><span class="line">    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
-</span><span class="line">        <span class="k">yield</span> <span class="n">compare_bounds</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">chosen</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
-</span><span class="line">
-</span><span class="line">
-</span><span class="line"><span class="k">def</span> <span class="nf">check_bounds</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
-</span><span class="line">    <span class="sd">&quot;&quot;&quot;Test case is a list of pairs of weight and predicate value</span>
-</span><span class="line"><span class="sd">       rate is the sample rate</span>
-</span><span class="line"><span class="sd">       alpha is the confidence parameter for the lower bound.</span>
-</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
-</span><span class="line">    <span class="n">wanted</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">alpha</span>  <span class="c1"># The Hoeffding bound is conservative, so</span>
-</span><span class="line">                        <span class="c1"># this should let csm_driver stop quickly.</span>
-</span><span class="line">    <span class="n">result</span> <span class="o">=</span> <span class="n">csm</span><span class="o">.</span><span class="n">csm_driver</span><span class="p">(</span><span class="n">compare_bounds_generator</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span>
-</span><span class="line">                                                     <span class="n">rate</span><span class="p">,</span>
-</span><span class="line">                                                     <span class="n">alpha</span><span class="p">),</span>
-</span><span class="line">                            <span class="n">wanted</span><span class="p">,</span>
-</span><span class="line">                            <span class="mf">1e-6</span><span class="p">,</span>  <span class="c1"># Wrong conclusion with p &lt; 1e-6.</span>
-</span><span class="line">                            <span class="nb">file</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stderr</span>
-</span><span class="line">                            <span class="p">)</span>
-</span><span class="line">    <span class="n">stop</span><span class="p">,</span> <span class="n">actual</span><span class="p">,</span> <span class="o">*</span><span class="n">_</span> <span class="o">=</span> <span class="n">result</span>
-</span><span class="line">    <span class="k">assert</span> <span class="n">actual</span> <span class="o">&gt;=</span> <span class="n">wanted</span><span class="p">,</span> <span class="s2">&quot;Result: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="nb">str</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>With a false positive rate of at most one in a million,<sup id="fnref:lotta-errors"><a href="#fn:lotta-errors" class="footnote">5</a></sup> we can
-run automated tests against <code>check_bounds</code>.  I’ll use
-<a href="https://hypothesis.works/">Hypothesis</a> to generate list of pairs of weight and predicate value:</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_bounds.py </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="kn">from</span> <span class="nn">hypothesis</span> <span class="kn">import</span> <span class="n">given</span><span class="p">,</span> <span class="n">settings</span><span class="p">,</span> <span class="n">Verbosity</span>
-</span><span class="line"><span class="kn">import</span> <span class="nn">hypothesis.strategies</span> <span class="kn">as</span> <span class="nn">st</span>
-</span><span class="line">
-</span><span class="line"><span class="nd">@given</span><span class="p">(</span><span class="n">test_case</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">lists</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">tuples</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span>
-</span><span class="line">                                    <span class="n">st</span><span class="o">.</span><span class="n">booleans</span><span class="p">())),</span>
-</span><span class="line">       <span class="n">rate</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mf">1e-6</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mf">0.5</span><span class="p">),</span>
-</span><span class="line">       <span class="n">alpha</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mf">0.25</span><span class="p">))</span>
-</span><span class="line"><span class="k">def</span> <span class="nf">test_bounds</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
-</span><span class="line">    <span class="n">check_bounds</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>Bimodal inputs tend to be harder, so we can add a specialised test
-generator.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_bimodal_bounds.py </span></figcaption>
-<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="nd">@given</span><span class="p">(</span><span class="n">test_case</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">lists</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">tuples</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">one_of</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">just</span><span class="p">(</span><span class="mf">0.1</span><span class="p">),</span> <span class="n">st</span><span class="o">.</span><span class="n">just</span><span class="p">(</span><span class="mi">1</span><span class="p">)),</span>
-</span><span class="line">                                    <span class="n">st</span><span class="o">.</span><span class="n">booleans</span><span class="p">())),</span>
-</span><span class="line">       <span class="n">rate</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mf">1e-6</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mf">0.5</span><span class="p">),</span>
-</span><span class="line">       <span class="n">alpha</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mf">0.25</span><span class="p">))</span>
-</span><span class="line"><span class="k">def</span> <span class="nf">test_bimodal_bounds</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
-</span><span class="line">    <span class="n">check_bounds</span><span class="p">(</span><span class="n">test_case</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span> <span class="n">alpha</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>Again, we use <a href="https://hypothesis.readthedocs.io/en/latest/data.html">Hypothesis</a> to generate inputs, and
-the <a href="https://github.com/pkhuong/csm">Confidence sequence method (available in C, Common Lisp, and Python)</a> to check that the lower bound is
-valid with probability at least \(1 - \alpha\).  The CSM tests
-for this statistical property with power 1 and adjustable error rate
-(in our case, one in a million): we only provide a generator
-for success values, and the driver adaptively determines when it makes
-sense to make a call and stop generating more data, while accounting
-for multiple hypothesis testing.</p>
-
-<p>TL;DR: the estimation algorithm for individual sampling passes works,
-and the combination of <a href="https://hypothesis.works/">Hypothesis</a> and <a href="https://github.com/pkhuong/csm">Confidence Sequence Method</a>
-lets us painlessly test for a statistical property.</p>
-
-<p>We can iteratively use this sampling procedure to derive lower and
-(symmetrically) upper bounds for the optimal Lagrange multiplier
-\(\lambda^\star,\) and Hoeffding’s inequality lets us control the
-probability that the lower and upper bounds are valid.  Typically,
-we’d use a tolerance of \(\sqrt{\log(n) / n},\) for an error
-rate of \(1 / n^2.\) I prefer to simply use something like \(7 /
-\sqrt{n}:\) the error rate is then less than \(10^{-42},\)
-orders of manitude smaller than the probability of hardware failure in any given
-nanosecond.<sup id="fnref:memory-error"><a href="#fn:memory-error" class="footnote">6</a></sup>
-We can still check for failure of our Las Vegas algorithm,
-but if something went wrong, it’s much more likely that we detected
-a hardware failure than anything else.  It’s like running <a href="https://en.wikipedia.org/wiki/Super_PI">SuperPi</a>
-to stress test a computer, except the work is useful. 😉</p>
-
-<h2 id="repeat-as-necessary-to-solve-a-knapsack">Repeat as necessary to solve a knapsack</h2>
-
-<p>How many sampling passes do we need? Our bounds are in terms of the
-sum of item weight: if we let our sample size be in
-\(\Theta(\sqrt{n}),\) the sum of weights \(\sum_i |w_i|\) for
-unfathomed items (that may or may not be chosen depending on the exact
-optimal multiplier \(\lambda^\star\) in the current range) will very
-probably shrink by a factor of \(\Omega(n^{1/4}).\) The initial sum can, in
-the worst case, be exponentially larger than the bitlength of the
-input, so even a division by \(n^{1/4}\) isn’t necessarily that
-great.</p>
-
-<p>I intend to apply this Lazy Linear Knapsack algorithm on subproblems in
-a more interesting solver, and I know that the sum of weights is
-bounded by the size of the initial problem, so that’s good enough for
-me!  After a constant (\(\approx 4\)) number of passes, the
-difference in item weight between the lower and upper bound on
-\(\lambda^\star\) should also be at most 1.  One or two additional
-passes will get me near optimality (e.g., within \(10^{-4}\)),
-and the lower bound on \(\lambda^\star\) should thus yield
-a super-optimal solution that’s infeasible by at most \(10^{-4},\)
-which is, for my intended usage (again), good enough.</p>
-
-<p>Given an optimal enough \(\lambda^\star,\) we can construct an
-explicit solution in one pass, plus a simple fixup for critical items.
-This Lazy Knapsack seems pretty reasonable for parallel or GPU
-computing: each sampling pass only needs to read the items (i.e., no
-partitioning-like shuffling) before writing a fraction of the data to
-a sample buffer, and we only need a constant number of passes (around
-6 or 7) in the worst case.</p>
-
-<p><hr style="width: 50%" /></p>
-<div class="footnotes">
-  <ol>
-    <li id="fn:abuse-of-language">
-      <p>It’s more like a fractional percentile, but you know what I mean: the value such that the distribution function at that point equals \(k / n\). <a href="#fnref:abuse-of-language" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:binomial">
-      <p>Binomial bounds offer even stronger confidence intervals when the estimate is close to 0 or 1 (where Hoeffding’s bound would yield a confidence interval that juts outside \([0, 1]\)), but don’t impact worst-case performance. <a href="#fnref:binomial" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:same-bounds">
-      <p>Thanks to Hoeffding’s inequality, again. <a href="#fnref:same-bounds" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:pigeonhole">
-      <p>That’s a troll. I think any self-respecting computer person would rather see it as a sort of pigeonhole argument. <a href="#fnref:pigeonhole" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:lotta-errors">
-      <p>We’re juggling a handful of error rates here. We’re checking whether the success rate for the Lazy Knapsack sampling subroutine is at least as high as \(1 - \alpha,\) as requested in the test parameters, and we’re doing so with another randomised procedure that will give an incorrect conclusion at most once every one million invocation. <a href="#fnref:lotta-errors" class="reversefootnote">&#8617;</a></p>
-    </li>
-    <li id="fn:memory-error">
-      <p><a href="http://www.cs.toronto.edu/~bianca/papers/sigmetrics09.pdf">This classic Google study</a> found 8% of DIMMs hit at least one error per year; that’s more than one single-bit error every \(10^9\) DIMM-second, and they’re mostly hard errors.  <a href="https://users.ece.cmu.edu/~omutlu/pub/memory-errors-at-facebook_dsn15.pdf">More recently, Facebook</a> reported that uncorrectable errors affect 0.03% of servers each month; that’s more than one uncorrectable error every \(10^{10}\) server-second.  If we performed one statistical test every nanosecond, the probability of memory failure alone would still dominate statistical errors by \(10^{20}!\) <a href="#fnref:memory-error" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:unless-people" role="doc-endnote">
+      <p>Unless you’re writing schedule optimising software and people will look at the result. A final hill climbing pass to make things look artificially tight often makes for an easier sale in that situation. <a href="#fnref:unless-people" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

@@ -131,7 +131,7 @@ along with a
 has <a href="https://cs.uwaterloo.ca/research/tr/1995/50/CS95-50.pdf">long</a>
 been exploring the <a href="http://www2.math.uu.se/~svante/papers/sj297-aofa.pdf">distribution of displacements</a> (i.e., search times)
 for random elements.  The <a href="https://www3.cs.stonybrook.edu/~bender/newpub/BenderHu07-TODS.pdf">packed memory array</a> angle has also been around
-for <a href="https://www.cs.cmu.edu/~jcreed/p251-willard.pdf">a while</a>.<sup id="fnref:waterloo"><a href="#fn:waterloo" class="footnote">1</a></sup></p>
+for <a href="https://www.cs.cmu.edu/~jcreed/p251-willard.pdf">a while</a>.<sup id="fnref:waterloo" role="doc-noteref"><a href="#fn:waterloo" class="footnote">1</a></sup></p>
 
 <p>I’m a bit wary of the “random element” aspect of the linear probing
 bounds: while I’m comfortable with an expectation over the hash
@@ -140,7 +140,7 @@ could repeatedly ask for the same key, and consistently experience
 worse-than-expected performance.  I’m more interested in bounding the
 worst-case displacement (the distance between the ideal location for
 an element, and where it is actually located) across all values in a
-randomly generated<sup id="fnref:memory-less"><a href="#fn:memory-less" class="footnote">2</a></sup> Robin Hood table, with high enough
+randomly generated<sup id="fnref:memory-less" role="doc-noteref"><a href="#fn:memory-less" class="footnote">2</a></sup> Robin Hood table, with high enough
 probability.  That probability doesn’t have to be extremely high:
 \(p = 0.9\) or even \(p = 0.5\) is good enough, as long as we can
 either rehash with an independent hash function, or the probability of
@@ -303,31 +303,9 @@ two-sample <a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_tes
 at the same rate \(\pm \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}}\).
 We can let \(\alpha = 10\sp{-10}\) and pre-allocate a buffer of size</p>
 
-<table>
-  <tbody>
-    <tr>
-      <td>\[</td>
-      <td>S</td>
-      <td>\sqrt{-\frac{(</td>
-      <td>S</td>
-      <td>+</td>
-      <td>D</td>
-      <td>) \ln \alpha}{2</td>
-      <td>S</td>
-      <td> </td>
-      <td>D</td>
-      <td>}} &lt; \sqrt{\frac{23.03</td>
-      <td>S</td>
-      <td>(</td>
-      <td>S</td>
-      <td>+</td>
-      <td>D</td>
-      <td>)}{2</td>
-      <td>D</td>
-      <td>}}.\]</td>
-    </tr>
-  </tbody>
-</table>
+<p><span>
+\[|S| \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}} &lt; \sqrt{\frac{23.03 |S| (|S| + |D|)}{2 |D|}}.\]
+</span></p>
 
 <p>In the worst case, \(|S| = |D|\), and we can preallocate a buffer of
 size \(\sqrt{23.03 |D|} &lt; 4.8 \sqrt{|D|}\) and only need to grow
@@ -358,7 +336,7 @@ for this case as well.</p>
 two-sided two-sample critical values we used earlier: given an
 overflow probability of \(1 - \alpha\), we need to buffer at most
 \(\sqrt{-\frac{n \ln \alpha}{2}},\) elements.  For 
-\(\alpha = 10\sp{-20}\) that’s less than \(4.8 \sqrt{n}\).<sup id="fnref:three-centuries"><a href="#fn:three-centuries" class="footnote">3</a></sup>
+\(\alpha = 10\sp{-20}\) that’s less than \(4.8 \sqrt{n}\).<sup id="fnref:three-centuries" role="doc-noteref"><a href="#fn:three-centuries" class="footnote">3</a></sup>
 This square root scaling is pretty good news in practice: shrinking
 \(n\) to \(\sqrt{n}\) tends to correspond to going down a rung or two in
 the storage hierarchy.  For example, \(10\sp{15}\) elements is
@@ -403,16 +381,18 @@ probability that I’ll need a larger buffer is so low that I just need
 to handle it, however inefficiently.  In a replicated system, where
 each node picks an independent hash function, I would even consider
 crashing when the buffer is too small!</p>
-<div class="footnotes">
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:waterloo">
-      <p>I swear the Waterloo theme isn’t some <a href="https://en.wikipedia.org/wiki/Canadian_content">CanCon</a> thing. <a href="#fnref:waterloo" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:waterloo" role="doc-endnote">
+      <p>I swear the Waterloo theme isn’t some <a href="https://en.wikipedia.org/wiki/Canadian_content">CanCon</a> thing. <a href="#fnref:waterloo" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:memory-less">
-      <p>With consistent tie-breaking, the layout of entries in a Robin hood hash table is a function of the set of entries, independently of the sequence of add and remove operations. <a href="#fnref:memory-less" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:memory-less" role="doc-endnote">
+      <p>With consistent tie-breaking, the layout of entries in a Robin hood hash table is a function of the set of entries, independently of the sequence of add and remove operations. <a href="#fnref:memory-less" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:three-centuries">
-      <p>Assuming we consume ten streams per nanosecond, we expect to experience underbuffering once every 316 years. <a href="#fnref:three-centuries" class="reversefootnote">&#8617;</a></p>
+    <li id="fn:three-centuries" role="doc-endnote">
+      <p>Assuming we consume ten streams per nanosecond, we expect to experience underbuffering once every 316 years. <a href="#fnref:three-centuries" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
