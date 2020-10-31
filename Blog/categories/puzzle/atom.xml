@@ -1,0 +1,1051 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: Puzzle | Paul Khuong: some Lisp]]></title>
+  <link href="https://www.pvk.ca/Blog/categories/puzzle/atom.xml" rel="self"/>
+  <link href="https://www.pvk.ca/"/>
+  <updated>2020-10-31T09:48:01-04:00</updated>
+  <id>https://www.pvk.ca/</id>
+  <author>
+    <name><![CDATA[Paul Khuong]]></name>
+    <email><![CDATA[pvk@pvk.ca]]></email>
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[Check for borrows in bitwise operations]]></title>
+    <link href="https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations/"/>
+    <updated>2020-05-02T17:24:39-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations</id>
+    <content type="html"><![CDATA[<p><small>2020-05-03: Had to add a complement step in the ULEB
+section. Seems I couldn’t actually avoid that crummy-looking
+notation. Spotted by redditor /u/Y_Less.</small></p>
+
+<p>In the <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">fourth installment of his series on sorting with AVX2</a>,
+<a href="https://twitter.com/damageboy">@damageboy</a> has a short aside where he
+tries to detect partitioning (pivot) patterns where elements less than
+and greater than or equal to the pivot are already in the correct
+order: in that case, the partitioning routine does not need to permute
+the block of values.  The practical details are irrelevant for this
+post; what matters is that we wish to quickly identify whether a byte
+value matches any of the follow nine cases:</p>
+
+<ul>
+  <li><code>0b11111111</code></li>
+  <li><code>0b11111110</code></li>
+  <li><code>0b11111100</code></li>
+  <li><code>0b11111000</code></li>
+  <li><code>0b11110000</code></li>
+  <li><code>0b11100000</code></li>
+  <li><code>0b11000000</code></li>
+  <li><code>0b10000000</code></li>
+  <li><code>0b00000000</code></li>
+</ul>
+
+<p>Looking at the bit patterns,<sup id="fnref:b-for-bit-literal" role="doc-noteref"><a href="#fn:b-for-bit-literal" class="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
+is pretty natural.  These instructions are somewhat complex (latency
+closer to 3 cycles than 1, and often port restricted),
+and it seems like the sort of problem that would have had efficient
+solutions before SSE4 finally graced x86 with a <a href="https://en.wikipedia.org/wiki/Hamming_weight">population count</a> instruction.</p>
+
+<p>In the context of a sorting library’s partition loop, <code>popcnt</code> and
+<code>bsf</code> is probably more than good enough:
+<a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">the post shows that the real issue is branch mispredictions</a>
+being slower than permuting unconditionally.
+This is just a fun challenge to think about (:</p>
+
+<h2 id="warm-up-is_power_of_two">Warm-up: <code>is_power_of_two</code></h2>
+
+<p>Detecting whether a machine integer is a power of two (or zero) is
+another task that has a straightforward solution in terms of popcount
+or bitscan.  There’s also a simpler classic solution to this problem:</p>
+
+<p><code>x == 0 || is_power_of_two(x) &lt;==&gt; (x &amp; (x - 1)) == 0</code></p>
+
+<p>How does that expression work?  Say <code>x</code> is a power of two. Its binary
+representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian" role="doc-noteref"><a href="#fn:big-endian" class="footnote">2</a></sup>
+a single “1” bit, and trailing zeros (maybe none).  Let’s see what happens when
+we subtract 1 from <code>x</code>:</p>
+
+<pre><code>x           = 0b00...0010...0
+     x - 1  = 0b00...0001...1
+x &amp; (x - 1) = 0b00...0000...0
+</code></pre>
+
+<p>The subtraction triggered a chain of <a href="https://en.wikipedia.org/wiki/Carry_(arithmetic)">borrows</a>
+throughout the trailing zeros, until we finally hit that 1 bit.
+In decimal, subtracting one from <code>10...0</code> yields <code>09...9</code>;
+in binary we instead find <code>01...1</code>.
+If you ever studied the circuit depth (latency) of carry chains
+(for me, that was for circuit complexity theory), you know
+that this is difficult to do well.
+Luckily for us, <a href="https://en.wikipedia.org/wiki/Kogge%E2%80%93Stone_adder">chip makers work hard to pull it off</a>,
+and we can just use carries as a data-controlled
+primitive to efficiently flip ranges of bits.</p>
+
+<p>When <code>x</code> is a power of two, <code>x</code> and <code>x - 1</code> have no “1” bit in common,
+so taking the bitwise <code>and</code> yields zero.  That’s also true when <code>x</code> is 0,
+since <code>and</code>ing anything with 0 yields zero.  Let’s see what happens
+for non-zero, non-power-of-two values <code>x = 0bxx...xx10..0</code>,
+i.e., where <code>x</code> consists of an arbitrary non-zero sequence of bits <code>xx..xx</code>
+followed by the least set bit (there’s at least one, since <code>x</code> is neither zero nor a power of two), and the trailing zeros:</p>
+
+<pre><code>x           = 0bxx...xx10...0
+     x - 1  = 0bxx...xx01...1
+x &amp; (x - 1) = 0bxx...xx000000
+</code></pre>
+
+<p>The leading not-all-zero <code>0bxx...xx</code> is unaffected by the subtraction,
+so it passes through the bitwise <code>and</code> unscathed (<code>and</code>ing any bit with
+itself yields that same bit), and we know there’s at least one non-zero
+bit in there; our test correctly rejects it!</p>
+
+<h2 id="stretching-decoding-varints">Stretching: decoding varints</h2>
+
+<p>When decoding variable length integers in <a href="https://en.wikipedia.org/wiki/LEB128#Unsigned_LEB128">ULEB</a>
+format, e.g., for <a href="https://developers.google.com/protocol-buffers/docs/encoding">protocol buffers</a>,
+it quickly becomes clear that, in order to avoid byte-at-a-time logic,
+we must rapidly segment (<a href="https://en.wikipedia.org/wiki/Lexical_analysis">lex or tokenize</a>, in a way) our byte stream to determine where each ULEB
+ends.  Let’s focus on the fast path, when the encoded ULEB fits in a
+machine register.</p>
+
+<p>We have <code>uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...</code>:
+a sequence of bytes<sup id="fnref:remember-endianness" role="doc-noteref"><a href="#fn:remember-endianness" class="footnote">3</a></sup> with the topmost bit equal to 1,
+terminated by a byte with the top bit set to 0,
+and, finally, arbitrary nuisance bytes (<code>m...m</code>, <code>n...n</code>, etc.) we wish to ignore.
+Ideally, we’d extract <code>data = 0b0000000000000000...?zzzzzzz?yyyyyyy?...</code> from <code>uleb</code>: we want to clear the
+nuisance bytes, and are fine with arbitrary values in the
+ULEB’s control bits.</p>
+
+<p>It’s much easier to find bits set to 1 than to zero, so the first thing to do is
+to complement the <code>ULEB</code> data and
+clear out everything but potential ULEB control bits (the high bit of
+each byte), with <code>c = ~uleb &amp; (128 * (WORD_MAX / 255))</code>, i.e.,
+compute the bitwise <code>and</code> of <code>~uleb</code> with a bitmask of the high bit in each byte.</p>
+
+<pre><code>   uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...
+  ~uleb = 0b̅n̅n̅n̅n̅n̅n̅n̅n̅m̅m̅m̅m̅m̅m̅m̅m̅...1z̅z̅z̅z̅z̅z̅z0y̅y̅y̅y̅y̅y̅y0...
+      c = 0b̅n̅0000000̅m̅0000000...10000000000000000...
+</code></pre>
+
+<p>We could now bitscan to find the index of the first 1 (marking the
+last ULEB byte), and then generate a mask.  However, it seems wasteful to
+generate an index with a scan, only to convert it back into bitmap
+space with a shift.  We’ll probably still want that index to know how
+far to advance the decoder’s cursor, but we can hopefully update the
+cursor in parallel with decoding the current ULEB value.</p>
+
+<p>When we were trying to detect powers of two, we subtracted <code>1</code> from
+<code>x</code>, a value kind of like <code>c</code>, in order to generate a new value
+that differed from <code>x</code> in all the bits up to and including the first
+set (equal to <code>1</code>) bit of <code>x</code>, and identical in the remaining bits.  We
+then used the fact that <code>and</code>ing a bit with itself yields that same
+bit to detect whether there was any non-zero bit in the remainder.</p>
+
+<p>Here, we wish to do something else with the remaining untouched bits, we
+wish to set them all to zero.  Another bitwise operator does
+what we want: <code>xor</code>ing a bit with itself always yields zero, while
+<code>xor</code>ing bits that differ yields <code>1</code>.  That’s the plan for ULEB. We’ll
+subtract 1 from <code>c</code> and <code>xor</code> that back with <code>c</code>.</p>
+
+<pre><code>       uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...
+      ~uleb = 0b̅n̅n̅n̅n̅n̅n̅n̅n̅m̅m̅m̅m̅m̅m̅m̅m̅...1z̅z̅z̅z̅z̅z̅z0y̅y̅y̅y̅y̅y̅y0...
+c           = 0b̅n̅0000000̅m̅0000000...10000000000000000...
+     c - 1  = 0b̅n̅0000000̅m̅0000000...01111111111111111...
+c ^ (c - 1) = 0b0000000000000000...11111111111111111...
+</code></pre>
+
+<p>We now just have to bitwise <code>and</code> <code>uleb</code> with <code>c ^ (c - 1)</code>
+to obtain the bits of the first <code>ULEB</code> value in <code>uleb</code>, while
+overwriting everything else with 0.  Once we have that, we can either
+<a href="https://www.felixcloutier.com/x86/pext">extract data bits with <code>PEXT</code></a>
+on recent Intel chips, or otherwise dust off interesting stunts for <a href="https://en.wikipedia.org/wiki/SWAR">SWAR</a> shifts by variable amounts.</p>
+
+<h2 id="now-for-damageboys-problem">Now for <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">damageboy</a>’s problem</h2>
+
+<p>Let’s first repeat the question that motivated this post.  We want to detect when a byte <code>p</code> is one of the following nine values:</p>
+
+<ul>
+  <li><code>0b11111111</code></li>
+  <li><code>0b11111110</code></li>
+  <li><code>0b11111100</code></li>
+  <li><code>0b11111000</code></li>
+  <li><code>0b11110000</code></li>
+  <li><code>0b11100000</code></li>
+  <li><code>0b11000000</code></li>
+  <li><code>0b10000000</code></li>
+  <li><code>0b00000000</code></li>
+</ul>
+
+<p>These bit patterns feel similar to those for power of two bytes: if we
+complement the bits, these values are all 1 less than a power of two
+(or -1, one less than zero).  We already know how to detect when a
+value <code>x</code> is zero or a power of two (<code>x &amp; (x - 1) == 0</code>), so it’s easy
+to instead determine whether <code>~p</code> is one less than zero or a power of
+two: <code>(~p + 1) &amp; ~p == 0</code>.</p>
+
+<p>This is already pretty good: bitwise <code>not</code> the byte <code>p</code>,
+and check if it’s one less than zero or a power of two (three simple
+instructions on the critical path).  We can do better.</p>
+
+<p>There’s another name for <code>~p + 1</code>, i.e., for bitwise complementing a value and
+adding one: that’s simply <code>-p</code>, the additive inverse of <code>p</code> in two’s
+complement!  We can use <code>-p &amp; ~p == 0</code>.  That’s one fewer
+instruction on the critical path of our dependency graph (down to two, since we can <a href="https://www.felixcloutier.com/x86/test"><code>test</code> whether <code>and</code>ing yields zero</a>), and still only
+uses simple instructions that are unlikely to be port constrained.</p>
+
+<p>Let’s check our logic by enumerating all byte-sized values.</p>
+
+<pre><code>CL-USER&gt; (dotimes (p 256)
+           (when (zerop (logand (- p) (lognot p) 255))
+             (format t "0b~2,8,'0r~%" p)))
+0b00000000
+0b10000000
+0b11000000
+0b11100000
+0b11110000
+0b11111000
+0b11111100
+0b11111110
+0b11111111
+</code></pre>
+
+<p>These <em>are</em> the bytes we’re looking for (in ascending rather
+than descending order)!</p>
+
+<h2 id="remember-the-power-of-borrows">Remember the power of borrows</h2>
+
+<p>I hope the examples above communicated a pattern I often observe when
+mangling bits: operations that are annoying (not hard, just a bit more
+complex than we’d like) in the bitmap domain can be simpler in two’s
+complement arithmetic.  Arithmetic operations are powerful mutators
+for bitmaps, but they’re often hard to control.  Subtracting or adding
+1 are the main exceptions: it’s easy to describe their impact in terms
+of the low bits of the bitmap.  In fact, we can extend that trick to
+subtracting or adding powers of two: it’s the same carry/borrow chain effect as for 1,
+except that bits smaller than the power of two pass straight
+through…
+which might be useful when we expect a known tag followed by a ULEB value that must be decoded.</p>
+
+<p>If you find yourself wishing for a way to flip ranges of bits in a
+data-dependent fashion, it’s always worth considering the two’s
+complement representation of the problem for a couple minutes.  Adding
+or subtracting powers of two doesn’t always work, but the payoff is
+pretty good when it does.</p>
+
+<p>P.S., <a href="http://0x80.pl/notesen/2016-10-16-detecting-bit-pattern.html">Wojciech Muła offers a different 3-operation sequence with <code>-p</code></a>
+to solve damageboy’s problem.
+That’s another nice primitive to generate bitmasks dynamically.</p>
+
+<p><small>Thank you Ruchir for helping me clarify the notation around the ULEB section.</small></p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:b-for-bit-literal" role="doc-endnote">
+      <p>I use the <code>0b...</code> syntax throughout this post to denote bit literals, similarly to the usual <code>0x...</code> hexadecimal literals. <a href="#fnref:b-for-bit-literal" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:big-endian" role="doc-endnote">
+      <p>While I prefer to work with little-endian bytes, I find everything makes more sense with big-endian bits. <a href="#fnref:big-endian" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:remember-endianness" role="doc-endnote">
+      <p>Remember, while ULEB is little-endian, we use big bit-endianness. <a href="#fnref:remember-endianness" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[Three-universal hashing in four instructions]]></title>
+    <link href="https://www.pvk.ca/Blog/2017/04/02/three-universal-hashing-in-four-instructions/"/>
+    <updated>2017-04-02T18:10:10-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2017/04/02/three-universal-hashing-in-four-instructions</id>
+    <content type="html"><![CDATA[<p>… with one caveat: the hash functions only generate one bit.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"hash.c" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
+</span><span class="line"><span class="nf">bit_hash</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">table</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">bit</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">    <span class="cm">/* table is a random uniform uint64_t, bit is a random bit. */</span>
+</span><span class="line">	<span class="k">return</span> <span class="n">__builtin_parityll</span><span class="p">((</span><span class="n">x</span> <span class="o">&amp;</span> <span class="n">table</span><span class="p">)</span> <span class="o">^</span> <span class="n">bit</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>With hardware popcount, this compiles to something like the following.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"hash.s" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+</pre></td><td class="code"><pre><code class="s"><span class="line">        andq    <span class="o">%rsi, %</span>rdi <span class="c1"># x &amp; table</span>
+</span><span class="line">        xorl    <span class="o">%eax, %</span>eax <span class="c1"># work around a hardware perf bug in popcnt</span>
+</span><span class="line">        xorq    <span class="o">%rdi, %</span>rdx <span class="c1"># () ^ bit</span>
+</span><span class="line">        popcntq <span class="o">%rdx, %</span>rax <span class="c1"># get the popcount</span>
+</span><span class="line">        andl    <span class="o">$</span><span class="m">1</span><span class="p">,</span> %eax   <span class="c1"># isolate parity</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>This should raise a few questions:</p>
+
+<ol>
+  <li>Why?</li>
+  <li>Why does it work?</li>
+  <li>Is it useful?</li>
+</ol>
+
+<p>Someone with a passing familiarity with x86 would also ask why we use
+<code>popcnt</code> instead of checking the parity flag after <code>xor</code>.
+Unfortunately, the parity flag only considers the least significant
+byte of the result (:</p>
+
+<h2 id="one-bit-hash-functions-but-why">One-bit hash functions: but why?</h2>
+
+<p>When implementing something like the
+<a href="https://arxiv.org/abs/0902.2206">hashing trick</a> or
+<a href="https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf">count sketches (PDF)</a>,
+you need two sets of provably strong hash functions: one to pick the
+destination bucket, and another to decide whether to increment or
+decrement by the sketched value.</p>
+
+<p>One-bit hash functions are ideal for the latter use case.</p>
+
+<h2 id="how-does-that-even-work">How does that even work?</h2>
+
+<p>The bitwise operations in <code>bit_hash</code> implement a degenerate form of
+<a href="https://arxiv.org/abs/1011.5200">tabulation hashing</a>.  It considers
+the 64 bit input value <code>x</code> as a vector of 64 bits, and associates a
+two intermediate output values with each index.  The naïve
+implementation would be something like the following.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"hash_slow.c" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
+</span><span class="line"><span class="nf">bit_hash_slow</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="kt">bool</span> <span class="n">random_table</span><span class="p">[</span><span class="mi">64</span><span class="p">][</span><span class="mi">2</span><span class="p">])</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">    <span class="kt">int</span> <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">for</span> <span class="p">(</span><span class="kt">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">64</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">,</span> <span class="n">x</span> <span class="o">&gt;&gt;=</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">random_table</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">x</span> <span class="o">&amp;</span> <span class="mi">1</span><span class="p">];</span>
+</span><span class="line">    <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Of course, the representation of <code>random_table</code> is inefficient, and we
+should hand-roll a bitmap.  However, the loop itself is a problem.</p>
+
+<p>The trick is to notice that we can normalise the table so that the
+value for <code>random_table[i][0]</code> is always 0: in order to do so, we have
+to fix the initial value for <code>acc</code> to a random bit.  That initial
+value is the hash value for <code>0</code>, and the values in
+<code>random_table[i][1]</code> now encode whether a non-zero bit <code>i</code> in <code>x</code>
+flips the hash value or leaves it as is.</p>
+
+<p>The <code>table</code> argument for <code>bit_hash</code> is simply the 64 bits in
+<code>random_table[i][1]</code>, and <code>bit</code> is the hash value for <code>0</code>.  If bit <code>i</code>
+in <code>table</code> is 0, bit <code>i</code> is irrelevant to the hash.  If bit <code>i</code> in
+<code>table</code> is 1, the hash flips when bit <code>i</code> in <code>x</code> is 1.  Finally, the
+parity counts how many times the hash was flipped.</p>
+
+<h2 id="is-it-even-useful">Is it even useful?</h2>
+
+<p>I don’t think so.  Whenever we need a hash bit, we also want a hash
+bucket; we might as well steal one bit from the latter wider hash.
+Worse, we usually want a few such bucket/bit pairs, so we could also
+compute a wider hash and carve out individual bits.</p>
+
+<p>I only thought about this trick because I’ve been reading a few
+empirical evaluation of sketching techniques, and a few authors find
+it normal that computing a hash bit doubles the CPU time spent on
+hashing.  It seems to me the right way to do this is to map
+columns/features to not-too-small integers (e.g., universal hashing to
+<code>[0, n^2)</code> if we have <code>n</code> features), and apply strong hashing to
+these integers.  Hashing machine integers is <em>fast</em>, and we can always
+split strong hashes in multiple values.</p>
+
+<p>In the end, this family of one-bit hash functions seems like a good
+solution to a problem no one should ever have.  But it’s still a cute trick!</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[All you need is call/cc]]></title>
+    <link href="https://www.pvk.ca/Blog/2013/09/19/all-you-need-is-call-slash-cc/"/>
+    <updated>2013-09-19T01:30:00-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2013/09/19/all-you-need-is-call-slash-cc</id>
+    <content type="html"><![CDATA[<p>I was going to post this as a comment on
+<a href="http://www.reddit.com/r/lisp/comments/1mkqvj/why_monads_have_not_taken_the_common_lisp_world/ccb5sor">r/lisp</a>,
+but I feel it’s grown a bit too much for the platform.  For one time
+only, this blog will host some Racket code.  I apologise in advance to
+any Schemer reading this.  I needed an easy way to play with control
+operators, but I’ve never really Schemed, so there’s probably a dozen
+issues with the code and its style.</p>
+
+<p>So, why is the
+<a href="http://blog.sigfpe.com/2008/12/mother-of-all-monads.html">continuation monad the mother of all monads</a>?
+The short answer is that, by enabling transparent inversion of
+control, it eliminates the need to sprinkle hooks for monad-specific
+code everywhere; normal (as much as anything involving delimited
+continuations can be “normal”) evaluation rules will be subverted as
+needed.  Here’s how.</p>
+
+<p>First, some boilerplate (boilerfoil may be the more appropriate term).</p>
+
+<pre><code>#lang racket
+(require racket/control) ; for shift/reset
+
+(define (run thunk return . arguments)
+  (reset (return (apply thunk arguments))))
+</code></pre>
+
+<p>This definition is all that is needed to execute arbitrary Racket code
+in a monad: the only thing to specify is how a ground value should be
+moved in the monad.  <code>bind</code> will be defined implicitly, through the
+code for monad-specific behaviour.  The body of <code>run</code> defines a
+context to determine where to stop capturing the continuation, and
+executes the form <code>(return (apply thunk arguments))</code> in that context:
+the thunk is called with any argument provided, and the result is
+<code>return</code>ed into the monad.</p>
+
+<p>For the sake of generalisation, I’ll start with a trivial example: the
+Maybe monad.  First, I’ll quickly define structure types.  In
+practice, a distinguished “nothing” value would suffice, but this way
+parallels Haskell more closely.</p>
+
+<pre><code>(struct Maybe ())
+(struct Nothing Maybe ())
+(struct Some Maybe (value))
+</code></pre>
+
+<p>The constructor <code>Some</code> also doubles as <code>return</code>.  In order to abort
+out, <code>nothing</code> must unwind the continuation and return a <code>Nothing</code>
+object.</p>
+
+<pre><code>(define (nothing)
+  (shift k (Nothing)))
+
+&gt; (run (lambda () 42) Some)
+#&lt;Some&gt;
+&gt; (Some-value (run (lambda () 42) Some))
+42
+</code></pre>
+
+<p>The function <code>run</code> obviously works as it should in these trivial
+examples.  It’s also not surprising that <code>nothing</code> works, because it’s
+the obvious implementation of unwinding with delimited continuations.</p>
+
+<pre><code>&gt; (run (lambda () 42 (nothing) #t) Some)
+#&lt;Nothing&gt;
+</code></pre>
+
+<p>In the List monad, <code>return</code> is just <code>list</code>. <code>run</code> can be called with a
+thunk and <code>list</code> as the second argument, and indeed, the result is a
+normal computation that returns its value as a singleton.</p>
+
+<pre><code>&gt; (run (lambda () (+ 4 5)) list)
+'(9)
+</code></pre>
+
+<p>The useful thing to do with the List monad is to specify multiple
+return values, and have the computation fork (lazily in Haskell,
+eagerly here, because I’m working with strict lists) on each
+choice. That’s a one-liner:</p>
+
+<pre><code>(define (inject-values . values)
+  (shift k (append-map k values)))
+</code></pre>
+
+<p>This function captures the continuation up to <code>reset</code>, unwinds the
+current continuation up to that point, and binds the captured
+delimited continuation to <code>k</code>.  Then, it passes each possible value to
+the continuation, and appends the results together.</p>
+
+<p>Here’s a first example:</p>
+
+<pre><code>&gt; (run (lambda () (+ (inject-values 1 2) (inject-values 3 4))) list)
+'(4 5 5 6)
+</code></pre>
+
+<p>That is, reassuringly, the four possible sums: <code>1 + 3 = 4</code>, <code>1 + 4 = 5</code>,
+<code>2 + 3 = 5</code>, and <code>2 + 4 = 6</code>.  The magic is that all Scheme code,
+by virtue of supporting the capture (and unwind) of delimited
+continuation, is now “in” the List monad.  It is certainly the case
+for that uninstrumented thunk.  The pre-defined function <code>map</code>
+provides a more convincing example.</p>
+
+<pre><code>&gt; (run (lambda ()
+         (map cons
+              (inject-values '(1 2) '(4 5))
+              (inject-values '(3 4) '(5 6))))
+       list)
+'(((1 . 3) (2 . 4))
+  ((1 . 5) (2 . 6))
+  ((4 . 3) (5 . 4))
+  ((4 . 5) (5 . 6)))
+</code></pre>
+
+<p>I’ve taken the liberty of line-wrapping the return value, and clearly,
+<code>(map cons ...)</code> has been called with all four pairs of lists…  but
+all the special monadic operations happens outside <code>map</code>.  Moving
+<code>inject-values</code> inside the mapped function is a much stronger evidence
+that arbitrary uninstrumented Scheme code is implicitly lifted in the
+monad: <code>map</code> is a predefined (pre-compiled even) library function.</p>
+
+<pre><code>&gt; (run (lambda ()
+       (map (lambda (x y) ((inject-values + -) x y))
+            '(1 2 3)
+            '(4 5 6)))
+     list)
+'((5 7 9)     ; + + +
+  (5 7 -3)    ; + + -
+  (5 -3 9)    ; + - +
+  (5 -3 -3)   ; + - -
+  (-3 7 9)    ; - + +
+  (-3 7 -3)   ; - + -
+  (-3 -3 9)   ; - - +
+  (-3 -3 -3)) ; - - -
+</code></pre>
+
+<p>At each call to the mapped function, the computation explores both the
+branch in which the arguments are added and the one in which they are
+subtracted.  The result, for 3 pairs of triplets, is a list of 8
+triplets.</p>
+
+<p>Neither of these implementations is surprising or new; I believe
+they’re standard undergraduate exercises in a few universities.  The
+insight in
+<a href="http://www.diku.dk/hjemmesider/ansatte/andrzej/papers/RM-abstract.html">Filinski’s work</a>
+is that both <code>nothing</code> and <code>inject-values</code> share the same structure
+and can be defined in terms of the monad they help implement.  Because
+I dislike scrolling, their definitions are copied here.</p>
+
+<pre><code>(define (nothing) ; Maybe
+  (shift k (Nothing)))
+
+(define (inject-values . values) ; List
+  (shift k (append-map k values)))
+</code></pre>
+
+<p>Instead of returning the (monadic) value <code>(Nothing)</code> or <code>values</code> (a
+list), both capture and unwind the delimited continuation, bind it to
+<code>k</code>, and then do something more to the value.  Some squinting reveals
+that that something more is calling <code>bind</code> with the continuation <code>k</code>
+as the next step.  In the Maybe monad, <code>Nothing &gt;&gt;= k</code> evaluates to
+<code>Nothing</code>.  In the List monad, <code>values &gt;&gt;= k</code> becomes <code>foldr ((++)
+. k) [] values</code>, which is basically <code>(append-map k values)</code>.  The
+general form for any monad is then to implement any operator that
+doesn’t just <code>return</code> a value as</p>
+
+<pre><code>(define (operator ...)
+  (shift k (bind [special stuff] k)))
+</code></pre>
+
+<p>As code, this gives</p>
+
+<pre><code>(define (make-operator bind operator)
+  (lambda arguments
+    (shift k (bind (apply operator arguments) k))))
+</code></pre>
+
+<p>after adding support for variadic operators.  For example, choosing
+between multiple items in a list is</p>
+
+<pre><code>(define (list-bind x k) (append-map k x))
+
+(define inject-values2 (make-operator list-bind list))
+</code></pre>
+
+<p>Some sketching on paper will show that the transformation is generic
+and correct, with a proof that mostly goes through repeated
+applications of the monad laws.  Capturing the continuation moves the
+whole stack of functions that will eventually receive results into a
+single function (the continuation), and that function can then be
+passed to <code>bind</code>.  The monad laws guarantee that this associative
+reordering of nested <code>bind</code>s preserves the meaning of the program.</p>
+
+<p>We can also mimic <code>do</code>-notation more closely and implement <code>join</code>, an
+“anti-return”.  Given that operator, not <code>return</code>ing a value can instead
+be implemented as <code>join</code>ing it after the fact.  One definition is
+<code>(make-operator bind identity)</code>, but I feel it’s simpler to just do it
+longhand.</p>
+
+<pre><code>(define (make-join bind)
+  (lambda (value)
+    (shift k (bind value k))))
+
+(define join-list (make-join list-bind))
+
+&gt; (run (lambda () (+ 1 (join-list '(1 2 3)))) list)
+'(2 3 4)
+</code></pre>
+
+<p>Of course all this also works when <code>operator</code> is equivalent to
+<code>return</code>; it’s just pointless.  The <code>shift</code>/<code>return</code>/<code>bind</code> dance is
+then a convoluted way to demand regular Scheme evaluation rules.</p>
+
+<p>And that is how the continuation monad is universal.  When code is in
+the continuation monad (or in a language with delimited
+continuations), there is a mechanical way to have that code execute in
+almost any other monad.  There are technical restrictions on the monad
+for the transformation to work, but I think any monad that can be
+implemented in (pure) Haskell qualifies.</p>
+
+<p>I feel like sigfpe’s presentation was hobbled by the fact that he used
+the Continuation monad in Haskell, making it harder to see that the
+Continuation monad of the implementation is completely independent of
+the emulated one.  Really, the idea is one of these nice insights that
+formalise and generalise old hacks, and seem obvious in retrospect.</p>
+
+<p>The post’s title refers to the fact that delimited continuations can
+themselves be implemented in terms of <code>call-with-current-continuation</code>
+(and a single mutable cell).  There are many ways to interpret the
+corollary that <code>call/cc</code> suffices to transpose code into arbitrary
+monads.  It certainly seems like a victory for the minimalist crowd.
+On the other hand, I believe that the power of programming languages
+and paradigms lies as much in what they enable as it does in what they
+forbid (or make inconvenient, at least).  From that point of view,
+it’s not obvious whether the universality of <code>call/cc</code> makes a strong
+case for or against the feature.</p>
+
+<p>This result also provides a tentative explanation for the low traction
+of monads among Lispers: perhaps many would rather directly hack the
+features in, with (ersatz) continuations.</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[Bitsets match regular expressions, compactly]]></title>
+    <link href="https://www.pvk.ca/Blog/2013/06/23/bitsets-match-regular-expressions/"/>
+    <updated>2013-06-23T02:40:00-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2013/06/23/bitsets-match-regular-expressions</id>
+    <content type="html"><![CDATA[<p>This post describes how graph and automata theory can help compile a
+regular expression like “ab(cd|e)*fg” into the following
+asymptotically (linear-time) and practically (around 8
+cycles/character on my E5-4617) efficient machine code.  The technique
+is easily amenable to SSE or AVX-level vectorisation, and doesn’t rely
+on complicated bit slicing tricks nor on scanning multiple streams in
+parallel.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>matcher inner loop </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">;     8F70: L1:   4839D9           CMP RCX, RBX  ; look for end of string
+</span><span class="line">;     8F73:       7D6C             JNL L5
+</span><span class="line">;     8F75:       488BC1           MOV RAX, RCX
+</span><span class="line">;     8F78:       48D1F8           SAR RAX, 1
+</span><span class="line">;     8F7B:       410FB6440001     MOVZX EAX, BYTE PTR [R8+RAX+1] ; read character
+</span><span class="line">;     8F81:       48D1E2           SHL RDX, 1
+</span><span class="line">;     8F84:       488B35F5FEFFFF   MOV RSI, [RIP-267]         ; #(0 0 0 0
+</span><span class="line">                                                              ;   ...)
+</span><span class="line">;     8F8B:       0FB6440601       MOVZX EAX, BYTE PTR [RSI+RAX+1] ; load mask from LUT
+</span><span class="line">;     8F90:       48D1E0           SHL RAX, 1    ; only data-dependent part of
+</span><span class="line">;     8F93:       4821C2           AND RDX, RAX  ;  transition
+</span><span class="line">;     8F96:       F6C258           TEST DL, 88   ; if any of states 2,3,5 are active
+</span><span class="line">;     8F99:       BE00000000       MOV ESI, 0    ;  [fixnums are tagged with a low 0 bit]
+</span><span class="line">;     8F9E:       41BB58000000     MOV R11D, 88  ; all of them are
+</span><span class="line">;     8FA4:       490F45F3         CMOVNE RSI, R11
+</span><span class="line">;     8FA8:       4809F2           OR RDX, RSI   ; now active
+</span><span class="line">;     8FAB:       4885D2           TEST RDX, RDX ; if no state is active
+</span><span class="line">;     8FAE:       751C             JNE L3
+</span><span class="line">;     8FB0:       488BD1           MOV RDX, RCX  ; return... :'( 
+</span><span class="line">;     8FB3:       BF17001020       MOV EDI, 537919511 ; we're working on
+</span><span class="line">;     8FB8: L2:   488D5D10         LEA RBX, [RBP+16]  ; moving such code block
+</span><span class="line">;     8FBC:       B904000000       MOV ECX, 4         ; out of inner loops.
+</span><span class="line">;     8FC1:       BE17001020       MOV ESI, 537919511
+</span><span class="line">;     8FC6:       F9               STC
+</span><span class="line">;     8FC7:       488BE5           MOV RSP, RBP
+</span><span class="line">;     8FCA:       5D               POP RBP
+</span><span class="line">;     8FCB:       C3               RET
+</span><span class="line">;     8FCC: L3:   4883C102         ADD RCX, 2
+</span><span class="line">;     8FD0: L4:   480FBAE208       BT RDX, 8     ; if we're not at the accept state
+</span><span class="line">;     8FD5:       7399             JNB L1        ; loop back</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h2 id="bitap-algorithms">Bitap algorithms</h2>
+
+<p>The
+<a href="http://en.wikipedia.org/wiki/Bitap_algorithm">canonical bitap algorithm</a>
+matches literal strings, e.g. “abad”.  Like other bitap algorithms, it
+exploits the fact that, given a bitset representation of states, it’s
+easy to implement transfer functions of the form “if state \( i \) was
+previously active and we just consumed character \( c \), state \(
+i+1 \) is now active”.  It suffices to shift the bitset
+representation of the set of active states by 1, and to mask out
+transitions that are forbidden by the character that was just
+consumed.</p>
+
+<p>For example, when matching the literal string “abad”, a state is
+associated with each position in the pattern.  0 is the initial state,
+1 is the state when we’ve matched the first ‘a’, 2 after we’ve also
+matched ‘b’, 3 after the second ‘a’, and 4 after ‘d’, the final
+character, has been matched.  Transposing this information gives us
+the information we really need: ‘a’ allows a transition from 0 to 1
+and from 2 to 3, ‘b’ a transition from 1 to 2, and ‘d’ from 3 to 4.</p>
+
+<p>A trivial state machine is probably clearer.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/abad.png" /></p>
+
+<p>The initial state is in grey, the accept state is a double circle, and
+transitions are labelled with the character they accept.</p>
+
+<p>Finding the substring “abad” in a long string thus reduces to a bunch
+of bitwise operations.  At each step, we OR bit 0 in the set of
+states: we’re always looking for the beginning of a new match.  Then,
+we consume a character.  If it’s ‘a’, the mask is 0b01010; if it’s
+‘b’, mask is 0b00100; if it’s ‘d’, mask is 0b10000; otherwise, its
+mask is 0.  Then, we shift the set of state left by 1 bit, and AND
+with mask.  The effect is that bit 1 is set iff mask has bit 1 set
+(and that only happens if the character is ‘a’), and bit 0 was
+previously set (… which is always the case), bit 2 is set iff mask has
+bit 2 set (i.e. we consumed a ‘b’) and bit 1 was previously set, etc.</p>
+
+<p>We declare victory whenever state 4 is reached, after a simple bit
+test.</p>
+
+<p>It’s pretty clear that this idea can be extended to wildcards or even
+character classes: multiple characters can have the same bit set to 1
+in their mask.  Large alphabets are also straightforward to handle:
+the mapping from character to mask can be any associative dictionary,
+e.g. a perfect hash table (wildcards and inverted character classes
+then work by modifying the default mask value).  This works not only
+with strings, but with any sequence of objects, as long as we can
+easily map objects to attributes, and attributes to masks.  Some
+thinking shows it’s even possible to handle the repetition operator
+“+”: it’s simply a conditional transition from state \( i \) to
+state \( i \).</p>
+
+<p>What I find amazing is that the technique extends naturally to
+arbitrary regular expressions (or nondeterministic finite automata).</p>
+
+<h2 id="shift-and-mask-for-regular-expressions">Shift and mask for regular expressions</h2>
+
+<p>Simulating an NFA by advancing a set of states in lockstep is an old
+technique.  Russ Cox has written a
+<a href="http://swtch.com/~rsc/regexp/">nice review of classic techniques to parse or recognize regular languages</a>.
+The NFA simulation was first described by
+<a href="http://www.fing.edu.uy/inco/cursos/intropln/material/p419-thompson.pdf">Thomson in 1977</a>,
+but it’s regularly being rediscovered as taking the Brzozowski
+derivative of regular expressions ;)</p>
+
+<p><a href="http://neil.fraser.name/software/diff_match_patch/bitap.ps">Fast Text Searching With Errors</a>
+by Sun Wu and Udi Manber is a treasure trove of clever ideas to
+compile pattern matching, a symbolic task, into simple bitwise
+operations.  For regular expressions, the key insight is that the set
+of states can be represented with a bitset such that the transition
+table for the NFA’s states can be factored into a simple data-dependent
+part followed by \( \epsilon \)-transitions that are the same,
+regardless of the character consumed.  Even better: the NFA’s state
+can be numbered so that each character transition is from state \( i
+\) to \( i+1 \), and such a numbering falls naturally from the
+obvious way to translate regular expression ASTs into NFAs.</p>
+
+<p>For the initial example “ab(cd|e)*fg”, the AST looks like a node to
+match ‘a’, succeeded by a node to match ‘b’, then a repetition node
+into either “cd”, “e” or \( \epsilon \), and the repetition node is
+succeeded by “fg” (and, finally, accept).  Again, a drawing is much
+clearer!</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/naive-regexp.png" /></p>
+
+<p>Circles correspond to character-matching states, the square to a
+repetition node, the diamond to a choice node, and the pointy boxes to
+dummy states.  The final accept state is, again, a double circle.
+\( \epsilon \)-transitions are marked in blue, and regular
+transitions are labelled with the character they consume.</p>
+
+<p>The nodes are numbered according to a straight depth-first ordering in
+which children are traversed before the successor.  As promised,
+character transitions are all from \( i \) to \( i+1 \), e.g. 0 to
+1, 1 to 2, 6 to 7, … This is a simple consequence of the fact that
+character-matching nodes have no children and a single successor.</p>
+
+<p>This numbering is criminally wasteful.  States 3, 6 and 10 serves no
+purpose, except forwarding \( \epsilon \) transitions to other
+states.  The size of the state machine matters because bitwise
+operations become less efficient when values larger than a machine
+word must be manipulated.  Using fewer states means that larger
+regular expressions will be executed more quickly.</p>
+
+<p>Eliminating them and sliding the numbers back yields the something
+equivalent to the more reasonable 11-state machine shown in Wu and
+Manber (Figure 3 on page 10).  Simply not assigning numbers to states
+that don’t match characters and don’t follow character states suffices
+to obtain such decent numberings.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/ok-regexp.png" /></p>
+
+<p>Some more thinking shows we can do better, and shave three more states.
+State 2 could directly match against character ‘e’, instead of only
+forwarding into state 3; what is currently state 4 could match against
+character ‘c’, instead of only forwarding into state 8, then 2 and
+then 5 (which itself matches against ‘c’); and similarly for state 7
+into state 8.  The result wastes not a single state: each state is
+used to match against a character, except for the accept state.
+Interestingly, the \( \epsilon \) transitions are also more regular:
+they form a complete graph between states 2, 3 and 5.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/compressed-regexp.png" /></p>
+
+<p>It’s possible to use fewer states than the naïve translation, and it’s
+useful to do so.  How can a program find compact numberings?</p>
+
+<h2 id="compact-bitap-automata">Compact bitap automata</h2>
+
+<p>The natural impulse for functional programmers (particularly
+functional compiler writers ;) is probably to start matching patterns
+to iteratively reduce the graph.  If they’ve had bad experience with
+slow fixpoint computations, there might also be some attempts at
+recognising patterns before even emitting them.</p>
+
+<p>This certainly describes my first couple stabs; they were either
+mediocre or wrong (sometimes both), and certainly not easy to reason
+about.  It took me a while to heed age-old advice about crossing the
+street and compacting state machines.</p>
+
+<p><a href="http://www.brighton-hove.gov.uk/content/parking-and-travel/travel-transport-and-road-safety/child-pedestrian-training"><img class="center" src="http://www.brighton-hove.gov.uk/sites/brighton-hove.gov.uk/files/roadsafetymeerkatposter.jpg" /></a></p>
+
+<p>Really, what we’re trying to do when compacting the state machine is
+to determine equivalence classes of states: sets of states that can be
+tracked as an atomic unit.  With rewrite rules, we start by assuming
+that all the states are distinct, and gradually merge them.  In other
+words, we’re computing a fixed point starting from the initial
+hypothesis that nothing is equivalent.</p>
+
+<p>Problem is,
+<a href="/Blog/2012/02/19/fixed-points-and-strike-mandates/">we should be doing the opposite</a>!
+If we assume that all the states can be tracked as a single unit, and
+break equivalence classes up in as we’re proven wrong, we’ll get
+maximal equivalence classes (and thus as few classes as possible).</p>
+
+<p>To achieve this, I start with the naïvely numbered state machine.
+I’ll refer to the start state and character states as “interesting
+sources”, and to the accept state and character states as “interesting
+destinations”.  Ideally, we’d be able to eliminate everything but
+interesting destinations: the start state can be preprocessed away by
+instead working with all the interesting destinations transitively
+reachable from the start state via \( \epsilon \) transitions
+(including itself if applicable).</p>
+
+<p>The idea is that two states are equivalent iff they are always active
+after the same set of interesting sources.  For example, after the
+start state 0, only state 1 is active (assuming that the character
+matches).  After state 1, however, all of 2, 3, 4, 6, 7, 10 and 11 are
+active.  We have the same set after states 4 and 8.  Finally, only one
+state is alive after each of 11 and 12.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/naive-regexp.png" /></p>
+
+<p>Intersecting the equivalence relations thus defined give a few trivial
+equivalence classes (0, 1, 5, 8, 9, 12, 13), and one huge equivalence
+class comprised of {2,3,4,6,7,10,11} made of all the states that are
+active exactly after 1, 5 and 9.  For simplicity’s sake, I’ll refer to
+that equivalence class as K.  After contraction, we find this smaller
+state graph.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon-regexp.png" /></p>
+
+<p>We can renumber this reasonably to obey the restriction on character
+edges: K is split into three nodes (one for each outgoing
+character-consuming edge) numbered 2, 4 and 7.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon2-regexp.png" /></p>
+
+<p>We could do even better if 5 and 9 (3 and 6 above) in the earlier
+contracted graph were also in equivalence class K: they only exist to
+forward back into K!  I suggest to achieve that with a simple
+post-processing pass.</p>
+
+<p>Equivalence classes are found by find determining after which
+interesting node each state is live.  States that are live after
+exactly the same sets of interesting nodes define an equivalence
+class.  I’ll denote this map from state to transitive interesting
+predecessors \( pred(state) \).</p>
+
+<p>We can coarsen the relationship a bit, to obtain \(
+pred\sp{\prime}(state) \).  For interesting destinations, \(
+pred\sp{\prime} = pred \).  For other nodes,
+\(pred\sp{\prime}(state) = \cap\sb{s\in reachable(state)}pred(s)\), where
+\(reachable(state)\) is the set of interesting destinations reachable via
+\( \epsilon \) transitions from \(state\).  This widening makes
+sense because \(state\) isn’t interesting (we never want to know
+whether it is active, only whether its reachable set is), so it
+doesn’t matter if \(state\) is active when it shouldn’t, as long as
+its destinations would all be active anyway.</p>
+
+<p>This is how we get the final set of equivalence classes.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/tcon3-regexp.png" /></p>
+
+<p>We’re left with a directed multigraph, and we’d like to label nodes
+such that each outgoing edge goes from its own label \( i \) to \(
+i+1 \).  We wish to do so while using the fewest number of labels.
+I’m pretty sure we can reduce something NP-Hard like the minimum path
+cover problem to this problem, but we can still attempt a simple
+heuristic.</p>
+
+<p>If there were an Eulerian directed path in the multigraph, that path
+would give a minimal set of labels: simply label the origin of each
+arc with its rank in the path.  An easy way to generate an Eulerian
+circuit, if there is one, is to simply keep following any unvisited
+outgoing arc.  If we’re stuck in a dead end, restart from any vertex
+that has been visited and still has unvisited outgoing arcs.</p>
+
+<p>There’s a fair amount of underspecification there.  Whenever many
+equivalence classes could be chosen, I choose the one that corresponds
+to the lexicographically minimal (sorted) set of regexp states (with
+respect to their depth-first numbering).  This has the effect of
+mostly following the depth-first traversal, which isn’t <em>that</em> bad.
+There’s also no guarantee that there exists an Eulerian path.  If
+we’re completely stuck, I start another Eulerian path, again starting
+from the lexicographically minimal equivalence class with an unvisited
+outgoing edge.</p>
+
+<p>Finally, once the equivalence states are labelled, both character and
+\( \epsilon \) transitions are re-expressed in terms of these
+labels.  The result is a nice 8-state machine.</p>
+
+<p><img class="center" src="/images/2013-06-22-bitsets-match-regular-expressions/compressed-regexp.png" /></p>
+
+<h2 id="but-thats-just-theory">But that’s just theory</h2>
+
+<p>This only covers the abstract stuff. There’s a
+<a href="https://github.com/pkhuong/bitap-regexp">CL code dump</a> on github.
+You’re probably looking for <code>compile-regexp3.lisp</code> and
+<code>scalar-bitap.lisp</code>; the rest are failed experiments.</p>
+
+<p>Once a small labeling is found, generating a matcher is really
+straightforward.  The data-dependent masks are just a dictionary
+lookup (probably in a vector or in a perfect hash table), a shift and
+a mask.</p>
+
+<p>Traditionally, epsilon transitions have been implemented with a few
+table lookups.  For example, the input state can be cut up in bytes;
+each byte maps to a word in a different lookup table, and all the
+bytes are ORed together.  The tables can be pretty huge (<code>n-states/8</code>
+lookup tables of 256 state values each), and the process can be slow
+for large states (bitsets).  This makes it even more important to
+reduce the size of the state machine.</p>
+
+<p>When runtime compilation is easy, it seems to make sense to instead
+generate a small number of test and conditional moves… even more so if
+SIMD is used to handle larger state sets.  A couple branch-free
+instructions to avoid some uncorrelated accesses to LUTs looks like a
+reasonable tradeoff, and, if SIMD is involved, the lookups would
+probably cause some slow cross-pipeline ping-ponging.</p>
+
+<p>There’s another interesting low-level trick.  It’s possible to handle
+large state sets without multi-word shifts: simply insert padding
+states (linked via \( \epsilon \) transitions) to avoid character
+transitions that straddle word boundaries.</p>
+
+<p>There’s a lot more depth to this bitap for regexp matching thing.  For
+example, bitap regular expressions can be adapted to fuzzy matchings
+(up to a maximum edit distance), by counting the edit distance in
+unary and working with one bitset for each edit distance value.  More
+important in practice, the approach described so far only handles
+recognising a regular language; parsing into capture groups and
+selecting the correct match is a complex issue about which <a href="http://swtch.com/~rsc/regexp/">Russ Cox has a lot to say</a>.</p>
+
+<p>What I find interesting is that running the NFA backward from accept
+states gives us a forward oracle: we can then tell whether a certain
+state at a given location in the string will eventually reach an
+accept state.  Guiding an otherwise deterministic parsing process with
+such a regular language oracle clearly suffices to implement capture
+groups (all non-deterministic choices become deterministic), but it
+also looks like it would be possible to parse useful non-regular
+languages without backtracking or overly onerous memoisation.</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[A one-instruction write barrier]]></title>
+    <link href="https://www.pvk.ca/Blog/2012/08/14/a-one-instruction-write-barrier/"/>
+    <updated>2012-08-14T21:25:00-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2012/08/14/a-one-instruction-write-barrier</id>
+    <content type="html"><![CDATA[<p><a href="http://www.hoelzle.org/publications/write-barrier.pdf">Hölzle’s two-instruction write barrier [PDF]</a>
+for garbage collectors looks like</p>
+
+<pre><code> addr = destination
+ offset = addr&gt;&gt;k;
+ (cards-(heap_base&gt;&gt;k))[offset] = 1 ; mark one byte
+ write to addr
+</code></pre>
+
+<p>Some SBCL users allocate Lisp object lookalikes in the C heap, and we
+have stack-allocated values; I have to test whether the address is in
+range or mask the offset to avoid overflows.</p>
+
+<p>Or, we could exploit X86’s bit-addressing instructions:</p>
+
+<pre><code> addr = destination
+ bts cards, addr
+ write to addr
+</code></pre>
+
+<p>where <code>cards</code> is a vector of 256 or 512MB (there’s some trickery to handle
+negative offsets). <code>bts</code> will index into that vector of 4G bits, and
+set the corresponding bit to 1.  On X86-64, we can force <code>cards</code> to be
+in the lower 4GB, and stick to 32 bit addressing: the instruction will
+also implicitly mask out the upper 32 bit of <code>addr</code> before indexing
+into <code>cards</code>.  Too bad it’s around twice or thrice as slow as a shift
+and a byte write (or even shift, mask and byte write) and really sucks
+with SMP.</p>
+
+<p>There are also <a href="&lt;http://weinholt.se/scheme/alignment-check.pdf">hacks [PDF]</a>
+to
+<a href="https://groups.google.com/d/msg/comp.lang.lisp/qQdpmfHhJj8/43LfCzBiCJAJ">abuse</a>
+alignment checking as hardware lowtag (tag data in the lower bit of
+addresses) checks.  Who says that contemporary machines don’t support
+safe languages well? (:</p>
+]]></content>
+  </entry>
+  
+</feed>

@@ -1,0 +1,1364 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: LinearProgramming | Paul Khuong: some Lisp]]></title>
+  <link href="https://www.pvk.ca/Blog/categories/linearprogramming/atom.xml" rel="self"/>
+  <link href="https://www.pvk.ca/"/>
+  <updated>2020-10-31T09:48:01-04:00</updated>
+  <id>https://www.pvk.ca/</id>
+  <author>
+    <name><![CDATA[Paul Khuong]]></name>
+    <email><![CDATA[pvk@pvk.ca]]></email>
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[Fractional set covering with experts]]></title>
+    <link href="https://www.pvk.ca/Blog/2019/04/23/fractional-set-covering-with-experts/"/>
+    <updated>2019-04-23T18:05:09-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2019/04/23/fractional-set-covering-with-experts</id>
+    <content type="html"><![CDATA[<p>Last winter break, I played with one of the annual
+<a href="https://en.wikipedia.org/wiki/Vehicle_routing_problem">capacitated vehicle routing problem</a>
+(CVRP) “Santa Claus” contests.  Real world family stuff
+took precedence,  so, after the
+obvious <a href="http://webhotel4.ruc.dk/~keld/research/LKH-3/">LKH</a>
+with <a href="http://www.math.uwaterloo.ca/tsp/concorde.html">Concorde</a>
+polishing for individual tours, I only had enough time for
+one diversification moonshot.  I decided to treat the
+high level problem of assembling prefabricated routes as
+a <a href="https://en.wikipedia.org/wiki/Set_cover_problem">set covering problem</a>:
+I would solve the linear programming (LP) relaxation for the
+min-cost set cover, and use randomised rounding to feed new starting
+points to LKH.  Add a lot of luck, and that might
+just strike the right balance between solution quality and diversity.</p>
+
+<p>Unsurprisingly, luck failed to show up, but I had ulterior motives:
+I’m much more interested in exploring first order methods for
+relaxations of combinatorial problems than in solving CVRPs.  The
+routes I had accumulated after a couple days turned into a
+<a href="https://archive.org/details/santa-cvrp-set-cover-instance">set covering LP with 1.1M decision variables, 10K constraints, and 20M nonzeros</a>.
+That’s maybe denser than most combinatorial LPs (the aspect ratio
+is definitely atypical), but 0.2% non-zeros is in the right ballpark.</p>
+
+<p>As soon as I had that fractional set cover instance, I tried to solve
+it with a simplex solver.  Like any good Googler, I used <a href="https://developers.google.com/optimization/lp/glop">Glop</a>… and stared at a blank terminal for more than one hour.</p>
+
+<p>Having observed that lack of progress, I implemented the toy I really
+wanted to try out: first order online “learning with experts”
+(specifically, <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a>) applied to
+LP <em>optimisation</em>.  I let this <a href="https://gist.github.com/pkhuong/c508849180c6cf612f7335933a88ffa6">not-particularly-optimised serial CL code</a>
+run on my 1.6 GHz laptop for 21 hours, at which point the first
+order method had found a 4.5% infeasible solution (i.e., all the
+constraints were satisfied with \(\ldots \geq 0.955\) instead of
+\(\ldots \geq 1\)).  I left Glop running long after the contest was
+over, and finally stopped it with no solution after more than 40 <em>days</em>
+on my 2.9 GHz E5.</p>
+
+<p>Given the shape of the constraint matrix, I would have loved to try an
+interior point method, but all my licenses had expired, and I didn’t
+want to risk OOMing my workstation.  <a href="https://twitter.com/e_d_andersen">Erling Andersen</a>
+was later kind enough to test Mosek’s interior point solver on it.
+The runtime was much more reasonable: 
+<a href="https://twitter.com/e_d_andersen/status/1120579664806842368">10 minutes on 1 core, and 4 on 12 cores</a>, with the sublinear speed-up mostly caused by the serial
+crossover to a simplex basis.</p>
+
+<p>At 21 hours for a naïve implementation, the “learning with experts”
+first order method isn’t practical yet, but also not obviously
+uninteresting, so I’ll write it up here.</p>
+
+<p>Using online learning algorithms for the “experts problem” (e.g.,
+<a href="https://cseweb.ucsd.edu/~yfreund/papers/adaboost.pdf">Freund and Schapire’s Hedge algorithm</a>)
+to solve linear programming <em>feasibility</em> is now a classic result;
+<a href="https://jeremykun.com/2017/02/27/the-reasonable-effectiveness-of-the-multiplicative-weights-update-algorithm/">Jeremy Kun has a good explanation on his blog</a>.  What’s
+new here is:</p>
+
+<ol>
+  <li>Directly solving the optimisation problem.</li>
+  <li>Confirming that the parameter-free nature of <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a> helps.</li>
+</ol>
+
+<p>The first item is particularly important to me because it’s a simple
+modification to the LP feasibility meta-algorithm, and might make the
+difference between a tool that’s only suitable for theoretical
+analysis and a practical approach.</p>
+
+<p>I’ll start by reviewing the experts problem, and how LP feasibility is
+usually reduced to the former problem.  After that, I’ll
+cast the reduction as a <a href="https://smartech.gatech.edu/bitstream/handle/1853/24230/karwan_mark_h_197612_phd_154133.pdf">surrogate relaxation</a>
+method, rather than a <a href="https://en.wikipedia.org/wiki/Lagrangian_relaxation">Lagrangian relaxation</a>;
+optimisation should flow naturally from that
+point of view.  Finally, I’ll guess why I had more success
+with <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a> this time than with 
+<a href="https://www.satyenkale.com/papers/mw-survey.pdf">Multiplicative Weight Update</a>
+eight years ago.<sup id="fnref:wall" role="doc-noteref"><a href="#fn:wall" class="footnote">1</a></sup></p>
+
+<h2 id="the-experts-problem-and-lp-feasibility">The experts problem and LP feasibility</h2>
+
+<p>I first heard about the experts problem while researching
+dynamic sorted set data structures:
+<a href="https://dspace.mit.edu/handle/1721.1/10639">Igal Galperin’s PhD dissertation</a>
+describes <a href="http://user.it.uu.se/~arnea/abs/partb.html">scapegoat trees</a>, but is really about online learning with
+experts.
+<a href="https://www.satyenkale.com/papers/mw-survey.pdf">Arora, Hazan, and Kale’s 2012 survey of multiplicative weight update methods</a>.
+is probably a better introduction to the topic ;)</p>
+
+<p>The experts problem comes in many variations.  The simplest form
+sounds like the following.  Assume you’re playing a binary prediction
+game over a predetermined number of turns, and have access to a fixed
+finite set of experts at each turn.  At the beginning of every turn,
+each expert offers their binary prediction (e.g., yes it will rain
+today, or it will not rain today).  You then have to make a prediction
+yourself, with no additional input.  The actual result (e.g., it
+didn’t rain today) is revealed at the end of the turn.  In general,
+you can’t expect to be right more often than the best expert at the
+end of the game.  Is there a strategy that bounds the “regret,” how
+many more wrong prediction you’ll make compared to the expert(s) with
+the highest number of correct predictions, and in what circumstances?</p>
+
+<p>Amazingly enough, even with an omniscient adversary that has access to
+your strategy and determines both the experts’ predictions and the
+actual result at the end of each turn, a stream of random bits (hidden
+from the adversary) suffice to bound our expected regret in 
+\(\mathcal{O}(\sqrt{T}\,\lg n)\), where \(T\) is the number of 
+turns and \(n\) the number of experts.</p>
+
+<p>I long had trouble with that claim: it just seems too good of a magic
+trick to be true.  The key realisation for me was that we’re only
+comparing against invidivual experts.  If each expert is a move in a
+<a href="https://www.encyclopediaofmath.org/index.php/Matrix_game">matrix game</a>,
+that’s the same as claiming you’ll never do much worse than any pure
+strategy.  One example of a pure strategy is always playing rock in 
+Rock-Paper-Scissors; pure strategies are really bad!  The trick is
+actually in making that regret bound useful.</p>
+
+<p>We need a more continuous version of the experts problem for LP
+feasibility.  We’re still playing a turn-based game, but, this time,
+instead of outputting a prediction, we get to “play” a mixture of the
+experts (with non-negative weights that sum to 1).  At the beginning
+of each turn, we describe what weight we’d like to give to each
+experts (e.g., 60% rock, 40% paper, 0% scissors).  The cost
+(equivalently, payoff) for each expert is then revealed (e.g.,
+\(\mathrm{rock} = -0.5\), \(\mathrm{paper} = 0.5\), 
+\(\mathrm{scissors} = 0\)), and we incur the weighted average
+from our play (e.g., \(60\% \cdot -0.5 + 40\% \cdot 0.5 = -0.1\))
+before playing the next round.<sup id="fnref:equivalent" role="doc-noteref"><a href="#fn:equivalent" class="footnote">2</a></sup>  The goal is to minimise
+our worst-case regret, the additive difference between the total cost
+incurred by our mixtures of experts and that of the a posteriori best single
+expert.  In this case as well, online learning
+algorithms guarantee regret in \(\mathcal{O}(\sqrt{T} \, \lg n)\)</p>
+
+<p>This line of research is interesting because simple algorithms achieve
+that bound, with explicit constant factors on the order of 1,<sup id="fnref:which-log" role="doc-noteref"><a href="#fn:which-log" class="footnote">3</a></sup>
+and <a href="http://drops.dagstuhl.de/opus/volltexte/2017/7499/pdf/LIPIcs-ICALP-2017-48.pdf">those bounds are known to be non-asymptotically tight for a large class of algorithms</a>.
+Like dense linear algebra or fast Fourier transforms, where algorithms
+are often compared by counting individual floating point operations,
+online learning has matured into such tight bounds that worst-case
+regret is routinely presented without Landau notation.  Advances improve
+constant factors in the worst case, or adapt to easier inputs in order
+to achieve “better than worst case” performance.</p>
+
+<p>The <a href="https://jeremykun.com/2017/02/27/the-reasonable-effectiveness-of-the-multiplicative-weights-update-algorithm/">reduction below</a>
+lets us take any learning algorithm with an additive regret bound,
+and convert it to an algorithm with a corresponding worst-case
+iteration complexity bound for \(\varepsilon\)-approximate LP feasibility.
+An algorithm that promises low worst-case regret in \(\mathcal{O}(\sqrt{T})\)
+gives us an algorithm that needs at most \(\mathcal{O}(1/\varepsilon\sp{2})\)
+iterations to return a solution that almost satisfies every constraint in the
+linear program, where each constraint is violated by \(\varepsilon\) or less (e.g.,
+\(x \leq 1\) is actually \(x \leq 1 + \varepsilon\)).</p>
+
+<p>We first split the linear program in two components, a simple domain
+(e.g., the non-negative orthant or the \([0, 1]\sp{d}\) box) and the
+actual linear constraints.  We then map each of the latter constraints
+to an expert, and use an arbitrary algorithm that solves our
+continuous version of the experts problem as a black box.  At each
+turn, the black box will output a set of non-negative weights for the
+constraints (experts).  We will average the constraints using these
+weights, and attempt to find a solution in the intersection of our
+simple domain and the weighted average of the linear constraints.  We
+can do so in the “experts problem” setting by consider each linear
+constraint’s violation as a <em>payoff</em>, or, equivalently, satisfaction
+as a loss.</p>
+
+<p>Let’s use Stigler’s <a href="https://neos-guide.org/content/diet-problem">Diet Problem with three foods and two constraints</a>
+as a small example, and further simplify it by disregarding the
+minimum value for calories, and the maximum value for vitamin A.  Our
+simple domain here is at least the non-negative orthant: we can’t
+ingest negative food.  We’ll make things more interesting by also
+making sure we don’t eat more than 10 servings of any food per day.</p>
+
+<p>The first constraint says we mustn’t get too many calories</p>
+
+<p>\[72 x\sb{\mathrm{corn}} + 121 x\sb{\mathrm{milk}} + 65 x\sb{\mathrm{bread}} \leq 2250,\]</p>
+
+<p>and the second constraint (tweaked to improve this example) ensures
+we ge enough vitamin A</p>
+
+<p>\[107 x\sb{\mathrm{corn}} + 400 x\sb{\mathrm{milk}} \geq 5000,\]</p>
+
+<p>or, equivalently,</p>
+
+<p>\[-107 x\sb{\mathrm{corn}} - 400 x\sb{\mathrm{milk}} \leq -5000,\]</p>
+
+<p>Given weights \([3/4, 1/4]\), the weighted average of the two constraints is</p>
+
+<p>\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]</p>
+
+<p>where the coefficients for each variable and for the right-hand side
+were averaged independently.</p>
+
+<p>The subproblem asks us to find a feasible point in the intersection
+of these two constraints:
+\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]
+\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
+
+<p>Classically, we claim that this is just Lagrangian relaxation, and
+find a solution to</p>
+
+<p>\[\min 27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}}\]
+subject to
+\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
+
+<p>In the next section, I’ll explain why I think this analogy is wrong
+and worse than useless.  For now, we can easily find the minimum one
+variable at a time, and find the solution 
+\(x\sb{\mathrm{corn}} = 0\), \(x\sb{\mathrm{milk}} = 10\),
+\(x\sb{\mathrm{bread}} = 0\), with objective value \(-92.5\) (which
+is \(530\) less than \(437.5\)).</p>
+
+<p>In general, three things can happen at this point.  We could discover
+that the subproblem is infeasible.  In that case, the original
+non-relaxed linear program itself is infeasible: any solution to the
+original LP satisfies all of its constraints, and thus would also
+satisfy any weighted average of the same constraints.  We could also
+be extremely lucky and find that our optimal solution to the relaxation is
+(\(\varepsilon\)-)feasible for the original linear program; we can stop
+with a solution.  More commonly, we have a solution that’s feasible for the
+relaxation, but not for the original linear program.</p>
+
+<p>Since that solution satisfies the weighted average constraint and
+payoffs track constraint violation, the black box’s payoff for this
+turn (and for every other turn) is non-positive.  In the current case,
+the first constraint (on calories) is satisfied by \(1040\), while
+the second (on vitamin A) is violated by \(1000\).  On weighted
+average, the constraints are satisfied by \(\frac{1}{4}(3 \cdot
+1040 - 1000) = 530.\) Equivalently, they’re violated by \(-530\) on
+average.</p>
+
+<p>We’ll add that solution to an accumulator vector that will come in
+handy later.</p>
+
+<p>The next step is the key to the reduction: we’ll derive payoffs
+(negative costs) for the black box from the solution to the last
+relaxation.  Each constraint (expert) has a payoff equal to its level
+of violation in the relaxation’s solution.  If a constraint is
+strictly satisfied, the payoff is negative; for example, the constraint
+on calories is satisfied by \(1040\), so its payoff this turn is
+\(-1040\).  The constraint on vitamin A is violated by \(1000\),
+so its payoff this turn is \(1000\).  Next turn, we expect the
+black box to decrease the weight of the constraint on calories,
+and to increase the weight of the one on vitamin A.</p>
+
+<p>After \(T\) turns, the total payoff for each constraint is equal to
+the sum of violations by all solutions in the accumulator.  Once we
+divide both sides by \(T\), we find that the divided payoff for each
+constraint is equal to its violation by the average of the solutions
+in the accumulator.  For example, if we have two solutions, one that
+violates the calories constraint by \(500\) and another that
+satisfies it by \(1000\) (violates it by \(-1000\)), the total
+payoff for the calories constraint is \(-500\), and the average
+of the two solutions does strictly satisfy the linear constraint by
+\(\frac{500}{2} = 250\)!</p>
+
+<p>We also know that we only generated feasible solutions to the relaxed
+subproblem (otherwise, we’d have stopped and marked the original LP as
+infeasible), so the black box’s total payoff is \(0\) or negative.</p>
+
+<p>Finally, we assumed that the black box algorithm guarantees an additive
+regret in \(\mathcal{O}(\sqrt{T}\, \lg n)\), so the black box’s payoff
+of (at most) \(0\) means that any constraint’s payoff is at most
+\(\mathcal{O}(\sqrt{T}\, \lg n)\).  After dividing by \(T\), we obtain
+a bound on the violation by the arithmetic mean of all solutions in
+the accumulator: for all constraint, that violation is in 
+\(\mathcal{O}\left(\frac{\lg n}{\sqrt{T}}\right)\).  In other words, the number
+of iteration \(T\) must scale with
+\(\mathcal{O}\left(\frac{\lg n}{\varepsilon\sp{2}}\right)\), 
+which isn’t bad when \(n\) is in the millions but
+\(\varepsilon \approx 0.01\).</p>
+
+<p>Theoreticians find this reduction interesting because there are
+concrete implementations of the black box, e.g., the
+<a href="https://www.satyenkale.com/papers/mw-survey.pdf">multiplicative weight update (MWU) method</a>
+with non-asymptotic bounds.  For many problems, this makes it
+possible to derive the exact number of iterations necessary
+to find an \(\varepsilon-\)feasible fractional solution, given
+\(\varepsilon\) and the instance’s size (but not the instance
+itself).</p>
+
+<p>That’s why algorithms like MWU are theoretically useful tools for
+fractional approximations, when we already have subgradient methods
+that only need \(\mathcal{O}\left(\frac{1}{\varepsilon}\right)\) iterations:
+state-of-the-art algorithms for learning with experts explicit
+non-asymptotic regret bounds that yield, for many problems, iteration
+bounds that only depend on the instance’s size, but not its data.
+While the iteration count when solving LP feasibility with MWU scales
+with \(\frac{1}{\varepsilon\sp{2}}\), it is merely proportional to
+\(\lg n\), the log of the the number of linear constraints.  That’s
+attractive, compared to subgradient methods for which the iteration
+count scales with \(\frac{1}{\varepsilon}\), but also scales
+linearly with respect to instance-dependent values like the distance
+between the initial dual solution and the optimum, or the Lipschitz
+constant of the Lagrangian dual function; these values are hard to
+bound, and are often proportional to the square root of the number
+of constraints.  Given the choice between
+\(\mathcal{O}\left(\frac{\lg n}{\varepsilon\sp{2}}\right)\) 
+iterations with explicit constants, and a looser
+\(\mathcal{O}\left(\frac{\sqrt{n}}{\varepsilon}\right)\), it’s 
+obvious why MWU and online learning are powerful additions to 
+the theory toolbox.</p>
+
+<p>Theoreticians are otherwise not concerned with efficiency, so the
+usual answer to someone asking about optimisation is to tell them they
+can always reduce linear optimisation to feasibility with a binary
+search on the objective value.  I once made the mistake of
+implementing that binary search last strategy.  Unsurprisingly, it
+wasn’t useful.  I also tried another theoretical reduction, where I
+looked for a pair of primal and dual -feasible solutions that happened
+to have the same objective value.  That also failed, in a more
+interesting manner: since the two solution had to have almost the same
+value, the universe spited me by sending back solutions that were
+primal and dual infeasible in the worst possible way.  In the end, the
+second reduction generated fractional solutions that were neither
+feasible nor superoptimal, which really isn’t helpful.</p>
+
+<h2 id="direct-linear-optimisation-with-experts">Direct linear optimisation with experts</h2>
+
+<p>The reduction above works for any “simple” domain, as long as it’s
+convex and we can solve the subproblems, i.e., find a point in the
+intersection of the simple domain and a single linear constraint or
+determine that the intersection is empty.</p>
+
+<p>The set of (super)optimal points in some initial simple domain is
+still convex, so we could restrict our search to the search of the
+domain that is superoptimal for the linear program we wish to
+optimise, and directly reduce optimisation to the feasibility problem
+solved in the last section, without binary search.</p>
+
+<p>That sounds silly at first: how can we find solutions that are
+superoptimal when we don’t even know the optimal value?</p>
+
+<p>Remember that the subproblems are always relaxations of the original
+linear program.  We can port the objective function from the original
+LP over to the subproblems, and optimise the relaxations.  Any
+solution that’s optimal for a realxation must have an optimal or
+superoptimal value for the original LP.</p>
+
+<p>Rather than treating the black box online solver as a generator of 
+<a href="https://en.wikipedia.org/wiki/Duality_\(optimization\)#The_strong_Lagrangian_principle:_Lagrange_duality">Lagrangian dual</a>
+vectors, we’re using its weights as solutions to the
+<a href="https://smartech.gatech.edu/bitstream/handle/1853/24230/karwan_mark_h_197612_phd_154133.pdf"><em>surrogate</em> relaxation dual</a>.
+The latter interpretation isn’t just more powerful by handling
+objective functions.  It also makes more sense: the weights generated
+by algorithms for the experts problem are probabilities, i.e., they’re
+non-negative and sum to \(1\).  That’s also what’s expected for surrogate
+dual vectors, but definitely not the case for Lagrangian dual vectors,
+even when restricted to \(\leq\) constraints.</p>
+
+<p>We can do even better!</p>
+
+<p>Unlike Lagrangian dual solvers, which only converge when fed
+(approximate) subgradients and thus make us (nearly) optimal solutions
+to the relaxed subproblems, our reduction to the experts problem only
+needs feasible solutions to the subproblems.  That’s all we need to
+guarantee an \(\varepsilon-\)feasible solution to the initial problem
+in a bounded number of iterations.  We also know exactly how that
+\(\varepsilon-\)feasible solution is generated: it’s the arithmetic
+mean of the solutions for relaxed subproblems.</p>
+
+<p>This lets us decouple finding lower bounds from generating feasible
+solutions that will, on average, \(\varepsilon-\)satisfy the
+original LP.  In practice, the search for an \(\varepsilon-\)feasible
+solution that is also superoptimal will tend to improve the lower
+bound.  However, nothing forces us to evaluate lower bounds
+synchronously, or to only use the experts problem solver to improve
+our bounds.</p>
+
+<p>We can find a new bound from any vector of non-negative constraint
+weights: they always yield a valid surrogate relaxation.  We can solve
+that relaxation, and update our best bound when it’s improved.  The
+Diet subproblem earlier had</p>
+
+<p>\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]
+\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
+
+<p>Adding the original objective function back yields the linear program</p>
+
+<p>\[\min 0.18 x\sb{\mathrm{corn}} + 0.23 x\sb{\mathrm{milk}} + 0.05 x\sb{\mathrm{bread}}\]
+subject to
+\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]
+\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10,\]</p>
+
+<p>which has a trivial optimal solution at \([0, 0, 0]\).</p>
+
+<p>When we generate a feasible solution for the same subproblem, we can
+use any valid bound on the objective value to find the most feasible
+solution that is also assuredly (super)optimal.  For example, if some
+oracle has given us a lower bound of \(2\) for the original Diet
+problem, we can solve for</p>
+
+<p>\[\min 27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}}\]
+subject to
+\[0.18 x\sb{\mathrm{corn}} + 0.23 x\sb{\mathrm{milk}} + 0.05 x\sb{\mathrm{bread}}\leq 2\]
+\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
+
+<p>We can relax the objective value constraint further, since we know
+that the final \(\varepsilon-\)feasible solution is a simple
+arithmetic mean.  Given the same best bound of \(2\), and, e.g., a
+current average of \(3\) solutions with a value of \(1.9\), a new
+solution with an objective value of \(2.3\) (more than our best
+bound, so not necessarily optimal!) would yield a new average solution
+with a value of \(2\), which is still (super)optimal.  This means
+we can solve the more relaxed subproblem</p>
+
+<p>\[\min 27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}}\]
+subject to
+\[0.18 x\sb{\mathrm{corn}} + 0.23 x\sb{\mathrm{milk}} + 0.05 x\sb{\mathrm{bread}}\leq 2.3\]
+\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
+
+<p>Given a bound on the objective value, we swapped the constraint and
+the objective; the goal is to maximise feasibility, while generating a
+solution that’s “good enough” to guarantee that the average solution
+is still (super)optimal.</p>
+
+<p>For box-constrained linear programs where the box is the convex
+domain, subproblems are bounded linear knapsacks, so we can simply
+stop the greedy algorithm as soon as the objective value constraint is
+satisfied, or when the knapsack constraint becomes active (we found a
+better bound).</p>
+
+<p>This last tweak doesn’t just accelerate convergence to
+\(\varepsilon-\)feasible solutions.  More importantly for me, it
+pretty much guarantees that out \(\varepsilon-\)feasible solution
+matches the best known lower bound, even if that bound was provided by
+an outside oracle.  <a href="http://www.inrialpes.fr/bipop/people/malick/Docs/05-frangioni.pdf">Bundle methods</a>
+and the <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.217.8194&amp;rep=rep1&amp;type=pdf">Volume algorithm</a>
+can also mix solutions to relaxed subproblems in order to generate
+\(\varepsilon-\)feasible solutions, but the result lacks the last
+guarantee: their fractional solutions are even more superoptimal
+than the best bound, and that can make bounding and variable fixing
+difficult.</p>
+
+<h2 id="the-secret-sauce-adahedge">The secret sauce: AdaHedge</h2>
+
+<p>Before last Christmas’s CVRP set covering LP, I had always used the 
+<a href="https://www.satyenkale.com/papers/mw-survey.pdf">multiplicative weight update (MWU) algorithm</a>
+as my black box online learning algorithm:  it wasn’t great, but I
+couldn’t find anything better. The two main downsides for me
+were that I had to know a “width” parameter ahead of time, as well
+as the number of iterations I wanted to run.</p>
+
+<p>The width is essentially the range of the payoffs; in our case, the
+potential level of violation or satisfaction of each constraints by
+any solution to the relaxed subproblems.  The dependence isn’t
+surprising: folklore in Lagrangian relaxation also says that’s a big
+factor there.  The problem is that the most extreme violations and
+satisfactions are initialisation parameters for the MWU algorithm,
+and the iteration count for a given \(\varepsilon\) is quadratic
+in the width (\(\mathrm{max}\sb{violation} \cdot \mathrm{max}\sb{satisfaction}\)).</p>
+
+<p>What’s even worse is that the MWU is explicitly tuned for a specific
+iteration count.  If I estimate that, give my worst-case width estimate,
+one million iterations will be necessary to achieve \(\varepsilon-\)feasibility,
+MWU tuned for 1M iterations will need 1M iterations, even if the actual
+width is narrower.</p>
+
+<p><a href="https://arxiv.org/abs/1301.0534">de Rooij and others published AdaHedge in 2013</a>,
+an algorithm that addresses both these issues by smoothly estimating
+its parameter over time, without using the doubling trick.<sup id="fnref:doubling" role="doc-noteref"><a href="#fn:doubling" class="footnote">4</a></sup>
+AdaHedge’s loss (convergence rate to an \(\varepsilon-\)solution)
+still depends on the relaxation’s width.  However, it depends on the
+maximum width actually observed during the solution process, and not
+on any explicit worst-case bound.  It’s also not explicily tuned for a
+specific iteration count, and simply keeps improving at a rate that
+roughly matches MWU.  If the instance happens to be easy, we will find
+an \(\varepsilon-\)feasible solution more quickly.  In the worst
+case, the iteration count is never much worse than that of an
+optimally tuned MWU.</p>
+
+<p>These <a href="https://gist.github.com/pkhuong/c508849180c6cf612f7335933a88ffa6">400 lines of Common Lisp</a>
+implement AdaHedge and use it to optimise the set covering LP.  AdaHedge acts
+as the online black box solver for the surrogate dual problem, the relaxed
+set covering LP is a linear knapsack, and each subproblem attempts
+to improve the lower bound before maximising feasibility.</p>
+
+<p>When I ran the code, I had no idea how long it would take to find a
+feasible enough solution: covering constraints can never be violated
+by more than \(1\), but some points could be covered by hundreds of
+tours, so the worst case satisfaction width is high. I had to rely on
+the way AdaHedge adapts to the actual hardness of the problem.  In the
+end, \(34492\) iterations sufficed to find a solution that was \(4.5\%\)
+infeasible.<sup id="fnref:wrong-log" role="doc-noteref"><a href="#fn:wrong-log" class="footnote">5</a></sup>  This corresponds to a worst case with a width
+of less than \(2\), which is probably not what happened.  It seems
+more likely that the surrogate dual isn’t actually an omniscient
+adversary, and AdaHedge was able to exploit some of that “easiness.”</p>
+
+<p>The iterations themselves are also reasonable: one sparse matrix /
+dense vector multiplication to convert surrogate dual weights to an
+average constraint, one solve of the relaxed LP, and another sparse
+matrix / dense vector multiplication to compute violations for each
+constraint.  The relaxed LP is a fractional \([0, 1]\) knapsack, so
+the bottleneck is sorting double floats.  Each iteration took 1.8
+seconds on my old laptop; I’m guessing that could easily be 10-20
+times faster with vectorisation and parallelisation.</p>
+
+<p>In another post, I’ll show how using the same surrogate dual optimisation
+algorithm to mimick <a href="https://link.springer.com/article/10.1007/BF02592954">Lagrangian decomposition</a>
+<a href="https://perso.ensta-paristech.fr/~diam/ro/online/Monique.Guignard-top11201.pdf">instead of Lagrangian relaxation</a>
+guarantees an iteration count in \(\mathcal{O}\left(\frac{\lg \#\mathrm{nonzero}}{\varepsilon\sp{2}}\right)\) independently of luck or the specific linear constraints.</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:wall" role="doc-endnote">
+      <p>Yes, I have been banging my head against that wall for a while. <a href="#fnref:wall" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:equivalent" role="doc-endnote">
+      <p>This is equivalent to minimising expected loss with random bits, but cleans up the reduction. <a href="#fnref:equivalent" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:which-log" role="doc-endnote">
+      <p>When was the last time you had to worry whether that log was natural or base-2? <a href="#fnref:which-log" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:doubling" role="doc-endnote">
+      <p>The doubling trick essentially says to start with an estimate for some parameters (e.g., width), then adjust it to at least double the expected iteration count when the parameter’s actual value exceeds the estimate. The sum telescopes and we only pay a constant multiplicative overhead for the dynamic update. <a href="#fnref:doubling" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:wrong-log" role="doc-endnote">
+      <p>I think I computed the \(\log\) of the number of decision variables instead of the number of constraints, so maybe this could have gone a bit better. <a href="#fnref:wrong-log" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[Chubanov's projection methods for 0/1 programming]]></title>
+    <link href="https://www.pvk.ca/Blog/2017/06/17/chubanovs-projection-methods-for-0-slash-1-programming/"/>
+    <updated>2017-06-17T15:24:00-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2017/06/17/chubanovs-projection-methods-for-0-slash-1-programming</id>
+    <content type="html"><![CDATA[<p>I’ve long felt that compilers (and symbolic processing in general)
+would benefit from embedding integer programming solvers.  However, I
+was never comfortable with actually doing so for a production system
+that others would have to run: industrial strength integer linear
+programming solvers are large systems with complex runtime behaviour,
+and that’s not the kind of black box you want to impose on people who
+just want to build their project.  (That’s also true of SAT solvers,
+though, so maybe embedding complicated black boxes is the new normal?)</p>
+
+<p>However, if we had something simple enough to implement natively in
+the compiler, we could hope for the maintainers to understand what the
+ILP solver is doing.  This seems realistic to me mostly because the
+generic complexity tends to lie in the continuous optimisation part.
+Branching, bound propagation, etc. is basic, sometimes domain
+specific, combinatorial logic; cut generation is probably the most
+prominent exception, and even that tends to be fairly
+combinatorial. (Maybe that’s why we seem to be growing comfortable
+with SAT solvers: no scary analysis.)  So, for the past couple years,
+I’ve been looking for simple enough specialised solvers I could use in
+branch-and-bound for large 0/1 ILP.</p>
+
+<p>Some stuff with augmented lagrangians and specialised methods for
+box-constrained QP almost panned out, but nested optimisation sucks
+when the inner solver is approximate: you never know if you should be
+more precise in the lower level or if you should aim for more outer
+iterations.</p>
+
+<p>A subroutine in <a href="http://www.optimization-online.org/DB_FILE/2013/07/3948.pdf">Chubanov’s polynomial-time linear programming algorithm [PDF]</a>
+(<a href="https://link.springer.com/article/10.1007/s10107-014-0823-8">related journal version</a>)
+seems promising, especially since it doesn’t suffer from the numerical
+issues inherent to log barriers.</p>
+
+<h2 id="chubanovs-subroutine-in-branch-and-bound">Chubanov’s subroutine in branch-and-bound</h2>
+
+<p>Chubanov’s “Basic Subroutine” accepts a problem of the form \(Ax =
+0\), \(x &gt; 0\), and either:</p>
+
+<ol>
+  <li>returns a solution;</li>
+  <li>returns a non-empty subset of variables that must be 0 in any feasible solution;</li>
+  <li>returns a non-empty subset of variables \(x\sb{i}\) that always
+satisfy \(x\sb{i} \leq u\) in feasible solutions with \(x\sp{\star} \in [0, 1]\),
+for some constant \(u &lt; 1\) (Chubanov sets \(u = \frac{1}{2}\)).</li>
+</ol>
+
+<p>The class of homogeneous problems seems useless (never mind the
+nondeterministic return value), but we can convert “regular” 0/1
+problems to that form with a bit of algebra.</p>
+
+<p>Let’s start with \(Ax = b\), \(0 \leq x \leq 1\), we can
+reformulate that in the homogeneous form:</p>
+
+<p>\[Ax - by = 0,\]
+\[x + s - \mathbf{1}y = 0,\]
+\[x, s, y \geq 0.\]</p>
+
+<p>Any solution to the original problem in \([0, 1]\) may be translated
+to the homogeneous form (let \(y = 1\) and \(s = 1 - x\)).
+Crucially, any 0/1 (binary) solution to the original problem is still
+0/1 in the homogeneous form.  In the other direction, any solution
+with \(y &gt; 0\) may be converted to the box-constrained problem by
+dividing everything by \(y\).</p>
+
+<p>If we try to solve the homogenous form with Chubanov’s subroutine, we
+may get:</p>
+
+<ol>
+  <li>a strictly positive (for all elements) solution.  In that case,
+\(y &gt; 0\) and we can recover a solution to the box-constrained
+problem.</li>
+  <li>a subset of variables that must be 0 in any feasible solution.  If
+that subset includes \(y\), the box-constrained problem is
+infeasible.  Otherwise, we can take out the variables and try
+again.</li>
+  <li>a subset of variables that are always strictly less than 1 in
+feasible solutions.  We exploit the fact that we only really care
+about 0/1 solutions (to the original problem or to the homogenous
+reformulation) to also fix these variables to 0; if the subset
+includes \(y\), the <em>0/1</em> problem is infeasible.</li>
+</ol>
+
+<p>As soon as we invoke the third case to recursively solve a smaller
+problem, we end up solving an interesting ill-specified relaxation of
+the initial 0/1 linear program: it’s still a valid relaxation of the
+binary problem, but is stricter than the usual box linear relaxation.</p>
+
+<p>That’s more than enough to drive a branch-and-bound process.  In
+practice, branch-and-bound is much more about proving the (near-)
+optimality of an existing solution than coming up with strong feasible
+solutions.  That’s why the fact that the subroutine “only” solves
+feasibility isn’t a blocker.  We only need to prove the absence of 0/1
+solutions (much) better than the incumbent solution, and that’s a
+constraint on the objective value.  If we get such a proof, we can
+prune away that whole search subtree; if we don’t, the subroutine
+might have fixed some variables 0 or 1 (always useful), and we
+definitely have a fractional solution.  That solution to the
+relaxation could be useful for primal heuristics, and will definitely
+be used for branching (solving the natural LP relaxation of constraint
+satisfaction problems ends up performing basic propagation for us, so
+we get some domain propagation for free by only branching on variables
+with fractional values).</p>
+
+<p>At the root, if we don’t have any primal solution yet, we should
+probably run some binary search on the objective value at the root
+node and feed the resulting fractional solutions to rounding
+heuristics.  However, we can’t use the variables fixed by the
+subroutine: until we have a feasible binary solution with objective
+value \(Z\sp{\star}\), we can’t assume that we’re only interested in
+binary solutions with object value \(Z &lt; Z\sp{\star}\), so the
+subroutine might fix some variables simply because there is no 0/1
+solution that satisfy \(Z &lt; k\) (case 3 is vacuously valid if there
+is no 0/1 solution to the homogeneous problem).</p>
+
+<p>That suffices to convince me of correctness.  I still have to
+understand Chubanov’s “Basic Subroutine.”</p>
+
+<h2 id="understanding-the-basic-subroutine">Understanding the basic subroutine</h2>
+
+<p>This
+<a href="https://pdfs.semanticscholar.org/d55f/3e7a49012930320aff836e737533726c78d8.pdf">note by Cornelis/Kees Roos</a>
+helped me understand what makes the subroutine tick.</p>
+
+<p>The basic procedure updates a dual vector \(y\) (not the same
+\(y\) as the one I had in the reformulation… sorry) such that \(y
+\geq 0\) and \(|y|_1 = 1\), and constantly derives from the dual
+vector a tentative solution \(z = P\sb{A}y\), where \(P\sb{A}\)
+projects (orthogonally) in the null space of the homogeneous
+constraint matrix \(A\) (the tentative solution is \(x\) in
+Chubanov’s paper).</p>
+
+<p>At any time, if \(z &gt; 0\), we have a solution to the homogenous
+system.</p>
+
+<p>If \(z = P\sb{A}y = 0\), we can exploit the fact that, for any
+feasible solution \(x\), \(x = P\sb{A}x\): any feasible solution
+is alrady in the null space of \(A\).  We have</p>
+
+<p>\[x\sp{\top}y = x\sp{\top}P\sb{A}y = x\sp{\top}\mathbf{0} = 0\]</p>
+
+<p>(the projection matrix is symmetric).  The solution \(x\) is
+strictly positive and \(y\) is non-negative, so this must mean that,
+for every component of \(y\sb{k} &gt; 0\), \(x\sb{k} = 0\).  There is
+at least one such component since \(|y|_1 = 1\).</p>
+
+<p>The last condition is how we bound the number of iterations.  For any feasible solution
+\(x\) and any component \(j\),</p>
+
+<p>\[y\sb{j}x\sb{j} \leq y\sp{\top}x = y\sp{\top}P\sb{A}x \leq |x| |P\sb{A}y| \leq \sqrt{n} |z|.\]</p>
+
+<p>Let’s say the max element of \(y\), \(y\sb{j} \geq 2 \sqrt{n}|z|\).
+In that case, we have
+\[x\sb{j} \leq \frac{\sqrt{n}|z|}{y\sb{j}} \leq \frac{1}{2}.\]</p>
+
+<p>Chubanov uses this criterion, along with a potential argument on
+\(|z|\), to bound the number of iterations.
+However, we can apply the result at any iteration where we find that
+\(x\sp{\top}z &lt; y\sb{j}\): any such \(x\sb{j} = 0\) in binary
+solutions.  In general, we may upper bound the left-hand side with
+\(x\sp{\top}z \leq |x||z| \leq \sqrt{n}|z|\), but we can
+always exploit the structure of the problem to have a tighter bound
+(e.g., by encoding clique constraints
+\(x\sb{1} + x\sb{2} + … = 1\) directly in the homogeneous
+reformulation).</p>
+
+<p>The rest is mostly applying lines 9-12 of the basic procedure in
+<a href="https://pdfs.semanticscholar.org/d55f/3e7a49012930320aff836e737533726c78d8.pdf">Kees’s note</a>.
+Find the set \(K\) of all indices such that
+\(\forall k\in K,\ z\sb{k} \leq 0\) (Kees’s criterion is more relaxed,
+but that’s what he uses in experiments), project the vector
+\(\frac{1}{|K|} \sum\sb{k\in K}e\sb{k}\) in the null space of
+\(A\) to obtain \(p\sb{K}\), and update \(y\) and \(z\).</p>
+
+<p>The potential argument here is that after updating \(z\),
+\(\frac{1}{|z|\sp{2}}\) has increased by at least \(|K| &gt; 1\).
+We also know that \(\max y \geq \frac{1}{n}\), so we can fix a
+variable to 0 as soon as \(\sqrt{n} |z| &lt; \frac{1}{n}\), or,
+equivalently, \(\frac{1}{|z|} &gt; n\sp{3/2}\).  We need to increment
+\(\frac{1}{|z|\sp{2}}\) to at most \(n\sp{3}\), so we will go
+through at most \(1 + n\sp{3})\) iterations of the basic procedure
+before it terminates; if the set \(K\) includes more than one
+coordinate, we should need fewer iterations to reach the same limit.</p>
+
+<p>Chubanov shows how to embed the basic procedure in a basic iterative
+method to solve binary LPs.  The interesting bit is that we reuse the
+dual vector \(y\) as much as we can in order to bound the total
+number of iterations in the basic procedure.  We fix at least one
+variable to \(0\) after a call to the basic procedure that does not
+yield a fractional solution; there are thus at most \(n\) such calls.</p>
+
+<h2 id="next-step">Next step</h2>
+
+<p>In contrast to regular numerical algorithms, the number of iterations
+and calls so far have all had exact (non asymptotic) bounds.  The
+asymptotics hide in the projection step, where we average elementary
+unit vectors and project them in the null space of \(A\).  We know
+there will be few (at most \(n\)) calls to the basic procedure, so
+we can expend a lot of time on matrix factorisation.  In fact,
+Chubanov outright computes the projection matrix in
+\(\mathcal{O}(n\sp{3})\) time to get his complexity bound of
+\(\mathcal{O}(n\sp{4})\).  In practice, this approach is likely to
+fill a lot of zeros in, and thus run out of RAM.</p>
+
+<p>I’d start with the sparse projection code in
+<a href="http://faculty.cse.tamu.edu/davis/suitesparse.html">SuiteSparse</a>.
+The direct sparse solver spends less time on precomputation than fully
+building the projection matrix (good if we don’t expect to always hit
+the worst case iteration bound), and should preserve sparsity (good
+for memory usage).  In return, computing projections is slower, which
+brings the worst-case complexity to something like
+\(\mathcal{O}(n\sp{5})\), but that can be parallelised, should be
+more proportional to the number of non-zeros in the constraint matrix
+(\(\mathcal{O}(n)\) in practice), and may even exploit sparsity in
+the right-hand side.  Moreover, we can hope that the \(n\sp{3}\)
+iteration bound is pessimistic; that certainly seems to be the case
+for most experiments with random matrices.</p>
+
+<p>The worst-case complexity, between \(\mathcal{O}(n\sp{4})\) and
+\(\mathcal{O}(n\sp{5})\), doesn’t compare that well to interior
+point methods (\(\mathcal{O}(\sqrt{n})\) sparse linear solutions).
+However, that’s all worst-case (even for IPMs).  We also have
+different goals when embedding linear programming solvers in
+branch-and-bound methods.  Warm starts and the ability to find
+solution close to their bounds are key to efficient branch-and-bound;
+that’s why we still use simplex methods in such methods.  Chubanov’s
+projection routine seems like it might come close to the simplex’s
+good fit in branch-and-bound, while improving efficiency and
+parallelisability on large LPs.</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[So you want to write an LP solver (a.k.a. My Little LP: Cholesky Is Magic)]]></title>
+    <link href="https://www.pvk.ca/Blog/2013/12/19/so-you-want-to-write-an-lp-solver/"/>
+    <updated>2013-12-19T23:08:00-05:00</updated>
+    <id>https://www.pvk.ca/Blog/2013/12/19/so-you-want-to-write-an-lp-solver</id>
+    <content type="html"><![CDATA[<p><em>In which a <a href="http://www.evanmiller.org/mathematical-hacker.html">Lisp hacker exhibits his ignorance of applied mathematics</a> ;)</em></p>
+
+<p>Linear programming (LP) is awesome.  I based my PhD work on solving
+LPs with millions of variables and constraints… instead of integer
+programs a couple orders of magnitude smaller.  However, writing LP
+solvers is an art that should probably be left to experts, or to those
+willing to dedicate a couple years to becoming one.</p>
+
+<p>That being said, if one must write their own, an interior point method
+(IPM) is probably the best approach.  This post walks through the
+development of a primal affine scaling method; it doesn’t guarantee
+state-of-the-art practical or theoretical efficiency (it’s not even
+polynomial time), but is simple and easy to understand.</p>
+
+<p>I think interior point methods suffer from an undeserved bad
+reputation: they only <em>seem</em> complicated compared to the nice
+combinatorial Simplex method.  That would explain why I regularly
+(once or twice a year) see hackers implement a (classic!) simplex
+method, but rarely IPMs.</p>
+
+<p>The problem is that simplex only works because world-class
+implementations are marvels of engineering: it’s almost like their
+performance is in spite of the algorithm, only thanks to
+coder-centuries of effort.  Worse, textbooks usually present the
+classic simplex method (the dark force behind simplex tableaux) so
+that’s what unsuspecting hackers implement.  Pretty much no one uses
+that method: it’s slow and doesn’t really exploit sparsity (the fact
+that each constraint tends to only involve a few variables).  Avoiding
+the trap of the classic simplex is only the first step.  Factorising
+the basis — and updating the factors — is essential for efficient
+revised simplex methods, and some clever tricks really help in
+practice (packages like
+<a href="http://web.stanford.edu/group/SOL/software/lusol/">LUSOL</a> mostly
+take care of that); pivot selection (pricing) is fiddly but has a huge
+impact on the number of iterations — never mind degeneracy, which
+complicates everything; and all that must be balanced with minimising
+work per iteration (which explains the edge of dual simplex: there’s
+no primal analogue to <s>devex</s> normalised dual steepest edge
+pricing).  There’s also presolving and crash basis construction, which
+can simplify a problem so much that it’s solved without any simplex
+pivot.  Despite all this sophistication, only 
+<a href="http://www.cs.yale.edu/homes/spielman/Research/SimplexStoc.pdf">recent theoretical advances</a>
+protect against instances going exponential.</p>
+
+<p><small>Sidenote: Vasek Chvatal’s
+<a href="http://books.google.ca/books/about/Linear_Programming.html?id=DN20_tW_BV0C&amp;redir_esc=y">Linear Programming</a>
+takes a view that’s closer to the revised simplex algorithm and seems
+more enlightening to me.  Also, it’s been a while since I read about pricing
+in the simplex, but the dual simplex definitely has a computational edge for
+obscure reasons; <a href="http://d-nb.info/978580478/34">this dissertation</a> might have 
+interesting details.</small></p>
+
+<p>There’s also the learning angle.  My perspective is biased (I’ve been
+swimming in this for 5+ years), but I’d say that implementing IPMs
+teaches a lot more optimisation theory than implementing simplex
+methods.  The latter are mostly engineering hacks, and relying on
+tableaux or bases to understand duality is a liability for large scale
+optimisation.</p>
+
+<p>I hope to show that IPMs are the better choice, with respect to both the
+performance of naïve implementations and the insights gained by coding
+them, by deriving a decent implementation from an intuitive starting
+point.</p>
+
+<h1 id="affine-scaling-in-30-minutes">Affine scaling in 30 minutes</h1>
+
+<p>I’ll solve linear problems of the form
+\(\min\sb{x} cx\)
+subject to
+\(Ax = b\)
+\(l \leq x \leq u.\)</p>
+
+<p>I will assume that we already have a feasible point that is strictly
+inside the box \([l, u]\) and that <em>A</em> has full row rank.  Full rank
+doesn’t always pan out in practice, but that’s a topic for another
+day.</p>
+
+<p>If it weren’t for the box constraint on <em>x</em>, we would be minimising a
+smooth function subject to affine equalities.  We could then easily
+find a feasible descent direction by projecting \(-c\) (the opposite
+of the gradient) in the nullspace of <em>A</em>, i.e., by solving the linear
+equality-constrained least squares
+\(\min\sb{d} \|(-c)-d\|\sb{2}\)
+subject to
+\(Ad = 0,\)
+e.g. with LAPACK’s <a href="http://www.netlib.org/lapack/lug/node28.html">xGGLSE</a>.</p>
+
+<p>The problem with this direction is that it doesn’t take into account
+the box constraints.  Once some component of <em>x</em> is at its bound, we
+can’t move past that wall, so we should try to avoid getting too close
+to any bound.</p>
+
+<p>Interior point methods add a logarithmic penalty on the distance
+between <em>x</em> and its bounds; (the gradient of) the objective function
+then reflects how close each component of <em>x</em> is to its lower or upper
+bound.  As long as <em>x</em> isn’t directly on the border of the box, we’ll
+be able to make a non-trivial step forward without getting too close
+to that border.</p>
+
+<p>There’s a similar interpretation for simpler primal affine scaling
+methods we’ll implement here,
+but I prefer the original explanation.  These methods rescale the
+space in which we solve for <em>d</em> so that <em>x</em> is always far from its
+bounds; rescaling the direction back in the original space means that
+we’ll tend to move more quickly along coordinates that are far from
+their bounds, and less for those close to either bound.  As long as
+we’re strictly inside the box, the transformation is meaningful and
+invertible.</p>
+
+<p><small>It’s a primal method because we only manipulate primal
+variables; dual methods instead work with the dual variables
+associated with the linear constraints. Primal-dual methods
+work on both sets of variables at once.</small></p>
+
+<p>This sketch might be useful.  <em>x</em> is close to the left-hand side
+bound, and, after projection in the nullspace, <em>d</em>
+quickly hits the border.  With scaling, <em>d</em> is more vertical, and
+this carries to the unscaled direction.</p>
+
+<p><img class="center" src="/images/2013-12-19-so-you-want-to-write-an-lp-solver/affine-scaling-1.jpg" /></p>
+
+<p>The descent direction may naturally guide us away from a close-by
+bound; scaling is then useless.  However, each jump away from that
+bound makes the next longer, and such situations resolve themselves
+after a couple iterations.</p>
+
+<p>Formally, let
+\(s = \min\\{x-l, u-x\\} &gt; 0\)
+be the slack vector (computed element wise) for the distance from <em>x</em>
+to its bounds.  We’ll just scale <em>d</em> and <em>c</em> elementwise by <em>S</em>
+(<em>S</em> is the diagonal matrix with the elements of <em>s</em> on its diagonal).
+The scaled least square system is
+\(\min\sb{d\sb{s}} \|(-Sc)-d\sb{s}\|\)
+subject to
+\(ASd\sb{s} = 0.\)</p>
+
+<p>Now that we have a descent direction \(d=Sd\sb{s}\), we only
+have to decide how far along to go in that direction.  We determine
+the limit, <em>r</em>, with a ratio test.  For each coordinate, look at
+\(d\sb{i}\): if it’s zero, this coordinate doesn’t affect the limit;
+if it’s negative, the limit must be at most \((l-x)\sb{i}/d\sb{i}\);
+if it’s positive, the limit is at most \((u-x)\sb{i}/d\sb{i}\).  We
+then take the minimum of these ratios.</p>
+
+<p>If the minimum doesn’t exist (i.e., \(r=\infty\)), the problem is
+unbounded.</p>
+
+<p>Otherwise, we could go up to \(x+rd\) to improve the solution
+while maintaining feasibility.  However, we want to stay strictly
+inside the feasible space: once we hit a bound, we’re stuck there.
+That’s why we instead take a slightly smaller step, e.g., \(0.9r\).</p>
+
+<p>This drawing shows what’s going on: given <em>d</em>, <em>r</em> takes us exactly to
+the edge, so we take a slightly shorter step.  The new solution is
+still strictly feasible, but has a better objective value than the previous
+one.  In this case, we’re lucky and the new iterate \(x\sp{\prime}\)
+is more isotropic than the previous one; usually, we slide closer
+to the edge, only less so than without scaling.
+<img class="center" src="/images/2013-12-19-so-you-want-to-write-an-lp-solver/affine-scaling-3.jpg" /></p>
+
+<p>We then solve the constrained least squares system again, with a new
+value for <em>S</em>.</p>
+
+<h2 id="finding-a-feasible-solution">Finding a feasible solution</h2>
+
+<p>I assumed that <em>x</em> is a strictly feasible (i.e., interior) solution:
+it satisfies the equality constraint \(Ax=b\) and is strictly inside
+its box \([l, u]\).  That’s not always easy to achieve; in theory,
+finding a feasible solution is as hard as optimising a linear program.</p>
+
+<p>I’ll now assume that <em>x</em> is strictly inside its box and repair it
+toward feasibility, again with a scaled least squares solution.  This
+time, we’re looking for the least norm (the system is underdetermined)
+solution of \(Ad = (b - Ax).\)</p>
+
+<p>We rescale the norm to penalise movements in coordinates that are
+already close to their bound by instead solving
+\(ASd\sb{s} = (b - Ax),\)
+for example with
+<a href="http://www.netlib.org/lapack/lug/node27.html">xGELSD</a>.</p>
+
+<p>If we move in direction \(Sd\sb{s}\) with step \(r=1\), we’ll
+satisfy the equality exactly.  Again, we must also take the box into
+account, and perform a ratio test to determine the step size; if
+\(0.9r &gt; 1\), we instead set \(r=1/0.9\) and the result is a
+strictly feasible solution.</p>
+
+<h2 id="an-initial-implementation">An initial implementation</h2>
+
+<p>I uploaded some hacktastic CL to
+<a href="https://github.com/pkhuong/cholesky-is-magic/commits/master">github</a>.
+The initial affine scaling method corresponds to
+<a href="https://github.com/pkhuong/cholesky-is-magic/tree/507231221a98929e26ab80410d7892f19c6d5bdf">this commit</a>.
+The outer loop looks at the residual \(Ax-b\) to determine whether
+to run a repair (feasibility) or optimisation iteration.</p>
+
+<p>The code depends on a few libraries for the MPS parser and on matlisp,
+and isn’t even ASDF-loadable; I just saved and committed whatever I
+defined in the REPL.</p>
+
+<p>This commit depends on a patch to matlisp’s <code>src/lapack.lisp</code> (and to
+<code>packages.lisp</code> to export <code>lapack:dgglse</code>):</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(def-fortran-routine dgglse :void
+</span><span class="line">"
+</span><span class="line">   -- LAPACK driver routine (version 3.0) --
+</span><span class="line">      Univ. of Tennessee, Univ. of California Berkeley, NAG Ltd.,
+</span><span class="line">      Courant Institute, Argonne National Lab, and Rice University
+</span><span class="line">      March 31, 1993
+</span><span class="line">      
+</span><span class="line">PURPOSE
+</span><span class="line">      DGGLSE solves the linear equality constrained least squares
+</span><span class="line">      (LSE) problem:
+</span><span class="line">
+</span><span class="line">              minimize || A*x - c ||_2   subject to B*x = d
+</span><span class="line">"
+</span><span class="line">  (m :integer :input)
+</span><span class="line">  (n :integer :input)
+</span><span class="line">  (p :integer :input)
+</span><span class="line">  (a (* :double-float) :input-output)
+</span><span class="line">  (lda :integer :input)
+</span><span class="line">  (b (* :double-float) :input-output)
+</span><span class="line">  (ldb :integer :input)
+</span><span class="line">  (c (* :double-float) :input-output)
+</span><span class="line">  (d (* :double-float) :input-output)
+</span><span class="line">  (x (* :double-float) :output)
+</span><span class="line">  (work (* :double-float) :workspace-output)
+</span><span class="line">  (lwork :integer :input)
+</span><span class="line">  (info :integer :output))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (matlisp:load-blas-&amp;-lapack-libraries)
+</span><span class="line">[...]
+</span><span class="line">CL-USER&gt; (load "read-mps.lisp")
+</span><span class="line">T
+</span><span class="line">CL-USER&gt; (load "standard-form.lisp")
+</span><span class="line">T
+</span><span class="line">CL-USER&gt; (load "affine-scaling.lisp")
+</span><span class="line">T</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>MPS is a very old (punchcard-oriented) format to describe linear and
+mixed integer programs.  The parser mostly works (the format isn’t
+very well specified), and <code>standard-form.lisp</code> converts everything to
+our standard form with equality constraints and a box around decision
+variables.</p>
+
+<p>I will test the code on a couple LPs from
+<a href="http://www.netlib.org/lp/data/readme">netlib</a>, a classic instance set
+(I think the tarball in
+<a href="http://www.numerical.rl.ac.uk/cute/netlib.html">CUTEr</a> is OK).</p>
+
+<p>AFIRO is a tiny LP (32 variables by 28 constraints, 88 nonzeros).
+Good news: the program works on this trivial instance and finds the
+optimum (the relative difference with the reference value is 7e-6).
+The first four “repair” iterations find a feasible solutions, and 11
+more iterations eventually get to the optimum.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (defparameter *affine* (make-affine-state 
+</span><span class="line">                                 (to-standard-form
+</span><span class="line">                                  (read-mps-file "/Users/pkhuong/mps-reader/netlib/afiro"))))
+</span><span class="line">*AFFINE*
+</span><span class="line">CL-USER&gt; (time (affine-scaling *affine*))
+</span><span class="line">   0: Repair:     832.88     ...   567.67       827.27    
+</span><span class="line">   1: Repair:     827.27     ...   618.03       794.68    
+</span><span class="line">   2: Repair:     794.68     ...   691.33       586.30    
+</span><span class="line">   3: Repair:     586.30     ...   552.10      1.59378d-13
+</span><span class="line">   4: Optimise:  -20.296     ...   148.53      -90.318    
+</span><span class="line">   5: Optimise:  -90.318     ...   1414.9      -246.98    
+</span><span class="line">   6: Optimise:  -246.98     ...   11350.      -446.35    
+</span><span class="line">   7: Optimise:  -446.35     ...   56.016      -452.73    
+</span><span class="line">   8: Optimise:  -452.73     ...   13.263      -461.82    
+</span><span class="line">   9: Optimise:  -461.82     ...  0.85664      -463.97    
+</span><span class="line">  10: Optimise:  -463.97     ...   4.20034d-2  -464.50    
+</span><span class="line">  11: Optimise:  -464.50     ...   5.00704d-3  -464.72    
+</span><span class="line">  12: Optimise:  -464.72     ...   1.31850d-4  -464.74    
+</span><span class="line">  13: Optimise:  -464.74     ...   1.40724d-5  -464.75    
+</span><span class="line">  14: Optimise:  -464.75     ...   9.34845d-7  -464.75    
+</span><span class="line">Evaluation took:
+</span><span class="line">  0.021 seconds of real time
+</span><span class="line">  0.021653 seconds of total run time (0.014447 user, 0.007206 system)
+</span><span class="line">  104.76% CPU
+</span><span class="line">  34,228,752 processor cycles
+</span><span class="line">  1,346,800 bytes consed
+</span><span class="line">  
+</span><span class="line">-464.7498078036151d0
+</span><span class="line">#&lt;MATLISP:REAL-MATRIX  51 x 1
+</span><span class="line">    80.000     
+</span><span class="line">    25.500     
+</span><span class="line">    54.500     
+</span><span class="line">    84.800     
+</span><span class="line">     :
+</span><span class="line">    80.424     &gt;
+</span><span class="line">6.662821645122319d-13</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>I also tested on ADLITTLE, another tiny instance (97x57, 465 nz): 48
+iterations, 0.37 seconds total.</p>
+
+<p>AGG is more interesting, at 163x489 and 2541 nz; that one took 156
+iterations and 80 seconds (130% CPU, thanks to Apple’s parallel BLAS).
+Finally, FIT1D is challenging, at 1026x25 and 14430 nz; that one took
+100 seconds and the final objective value was off by .5%.</p>
+
+<p>All these instances are solved in a fraction of a second by
+state-of-the-art solvers.  The next steps will get us closer to a
+decent implementation.</p>
+
+<h1 id="first-simplify-the-linear-algebra">First, simplify the linear algebra</h1>
+
+<p>The initial implementation resorted to DGGLSE for all least squares
+solves.  That function is much too general.</p>
+
+<p>I
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/ecb6b58362f5658eaa4184292022f4a6691384dd">changed the repair phase’s least squares to a GELSY</a>
+(GELSD isn’t nicely wrapped in matlisp yet).</p>
+
+<p>We can do the same for the optimisation phase’s constrained least squares.
+Some doodling around with Lagrange multipliers shows that the solution
+of
+\(\min\sb{x} \|x-c\|\sb{2}\sp{2}\)
+subject to
+\(Ax = 0\)
+is
+\(x = A\sp{t}(AA\sp{t})\sp{-1}Ac - c.\)</p>
+
+<p>This is a series of matrix-vector multiplications and a single linear
+solve,
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/d17d65e96686bc6334b5c524d54b1359ec1e1513">which I perform with GELSY for now</a>: 
+we need the numerical stability because, when we’re close to optimality, the system is really badly conditioned and
+regular linear solves just crash.</p>
+
+<p>Both linear algebra microoptimisations are in
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/df036c9e37420df532739a66bc53eee82b209f26">this commit</a>.</p>
+
+<p>ADLITTLE becomes about five times faster, and FIT1D now runs in 2.9
+seconds (instead of 100), but AGG eventually fails to make progress:
+we still have problems with numerical stability.</p>
+
+<h1 id="now-the-magic-sauce">Now, the magic sauce</h1>
+
+<p>Our numerical issues aren’t surprising: we work with a scaled matrix
+\(AS\), where the diagonal of \(S\) reflects how close \(x\) is
+to its bounds.  As we get closer to an optimal solution, some of
+\(x\) will converge to the bounds, and some to a value in-between:
+the limit is a basic solution.  We then take this badly conditioned
+matrix and multiply it by its own transpose, which squares the
+condition number! It’s a wonder that we can get any useful bit from
+our linear solves.</p>
+
+<p>There’s a way out: the normal matrix \(AA\sp{t}\) is not only
+symmetric, but also positive (semi)definite (the full rank assumption
+isn’t always satisfied in practice).  This means we can go for a
+Cholesky \(LL\sp{t}\) (or \(LDL\sp{t}\)) factorisation.</p>
+
+<p>We’re lucky: it turns out that Cholesky factorisation reacts to our
+badly conditioned matrix in a way that is safe for Newton steps in
+IPMs (for reasons I totally don’t understand).  It also works for us.
+I guess the intuition is that the bad conditioning stems from our
+scaling term.  When we go back in the unscaled space, rounding errors
+have accumulated exactly in the components that are reduced into
+nothingness.</p>
+
+<p>I used Cholesky factorisation with LAPACK’s
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/c7214f820c933bea5627f75792cdb32cbf72ffb2">DPOTRF and DPOTRS for the optimisation projection</a>,
+and
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/4d80ad9f409f27faf74e6ae964ac19f5bcfff189">for repair iterations as well</a>.</p>
+
+<p>LAPACK’s factorisation may fail on semidefinite matrices;
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/f0668c9b4e5e622fc60df9c770acb3a96e3ba4d9">I call out to GELSY when this happens</a>.</p>
+
+<p>To my eyes, this yields the first
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/baf4168e0718ed3ef6a2bd0fb4e58cf210e7976a">decent commit</a>.</p>
+
+<p>The result terminates even closer to optimum, more quickly.  AGG stops
+after 168 iterations, in 26 seconds, and everything else is slightly
+quicker than before.</p>
+
+<h1 id="icing-on-the-cake">Icing on the cake</h1>
+
+<p>I think the code is finally usable: the key was to reduce everything
+to PD (positive definite) solves and Cholesky factorisation.  So far,
+we’ve been doing dense linear algebra with BLAS and LAPACK and
+benefitted from our platform’s tuned and parallel code.  For small (up
+to a hundred or so constraints and variables) or dense instances, this
+is a good simple implementation.</p>
+
+<p>We’ll now get a 10-100x speedup on practical instances.  I already
+noted, en passant, that linear programs in the wild tend to be very
+sparse.  This is certainly true of our four test instances: their
+nonzero density is around 1% or less.  Larger instances tend to be
+even sparser.</p>
+
+<p>There’s been a lot of work on sparse PD solvers.  Direct sparse
+linear solvers is another complex area that I don’t think should be
+approached lightly: expensive supercomputers have been solving sparse
+PD linear systems for a couple decades, and there’s some really crazy
+code around.  I’ve read reports that, with appropriate blocking and
+vectorisation, a sparse matrix can be factored to disk at 80% peak
+FLOP/s.  If you’re into that, I’m told there are nice introductions,
+like <a href="http://www.cise.ufl.edu/research/sparse/CSparse/">Tim Davis’s book</a>,
+which covers a didactical yet useful implementation of sparse Cholesky in
+2000 LOC.</p>
+
+<p>I decided to go with CHOLMOD from
+<a href="http://www.cise.ufl.edu/research/sparse/SuiteSparse/">SuiteSparse</a>, a
+mixed GPL/LGPL library.  CHOLMOD implements state of the art methods:
+when all its dependencies are available, it exposes parallelisation
+and vectorisation opportunities to the BLAS (thanks to permutations
+computed, e.g., by METIS) and exploits Intel’s TBB and Nvidia’s CUDA.
+It’s also well designed for embedding in other programs; for example,
+it won’t <code>abort(3)</code> on error (I’m looking at you, LLVM), and includes
+data checking/printing routines that help detect FFI issues.  Its
+interface even helps you find memory leaks!  Overall, it’s a really
+refreshing experience compared to other academic code, and I wish all
+libraries were this well thought out.</p>
+
+<p>I built only the barest version on my Mac and linked it with a
+<a href="https://github.com/pkhuong/cholesky-is-magic/blob/f62571572b66f61e069ed994415960e5e2b309bd/wrapper.c">wrapper</a>
+to help
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/f62571572b66f61e069ed994415960e5e2b309bd">my bindings</a>.
+I had to build the dynamic library with <code>-Wl,-all_load</code> on OS X to
+preserve symbols that only appear in archives; <code>-Wl,--whole-archive</code>
+should do it for gnu ld.  (I also bound a lot of functions that I
+don’t use: I was paying more attention to the TV at the time.)</p>
+
+<p>CHOLMOD includes functions to simultaneously multiply a sparse matrix with
+its transpose and factorise the result.
+<a href="https://github.com/pkhuong/cholesky-is-magic/blob/de30e45634670e01f39e55a3735637347e251850/sparse-cholesky.lisp#L376">Function <code>solve-dense</code></a>
+shows how I use it to solve a dense PD system.  It’s a three-step
+process:</p>
+
+<ol>
+  <li>Analyse the nonzero pattern of the constraint matrix to determine
+an elimination order (trivial for a dense matrix);</li>
+  <li>Compute the normal matrix and factor it according to the analysis
+stored in the factor struct;</li>
+  <li>Solve for that factorisation.</li>
+</ol>
+
+<p>This is really stupid: I’m not even dropping zero entries in the dense
+matrix.  Yet,
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/0095354735a35f11ccb8aaa6f41b8e6253ab87bd">it suffices</a>
+to speed up AGG from 26 to 14 seconds!</p>
+
+<p>It’s clear that we need to preserve the constraint matrix <em>A</em> in a
+sparse format.  CHOLMOD has a function to translate from the trivial
+triplet representation (one vector of row indices, another of column
+indices, and another of values) to the more widely used compressed
+representation.  Instances in our standard form already represent the
+constraint matrix as a vector of triplets.  We only have to
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/6bd1e48058af1c2621f94aef8c6c13ba38119c74">copy from CL to a CHOLMOD triplet struct</a>
+to exploit sparsity in Cholesky solves and in matrix-vector
+multiplications.</p>
+
+<p>We now solve AGG in 0.83 seconds and FIT1D in 0.95.  I think we can
+expect runtimes of one second or less for instances up to ~200x200.
+Better, we can finally hope to solve respectable LPs, like FIT2D
+(10500x26, 138018 nz, 2.3 s) or FIT1P (1677x628, 10894 nz, 14 s).</p>
+
+<h1 id="finishing-touches">Finishing touches</h1>
+
+<p>Our normal matrix \(ASS\sp{t}A\sp{t}\) always has the same pattern (nonzero
+locations): we only change the scaling diagonals in the middle.  Sparse
+solvers separate the analysis and factorisation steps for exactly
+such situations.  When we solve a lot of systems with the same pattern, it
+makes sense to spend a lot of time on a one-time analysis that we then
+reuse at each iteration: fancy analysis routines generate
+factors that take up less space and need fewer FLOPs to build.</p>
+
+<p>I do that
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/eabbc91d9a8cf38edd42b1c8ce1549c57afbcb79">here</a>.
+Our less tiny instances are almost twice as fast.  We solve FIT1P in 8
+seconds now, and even FIT2P (13525x3001, 60784 nz) in 200 seconds.</p>
+
+<p>I then made
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/3a489beaa77dc3f0d95ae4822dd0544819d61754">some microoptimisation to reuse storage</a>.</p>
+
+<p>Finally, I added steps that push the current solution away from
+close-by bounds.  These
+<a href="https://github.com/pkhuong/cholesky-is-magic/commit/a2c4f065da3cf8549fb3576067d64b54a6383a63">centering steps</a>
+help subsequent iterations make longer jumps toward optimality</p>
+
+<p>The last two changes shave a couple more seconds on large instances
+and gets closer to optimality on nastier ones.</p>
+
+<h1 id="not-quite-the-end">Not quite the end</h1>
+
+<p>I hope I managed to communicate the intuition behind primal affine
+scaling methods, and that the walkthrough helped map that intuition to
+a sparse implementation.  I also realise that the code isn’t pretty: I
+wrote it during a short marathon and tried to only make incremental
+changes.  Still, the algorithm should be more or less usable for small
+instances; more than a naïve simplex method, anyway.</p>
+
+<p>That’s particularly true on multicore machines.  Parallelising simplex
+methods has been an area of slow research for a couple decades; the
+best work I’ve seen so far takes a huge hit by reverting to the
+classic algorithm and hopes that parallelisation can compensate for
+that initial 10-1000x slowdown.  In contrast, even our sparse method
+is already parallel: CHOLMOD automatically vectorises, parallelises,
+and offloads work to the GPU.</p>
+
+<p>I’ll try to code a sparse primal-dual affine scaling method from
+scratch soon.  Primal-dual methods usually work better than pure
+primal (or dual) methods and I find their theory interesting (if
+<a href="http://discontinuity.info/~pkhuong/KKT/KKT09.jpg">a bit complicated</a>).</p>
+
+<p>If you liked this post, you might be interested in Stephen Boyd’s
+<a href="http://online.stanford.edu/course/convex-optimization-winter-2014">Convex optimisation course</a>.
+He’s offering it online this winter, starting January 21st.</p>
+]]></content>
+  </entry>
+  
+</feed>
