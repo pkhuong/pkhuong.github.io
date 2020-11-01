@@ -141,14 +141,14 @@ doesn’t help performance: we still have to do double the work to get
 double the hash bits.</p>
 
 <p>Earlier this month, <a href="https://github.com/jbapple">Jim Apple</a> pointed me at
-a <a href="https://link.springer.com/chapter/10.1007/978-3-662-46706-0_25">promising alternative that double the hash bit with only one more multiplication</a>.
+a <a href="https://link.springer.com/chapter/10.1007/978-3-662-46706-0_25">promising alternative that doubles the hash bit with only one more multiplication</a>.
 The construction adds finite field operations that aren’t particularly
 efficient in software, on top of the additional 64x64 -&gt; 128
 (carryless) multiplication, so isn’t a slam dunk win over a
 straightforward Toeplitz extension.
 However, Jim felt like we could “spend” some of the bits we don’t need
 for fingerprinting (\(2^{-128}\) collision probability is overkill
-when we only need \(2^{-70}\) in order to make do with faster operations.</p>
+when we only need \(2^{-70}\)) in order to make do with faster operations.</p>
 
 <p>Turns out he was right! We can use carryless multiplications by sparse
 constants (i.e., concretely, xor-shift and one more shift) without any
@@ -180,7 +180,7 @@ size tag (to protect against extension attacks) with
 <p>\[ \mathtt{ENH}(k, x, y) = ((k + x) \bmod 2^{64}) \cdot (\lfloor k / 2^{64}\rfloor + \lfloor x / 2^{64} \rfloor \bmod 2^{64}) + y \mod 2^{128}. \]</p>
 
 <p>The core operation in ENH is a full (64x64 -&gt; 128) integer
-multiplication, and that has lower latency than PH’s carryless
+multiplication, which has lower latency than PH’s carryless
 multiplication on x86-64.  That’s why UMASH switches to ENH for the
 last chunk.  We use ENH for only one chunk because combining multiple
 NH values calls for 128-bit additions, and that’s slower than PH’s
@@ -245,9 +245,8 @@ H \oplus H^\prime = 0,\) assuming that the messages differ
 at most \(2^{-w}\).</p>
 
 <p>Otherwise, assume that \(m_j \neq m^\prime_j\), for some \(j \in
-[1, n)\).</p>
-
-<p>We can rearrange the expression</p>
+[1, n)\).
+We can rearrange the expression</p>
 
 <p>\[ H \oplus H^\prime = h_j \oplus h^\prime_j \oplus \left(\bigoplus_{i\in [0, n) \setminus \{ j \}} h_i \oplus h^\prime_i\right). \]</p>
 
@@ -256,18 +255,18 @@ chosen value \(y\):</p>
 
 <p>\[ H \oplus H^\prime = h_j \oplus h^\prime_j \oplus y, \]</p>
 
-<p>and thus \(H = H^\prime\) iff \(h_j \oplus h^\prime_j = y;\)
-by hypothesis, the \(j\)th chunk (every chunk but the 0th),
+<p>and thus \(H = H^\prime\) iff \(h_j \oplus h^\prime_j = y.\)
+By hypothesis, the \(j\)th chunk (every chunk but the 0th),
 is mixed with a \(2^{-w}\)-almost-XOR-universal hash, and
 this thus happens with probability at most \(2^{-w}\).</p>
 
-<p>In both cases, we find a collision probability at most \(2^{-w},\)
-with a simple analysis despite combining mixing functions from
+<p>In both cases, we find a collision probability at most \(2^{-w}\)
+with a simple analysis, despite combining mixing functions from
 different families over different rings.</p>
 
 <h2 id="wringing-more-bits-out-of-the-same-mixers">Wringing more bits out of the same mixers</h2>
 
-<p>We combine strong mixers (each is \(2^{-w}\)-almost-universal),
+<p>We combined strong mixers (each is \(2^{-w}\)-almost-universal),
 and only get a \(2^{-w}\)-almost-universal output.
 It seems like we should be able to do better when two or
 more chunks differ.</p>
@@ -275,7 +274,7 @@ more chunks differ.</p>
 <p>As <a href="https://link.springer.com/chapter/10.1007/978-3-662-46706-0_25">Nandi</a>
 points outs, we can apply erasure codes to derive additional
 chunks from the original messages’ contents.  We only need
-one more chunk, so we can simply xor together all the message’s
+one more chunk, so we can simply xor together all the original
 chunks:</p>
 
 <p>\[m_n = \bigoplus_{i=0}^{n - 1} m_i,\]</p>
@@ -283,18 +282,17 @@ chunks:</p>
 <p>and similarly for \(m^\prime_n\).
 If \(m\) and \(m^\prime\) differ in only one chunk, \(m_n \neq
 m^\prime_n\).  It’s definitely possible for \(m_n = m^\prime_n\)
-when \(m \neq m^\prime\), but only if two or more chunks \(m_j \neq
-m^\prime_j\) and \(m_k \neq m^\prime_k\).</p>
+when \(m \neq m^\prime\), but only if two or more chunks differ.</p>
 
-<p>We will also mix \(m_n\) and \(m^\prime_n\) with another
+<p>We will again mix \(m_n\) and \(m^\prime_n\) with a fresh
 \(2^{-w}\)-almost-XOR-universal hash function to yield \(h_n\) and
 \(h^\prime_n\).</p>
 
-<p>We’ll xor the result \(h_n\) and \(h^\prime_n\) with the second
-(still undefined) hash function \(H_2\) and \(H^\prime_2\); if
+<p>We want to xor the result \(h_n\) and \(h^\prime_n\) with the second
+(still undefined) hash values \(H_2\) and \(H^\prime_2\); if
 \(m_n \neq m^\prime_n\), the final xored values are equal with
 probability at most\(2^{-w}\), regardless of \(H_2\) and
-\(H^\prime_2\ldots\) and, importantly, independently of \(H \neq
+\(H^\prime_2\ldots\) and, crucially, independently of \(H \neq
 H^\prime\).</p>
 
 <p>When the two messages \(m\) and \(m^\prime\) only differ in a
@@ -303,12 +301,12 @@ gives us an independent hash function, which
 squares the collision probability to \(2^{-2w}\).</p>
 
 <p>Now to the interesting bit: we must define a second hash function for
-chunks 0 to \(n - 1\), such that \(H_2\) and \(H^\prime_2\) collide
+chunks 0 to \(n - 1\) such that its hash values \(H_2\) and \(H^\prime_2\) collide
 independently enough of \(H\) and \(H^\prime\).
 That’s a tall order, but we do have one additional assumption to work
 with: we only care about collisions in this second hash function if the
 additional checksum chunks are equal, which means that the two messages
-differ in two or more chunks (or they’re fully equal).</p>
+differ in two or more chunks (or they’re identical).</p>
 
 <p>For each index \(0 &lt; i &lt; n\), we’ll fix a <em>public</em> linear (with
 xor as the addition) function \(\overline{xs}_i(x)\), with three
@@ -329,9 +327,9 @@ bitshift is computed for the two 64-bit halves independently, and
 for \(i &gt; 1\), again with all the bitshifts computed independently
 over the two 64-bit halves.</p>
 
-<p>To see that these satisfy our requirements, we can model the function as
-carryless multiplication by distinct “even” constants (the least
-significant bit is 0) on each 64-bit half:</p>
+<p>To see that these satisfy our requirements, we can represent the
+functions as carryless multiplication by distinct “even” constants
+(the least significant bit is 0) on each 64-bit half:</p>
 
 <ol>
   <li>once we xor in \(x\), we get a multiplication by an odd constant,
@@ -366,19 +364,20 @@ H^\prime_2 \oplus h^\prime_n\) collide simultaneously with probability at most \
 when the checksum chunks differ, i.e., when \(m_n \neq m^\prime_n\).</p>
 
 <p>Let’s now focus on the case when \(m \neq m^\prime\), but \(m_n =
-m^\prime_n\).</p>
-
-<p>In that case, we know that at least two chunks \(0 \leq i &lt; j &lt; n\)
+m^\prime_n\).
+In that case, we know that at least two chunks \(0 \leq i &lt; j &lt; n\)
 differ, i.e., \(m_i \neq m^\prime_i\) and \(m_j \neq m^\prime_j\).</p>
 
 <p>If only two chunks \(i\) and \(j\) differ, and one of them is the
-\(i = 0\)th chunk, we want to bound the probability that:</p>
+\(i = 0\)th chunk, we want to bound the probability that</p>
 
 <p>\[ h_0 \oplus h_j = h^\prime_0 \oplus h^\prime_j \]</p>
 
 <p>and</p>
 
-<p>\[ h_0 \oplus \overline{xs}_j(h_j) = h^\prime_0 \oplus \overline{xs}_j(h^\prime_j) = 0 \]</p>
+<p>\[ h_0 \oplus \overline{xs}_j(h_j) = h^\prime_0 \oplus \overline{xs}_j(h^\prime_j) = 0, \]</p>
+
+<p>both at the same time.</p>
 
 <p>Letting \(\Delta_i = h_i \oplus h^\prime_i\), we can reformulate the
 two conditions as</p>
@@ -392,13 +391,13 @@ and
 <p>\[ \Delta_j \oplus \overline{xs}_j(\Delta_j) = 0, \]</p>
 
 <p>which is only satisfied for \(\Delta_j = 0\), since \(f(x) = x
-\oplus \overline{xs}_j(x)\) is an invertible linear function,
-and thus also forces \(\Delta_0 = 0\).</p>
+\oplus \overline{xs}_j(x)\) is an invertible linear function.
+That also forces \(\Delta_0 = 0\).</p>
 
-<p>By hypothesis, \(\mathrm{P}[\Delta_j = 0] \leq 2^{-w}\) and
+<p>By hypothesis, \(\mathrm{P}[\Delta_j = 0] \leq 2^{-w}\), and
 \(\mathrm{P}[\Delta_0 = 0] \leq 2^{-w}\) as well.  These two
 probabilities are independent, so we get a probability that both
-hash collide at mos \(2^{-2w}\) (\(2^{-128}\).</p>
+hash collide less than or equal to \(2^{-2w}\) (\(2^{-128}\)).</p>
 
 <p>In the other case, we have messages that differ in at least two chunks
 \(0 &lt; i &lt; j &lt; n\): \(m_i \neq m^\prime_i\) and \(m_j \neq
@@ -410,10 +409,10 @@ m^\prime_j\).</p>
 
 <p>and</p>
 
-<p>\[ \overline{xs}_i(h_i) \oplus \overline{xs}_j(h_j) = \overline{xs}_i(h^\prime_i) \oplus \overline{xs}_j(h^\prime_j) ^ z, \]</p>
+<p>\[ \overline{xs}_i(h_i) \oplus \overline{xs}_j(h_j) = \overline{xs}_i(h^\prime_i) \oplus \overline{xs}_j(h^\prime_j) \oplus z, \]</p>
 
 <p>for \(y\) and \(z\) generated arbitrarily (adversarially), but
-without knowing the mixers that generated \(h_i, h_j, h^\prime_i,
+without knowledge of the parameters that generated \(h_i, h_j, h^\prime_i,
 h^\prime_j\).</p>
 
 <p>Again, let \(\Delta_i = h_i \oplus h^\prime_i\) and \(\Delta_j = h_j \oplus h^\prime_j\), and reformulate the conditions into</p>
@@ -423,16 +422,19 @@ and
 \[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z. \]</p>
 
 <p>Unfortunately, \(\overline{xs}_i\) isn’t invertible.  However, it is
-<em>almost</em> invertible: modulo \(\overline{xs}_i\)’s null space \(N = \{0, 2^{63}, 2^{127}, 2^{63} \oplus 2^{127} \},\)
-there exists an inverse function \(xs^{-1}_i\) such that \(xs^{-1}_i(\overline{xs}_i(x)) \in x + N\), and that inverse function itself
-is injective.</p>
+<em>almost</em> invertible, by hypothesis:
+modulo \(\overline{xs}_i\)’s small null space \(N\)
+(\(N = \{0, 2^{63}, 2^{127}, 2^{63} \oplus 2^{127} \}\) for our choice of \(\overline{xs}_i\)),
+there exists an inverse function \(xs^{-1}_i\) such that
+\(xs^{-1}_i(\overline{xs}_i(x)) \in x \oplus N\), and that inverse
+function itself is injective.</p>
 
 <p>Concretely, we defined \(\overline{xs}_i\) as carryless
 multiplications by constants with the least significant bit set to 0,
-and the next bit equal to 1.  \(xs^{-1}_i\) is a multiplication by
+and the next bit equal to 1.  The inverse \(xs^{-1}_i\) is a multiplication by
 the multiplicative inverse of \(\overline{xs}_i\)’s constant,
-shifted right by 1 bit (the inverse exists because the shifted
-constant is odd).</p>
+shifted right by 1 bit (the inverse exists because the
+constant is odd once shifted).</p>
 
 <p>With this inverse modulo a null space, we can reformulate</p>
 
@@ -440,20 +442,17 @@ constant is odd).</p>
 
 <p>as</p>
 
-<p>\[ xs^{-1}_i(\overline{xs}_i(\Delta_i)) \oplus xs^{-1}_i(\overline{xs}_j(\Delta_j)) = xs^{-1}(z) \oplus N, \]</p>
+<p>\[ xs^{-1}_i(\overline{xs}_i(\Delta_i)) \oplus xs^{-1}_i(\overline{xs}_j(\Delta_j)) = xs^{-1}(z) \oplus N. \]</p>
 
-<p>which we can simplify by letting the null space \(N\) sum to itself
-(\(N \oplus N = N\) since it’s a subspace):</p>
+<p>We can simplify the above by noting that,
+since the null space \(N\) is a subspace,
+\(N \oplus N = N\):</p>
 
 <p>\[ \Delta_i \oplus xs^{-1}_i(\overline{xs}_j(\Delta_j)) = z^\prime \oplus N, \]</p>
 
 <p>where \(z^\prime\) is another adversarially generated value.</p>
 
-<p>We’ll xor that with</p>
-
-<p>\[ \Delta_i \oplus \Delta_j = y \]</p>
-
-<p>and find</p>
+<p>After xoring that with \( \Delta_i \oplus \Delta_j = y \), we find</p>
 
 <p>\[ \Delta_j \oplus xs^{-1}_i(\overline{xs}_j(\Delta_j)) = y \oplus z \oplus N. \]</p>
 
@@ -468,7 +467,7 @@ constant.  Composing the two yields a carryless multiplication by an
 even constant, and xoring \(x\) in means \(g(x)\) is equivalent to
 a carryless multiplication by an odd constant, and thus invertible.</p>
 
-<p>We thus find that the two hashes can only collide if
+<p>The two hashes can only collide if
 \(\Delta_j \in g^{-1}(y \oplus z \oplus N), \)
 which happens with probability at most \(|N| 2^{-w}\).</p>
 
@@ -481,7 +480,7 @@ probability at most \(2^{-62}\).</p>
 <p>\[ \Delta_i \oplus \Delta_j = y,\]</p>
 
 <p>and so <em>both</em> hashes collide with probability at most \(|N| 2^{-2w}\)
-(\(2^{-126}\)) for UMASH.</p>
+(\(2^{-126}\) for UMASH).</p>
 
 <h2 id="what-does-this-look-like-in-code">What does this look like in code?</h2>
 
@@ -506,7 +505,7 @@ together all 16-bytes chunk in the message, and mix the resulting
 checksum with a fresh <code>PH</code> function.  That’s equivalent to xoring
 everything in a new accumulator (or two accumulators when working with
 256-bit vectors) initialised with the <code>PH</code> parameters, and <code>CLMUL</code>ing
-the two halves together at the end.</p>
+together the accumulator’s two 64-bit halves at the end.</p>
 
 <p>We also have to apply the \(\overline{xs}_i\) quasi-xor-shift
 functions to each \(h_i\).  The trick is to accumulate the shifted
@@ -528,7 +527,8 @@ we have
 \[\bigoplus_{i=1}^{n - 1} \overline{xs}_i(h_i) = (\mathtt{UMASH} \oplus \mathtt{acc}) \mathtt{«} 1.\]</p>
 
 <p>We just have to xor in the <code>PH</code>-mixed checksum \(h_n\), and finally
-\(h_0\) (which is already in GPRs).</p>
+\(h_0\) (which naturally goes in GPRs, so can be computed while we
+extract values out of vector registers).</p>
 
 <p>We added two vector xors and one addition for each chunk in a block,
 and, at the end, one CLMUL plus a couple more xors and adds again.</p>
@@ -536,17 +536,17 @@ and, at the end, one CLMUL plus a couple more xors and adds again.</p>
 <p>This should most definitely be faster than computing two UMASH at the
 same time, which incurred two vector xors and a CLMUL (or full integer
 multiplication) for each chunk: even when CLMUL can pipeline one
-instruction per cycle, vector additions can dispatch to cheaper
+instruction per cycle, vector additions can dispatch to more
 execution units, so the combined throughput is still higher.</p>
 
 <h2 id="one-last-thing-what-if-we-have-blocks-of-different-length">One last thing: what if we have blocks of different length?</h2>
 
-<p>We already know that UMASH is relatively safe when one block is
+<p>It’s easy to show that UMASH is relatively safe when one block is
 shorter than the other, and we simply xor together fewer mixed chunks.
 Without loss of generality, we can assume the longer block has \(n\)
 chunks; that block’s final <code>ENH</code> is independent of the shorter block’s
 UMASH, and any specific value occurs with probability at most
-\(2^{-63}\) (multiplication by zero occurs at that rate).</p>
+\(2^{-63}\) (the probability of a multiplication by zero).</p>
 
 <p>A similar argument seems more complex to defend for the shifted UMASH.</p>
 
@@ -559,11 +559,11 @@ with the <code>PH</code> key, i.e.,</p>
 
 <p>where \(k_i\) are the PH parameters for each chunk.</p>
 
-<p>This is a no-op with respect to collision probabilities, when
-checksumming blocks of the same size.  Implementations might however
-benefit from the ability to use a fused <code>xor</code> with load from memory<sup id="fnref:latency" role="doc-noteref"><a href="#fn:latency" class="footnote">1</a></sup> to
-compute \(m_i \oplus k_i\), and feed that both into the checksum and
-into CLMUL for <code>PH</code>.</p>
+<p>When checksumming blocks of the same size, this is a no-op with respect
+to collision probabilities.  Implementations might however benefit
+from the ability to use a fused <code>xor</code> with load from memory<sup id="fnref:latency" role="doc-noteref"><a href="#fn:latency" class="footnote">1</a></sup>
+to compute \(m_i \oplus k_i\), and feed that both into the checksum
+and into CLMUL for <code>PH</code>.</p>
 
 <p>Unless we’re extremely unlucky (\(m_{n - 1} = k_{n - 1}\), with
 probability \(2^{-2w}\)), the long block’s LRC will differ from the
@@ -573,7 +573,7 @@ probability at most \(2^{-64}\).</p>
 
 <p>With a small tweak to the checksum function, we can easily guarantee
 that blocks with a different number of chunks collide with probability
-at most \(2^{-127}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" class="footnote">2</a></sup></p>
+less than \(2^{-126}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" class="footnote">2</a></sup></p>
 
 <p><small>Thank you Joonas for helping me rubber duck the presentation, and Jim for pointing me in the right direction, and for the fruitful discussion!</small></p>
 
