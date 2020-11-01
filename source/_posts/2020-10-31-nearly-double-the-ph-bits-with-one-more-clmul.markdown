@@ -1,12 +1,12 @@
 ---
 layout: post
 title: "1.5x the PH bits for one more CLMUL"
-date: 2020-10-31 18:30:15 -0400
+date: 2020-10-31 18:30:17 -0400
 comments: true
 categories: 
 ---
 
-<small>Turns out the part where I simply asserted a probability was slightly off 😉. I had to go back to an older proof with weaker bounds, but that's fine, since we still collide way more rarely than \\(2^{-70}\\).</small>
+<small>Turns out the part where I simply asserted a property was slightly off 😉. I had to go back to an older proof with weaker bounds, but that's not catastrophic: we still collide way more rarely than \\(2^{-70}\\).</small>
 
 The core of [UMASH](https://github.com/backtrace-labs/umash) is a
 hybrid [PH](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.105.9929&rep=rep1&type=pdf#page=3)/[(E)NH](https://eprint.iacr.org/2004/319.pdf#page=4)
@@ -85,7 +85,7 @@ the result is simply xored in with the previous chunks' PH values:
 
 This function is annoying to analyse directly, because we end up
 having to manipulate different proofs of almost-universality.  Let's
-abstract this a bit, and reduce the ENH/PH to the bare minimum we need
+abstract things a bit, and reduce the ENH/PH to the bare minimum we need
 to find our collision bounds.
 
 Let's split our message blocks in \\(n\\) (\\(n = 16\\) for
@@ -162,7 +162,7 @@ Wringing more bits out of the same mixers
 -----------------------------------------
 
 We combined strong mixers (each is \\(2^{-w}\\)-almost-universal),
-and only get a \\(2^{-w}\\)-almost-universal output.
+and only got a \\(2^{-w}\\)-almost-universal output.
 It seems like we should be able to do better when two or
 more chunks differ.
 
@@ -203,15 +203,16 @@ with: we only care about collisions in this second hash function if the
 additional checksum chunks are equal, which means that the two messages
 differ in two or more chunks (or they're identical).
 
-For each index \\(0 < i < n\\), we'll fix a *public* linear (with
-xor as the addition) function \\(\overline{xs}_i(x)\\), with two
-properties:
+For each index \\(0 < i < n\\), we'll fix a *public* linear (with xor
+as the addition) function \\(\overline{xs}_i(x)\\).  This family of
+function must have two properties:
 
-1. \\(f(x) = x \oplus \overline{xs}_i(x)\\) is invertible for \\(i > 0\\)
+1. \\(f(x) = x \oplus \overline{xs}_i(x)\\) is invertible for all \\(0 < i < n\\).
 2. For any two distinct \\(0 < i < j < n\\), xoring the two functions
-   together into \\(g(x) = \overline{xs}_i(x) \oplus \overline{xs}_j(x)\\)
-   yields a function with a small null space.  In other words, while
-   \\(g\\) may not be invertible, it must be "pretty close."
+   together into \\(g(x) = \overline{xs}_i(x) \oplus
+   \overline{xs}_j(x)\\) yields a function with a small (low rank)
+   null space.  In other words, while \\(g\\) may not be invertible,
+   it must be "pretty close."
 
 For regularity, we will also define \\(\overline{xs}_0(x) = x\\).
 
@@ -228,7 +229,7 @@ functions as carryless multiplication by distinct "even" constants
 1. Once we xor in \\(x\\), we get a multiplication by an odd constant,
    and that's invertible.
 2. Combining \\(\overline{xs}_i\\) and \\(\overline{xs}_j\\) with xor
-   yields \\(x \mathtt{<<} j\\), or \\((x \mathtt{<<} i) \oplus (x \mathtt{<<} j)\\).  In the worst case, we lose \\(j\\) bits in each 64-bit half,
+   yields either \\(x \mathtt{<<} j\\) or \\((x \mathtt{<<} i) \oplus (x \mathtt{<<} j)\\).  In the worst case, we lose \\(j\\) bits in each 64-bit half,
    and there are thus \\(2^{2j}\\) values in \\(g^{-1}(0)\\).
 
 To recapitulate, we defined the first hash function as
@@ -282,7 +283,7 @@ Taking the xor of the two conditions yields
 
 which is only satisfied for \\(\Delta_j = 0\\), since \\(f(x) = x
 \oplus \overline{xs}_j(x)\\) is an invertible linear function.
-That also forces \\(\Delta_0 = 0\\).
+This also forces \\(\Delta_0 = 0\\).
 
 By hypothesis, \\(\mathrm{P}[\Delta_j = 0] \leq 2^{-w}\\), and
 \\(\mathrm{P}[\Delta_0 = 0] \leq 2^{-w}\\) as well.  These two
@@ -315,9 +316,8 @@ Let's apply the linear function \\(\overline{xs}_i\\) to the first
 condition; since \\(\overline{xs}_i\\) isn't invertible, the result
 isn't equivalent, but is a necessary weaker version.
 
-\\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_i(\Delta_j) = y^\prime, \\]
+\\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_i(\Delta_j) = \overline{xs}_i(y). \\]
 
-where \\(y^\prime\\) is some adversarially generated constant.
 
 After xoring that with the second condition
 
@@ -325,16 +325,17 @@ After xoring that with the second condition
 
 we find
 
-\\[ \overline{xs}_i(\Delta_j) \oplus \overline{xs}_j(\Delta_j) = y^\prime \oplus z. \\]
+\\[ \overline{xs}_i(\Delta_j) \oplus \overline{xs}_j(\Delta_j) = \overline{xs}_i(y) \oplus z. \\]
 
 By hypothesis, the null space of \\(\overline{xs}_i \oplus \overline{xs}_j\\)
 is "small."  For our concrete definition of \\(\overline{xs}\\), there
 are \\(2^{2j}\\) values in that null space, which means that \\(\Delta_j\\)
-can only satisfy the condition by taking one of at most \\(2^{2j}\\) values;
-otherwise, the two hashes definitely can't both collide.
+can only satisfy the combined xored condition by taking one of at most
+\\(2^{2j}\\) values; otherwise, the two hashes definitely can't both
+collide.
 
 Since \\(j < n\\), this happens with probability at most \\(2^{2(n -
-1) - w}\\), or \\(2^{-34}\\) since we let \\(w = 64\\) and \\(n =
+1) - w} \leq 2^{-34}\\) since we let \\(w = 64\\) and \\(n =
 16\\).
 
 Finally, for any given \\(\Delta_j\\), there is at most one
@@ -343,18 +344,18 @@ Finally, for any given \\(\Delta_j\\), there is at most one
 \\[ \Delta_i \oplus \Delta_j = y,\\]
 
 and so *both* hashes collide with probability at most \\(2^{-98}\\),
-with \\(w = 64\\).
+with \\(w = 64\\) and \\(n = 16\\).
 
 Astute readers will notice that we could let
 \\(\overline{xs}_i(x) = x \mathtt{<<} i\\),
 and find the same combined collision probability.
 However, this results in a much weaker secondary hash, since a chunk
 could lose up to \\(2n - 2\\) bits (\\(n - 1\\) in each 64-bit half)
-of hash information in that shift.
+of hash information in a plain shift.
 
 The shifted xor-shifts might be a bit slower to compute, but
 guarantees that we only lose at most 2 bits of information per chunk.
-This feels like a safer interface that's harder to misuse.
+This feels like an interface that's harder to misuse.
 
 What does this look like in code?
 ---------------------------------
