@@ -1,10 +1,12 @@
 ---
 layout: post
 title: "1.5x the PH bits for one more CLMUL"
-date: 2020-10-31 18:30:11 -0400
+date: 2020-10-31 18:30:15 -0400
 comments: true
 categories: 
 ---
+
+<small>Turns out the part where I simply asserted a probability was slightly off 😉. I had to go back to an older proof with weaker bounds, but that's fine, since we still collide way more rarely than \\(2^{-70}\\).</small>
 
 The core of [UMASH](https://github.com/backtrace-labs/umash) is a
 hybrid [PH](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.105.9929&rep=rep1&type=pdf#page=3)/[(E)NH](https://eprint.iacr.org/2004/319.pdf#page=4)
@@ -44,7 +46,7 @@ when we only need \\(2^{-70}\\)) in order to make do with faster operations.
 Turns out he was right! We can use carryless multiplications by sparse
 constants (concretely, xor-shift and one more shift) without any
 reducing polynomial, *on independent 64-bit halves*... and still
-collide with probability at most <s>2^{-126}</s> \\(2^{-96}\\).
+collide with probability at most <s>2^{-126}</s> \\(2^{-98}\\).
 
 The proof is fairly simple, but relies on a bit of notation for clarity.
 Let's start by re-stating UMASH's hybrid PH/ENH block compressor in
@@ -202,15 +204,14 @@ additional checksum chunks are equal, which means that the two messages
 differ in two or more chunks (or they're identical).
 
 For each index \\(0 < i < n\\), we'll fix a *public* linear (with
-xor as the addition) function \\(\overline{xs}_i(x)\\), with three
+xor as the addition) function \\(\overline{xs}_i(x)\\), with two
 properties:
 
 1. \\(f(x) = x \oplus \overline{xs}_i(x)\\) is invertible for \\(i > 0\\)
-2. \\(\overline{xs}_i \neq \overline{xs}_j,\quad \forall i \neq j\\)
-3. \\(\overline{xs}_i\\) is *almost* invertible: it has a small
-   (low rank) null space.
-4. we seem to need one more property satisfied by \\(\overline{xs}_i\\),
-   but I'm not sure what a minimal condition looks like.
+2. For any two distinct \\(0 < i < j < n\\), xoring the two functions
+   together into \\(g(x) = \overline{xs}_i(x) \oplus \overline{xs}_j(x)\\)
+   yields a function with a small null space.  In other words, while
+   \\(g\\) may not be invertible, it must be "pretty close."
 
 For regularity, we will also define \\(\overline{xs}_0(x) = x\\).
 
@@ -218,22 +219,17 @@ Concretely, let \\(\overline{xs}_1(x) = x \mathtt{<<} 1\\), where the
 bitshift is computed for the two 64-bit halves independently, and
 \\(\overline{xs}_i(x) = (x  \mathtt{<<} 1) \oplus (x \mathtt{<<} i)\\)
 for \\(i > 1\\), again with all the bitshifts computed independently
-over the two 64-bit halves.[^better-as-a-rotation]
-
-[^better-as-a-rotation]: I'm pretty sure the analysis would go more smoothly if I were o cast this as masking away the top bits (a lossy projection), followed by a rotation left and a carryless multiplication by an odd constant.
+over the two 64-bit halves.
 
 To see that these satisfy our requirements, we can represent the
 functions as carryless multiplication by distinct "even" constants
 (the least significant bit is 0) on each 64-bit half:
 
-1. once we xor in \\(x\\), we get a multiplication by an odd constant,
+1. Once we xor in \\(x\\), we get a multiplication by an odd constant,
    and that's invertible.
-2. the constants are different for each \\(i\\), so the functions are
-   different.
-3. while the least significant bit 0, the second least significant bit
-   is always 1, so we only lose one bit of information per 64-bit half
-   when we try to "invert" the multiplications.  The null space contains
-   four points for each \\(\overline{xs}\\).
+2. Combining \\(\overline{xs}_i\\) and \\(\overline{xs}_j\\) with xor
+   yields \\(x \mathtt{<<} j\\), or \\((x \mathtt{<<} i) \oplus (x \mathtt{<<} j)\\).  In the worst case, we lose \\(j\\) bits in each 64-bit half,
+   and there are thus \\(2^{2j}\\) values in \\(g^{-1}(0)\\).
 
 To recapitulate, we defined the first hash function as
 
@@ -315,79 +311,50 @@ Again, let \\(\Delta_i = h_i \oplus h^\prime_i\\) and \\(\Delta_j = h_j \oplus h
 and
 \\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z. \\]
 
-Unfortunately, \\(\overline{xs}_i\\) isn't invertible.  However, it is
-*almost* invertible, by hypothesis:
-modulo \\(\overline{xs}_i\\)'s small null space \\(N\\)
-(\\(N = \\{0, 2^{63}, 2^{127}, 2^{63} \oplus 2^{127} \\}\\) for our choice of \\(\overline{xs}_i\\)),
-there exists an inverse function \\(xs^{-1}_i\\) such that
-\\(xs^{-1}_i(\overline{xs}_i(x)) \in x \oplus N\\).
+Let's apply the linear function \\(\overline{xs}_i\\) to the first
+condition; since \\(\overline{xs}_i\\) isn't invertible, the result
+isn't equivalent, but is a necessary weaker version.
 
-Concretely, we defined \\(\overline{xs}_i\\) as an invertible
-xor-shift (carryless multiplication by an odd constant), followed by a
-shift left by one bit.  We can construct an inverse modulo \\(N\\):
-undo the left shift with a shift right by one bit, and undo the
-xor-shift's multiplication by a constant with a carryless
-multiplication by its inverse (which must exist, since the xor-shift's
-constant is odd).
+\\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_i(\Delta_j) = y^\prime, \\]
 
-With this inverse modulo a null space, we can reformulate
+where \\(y^\prime\\) is some adversarially generated constant.
 
-\\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z \\]
+After xoring that with the second condition
 
-as
+\\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z, \\]
 
-\\[ xs^{-1}_i(\overline{xs}_i(\Delta_i)) \oplus xs^{-1}_i(\overline{xs}_j(\Delta_j)) = xs^{-1}(z) \oplus N. \\]
+we find
 
-We can simplify the above by noting that,
-since the null space \\(N\\) is a subspace,
-\\(N \oplus N = N\\):
+\\[ \overline{xs}_i(\Delta_j) \oplus \overline{xs}_j(\Delta_j) = y^\prime \oplus z. \\]
 
-\\[ \Delta_i \oplus xs^{-1}_i(\overline{xs}_j(\Delta_j)) = z^\prime \oplus N, \\]
+By hypothesis, the null space of \\(\overline{xs}_i \oplus \overline{xs}_j\\)
+is "small."  For our concrete definition of \\(\overline{xs}\\), there
+are \\(2^{2j}\\) values in that null space, which means that \\(\Delta_j\\)
+can only satisfy the condition by taking one of at most \\(2^{2j}\\) values;
+otherwise, the two hashes definitely can't both collide.
 
-where \\(z^\prime\\) is another adversarially generated value.
-
-After xoring that with \\( \Delta_i \oplus \Delta_j = y \\), we find
-
-\\[ \Delta_j \oplus xs^{-1}_i(\overline{xs}_j(\Delta_j)) = y \oplus z \oplus N. \\]
-
-I'm not sure how to bound how far from invertible the function
-\\(g(x) = x \oplus xs^{-1}_i(\overline{xs}_j(x))\\) is, in the general
-case.
-
-For our concrete choice of \\(\overline{xs}\\), we can apply
-\\(\overline{xs}_i\\) to every term in this equaliy.
-
-\\[ \overline{xs}_i(\Delta_j) \oplus \overline{xs}_j(\Delta_j) = y^\prime \oplus N, \\]
-
-where \\(y^\prime\\) is an adversarially generated constant.
-
-If \\(i = 1\\), \\( \overline{xs}_i(\Delta_j) \oplus \overline{xs}_j(\Delta_j) = \Delta_j \texttt{<<} j \\).  Otherwise,  \\( \overline{xs}_i(\Delta_j) \oplus \overline{xs}_j(\Delta_j) = (\Delta_j \texttt{<<} i) \oplus (\Delta_j \texttt{<<} j) \\).  In both cases we lose at most \\(j\\) bits of data
-in each 64-bit half.
-
-Combine that with the 1 bit per half in \\(N\\) (\\(\|N\| = 4\\), so 2
-bits total), and we find that at most \\(2^{2(j + 1)}\\) values of
-\\(\Delta_j\\) can satisfy this necessary condition for the two hashes
-to collide.  Since \\(j < n\\), this happens with probability at most
-\\(2^{2n - w}\\), or \\(2^{-32}\\) since we let \\(w = 64\\) and \\(n = 16\\).
+Since \\(j < n\\), this happens with probability at most \\(2^{2(n -
+1) - w}\\), or \\(2^{-34}\\) since we let \\(w = 64\\) and \\(n =
+16\\).
 
 Finally, for any given \\(\Delta_j\\), there is at most one
 \\(\Delta_i\\) that satisfies
 
 \\[ \Delta_i \oplus \Delta_j = y,\\]
 
-and so *both* hashes collide with probability at most \\(2^[-96}\\),
+and so *both* hashes collide with probability at most \\(2^{-98}\\),
 with \\(w = 64\\).
 
-Astute readers will notice that we could bring that to \\(2^{-98}\\)
-if we let \\(\overline{xs}_i(x) = x \texttt{<<} i\\).  However, this
-result in a much weaker secondary hash, since a chunk could lose up to
-\\(2n - 2\\) bits (\\(n - 1\\) in each 64-bit half) of hash
-information in that shift.
+Astute readers will notice that we could let
+\\(\overline{xs}_i(x) = x \mathtt{<<} i\\),
+and find the same combined collision probability.
+However, this results in a much weaker secondary hash, since a chunk
+could lose up to \\(2n - 2\\) bits (\\(n - 1\\) in each 64-bit half)
+of hash information in that shift.
 
-The shifted xor-shifts correlates slightly more with the first (plain
-UMASH) hash, but guarantees that we only lose at most 2 bits of
-information per chunk.  This feels like a safer interface that's
-harder to misuse.
+The shifted xor-shifts might be a bit slower to compute, but
+guarantees that we only lose at most 2 bits of information per chunk.
+This feels like a safer interface that's harder to misuse.
 
 What does this look like in code?
 ---------------------------------
