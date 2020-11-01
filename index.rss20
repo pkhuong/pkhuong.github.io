@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-10-31T20:23:06-04:00</updated>
+  <updated>2020-10-31T20:26:36-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -16,7 +16,7 @@
   <entry>
     <title type="html"><![CDATA[Nearly double the PH bits for one more CLMUL]]></title>
     <link href="https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/"/>
-    <updated>2020-10-31T18:30:10-04:00</updated>
+    <updated>2020-10-31T18:30:11-04:00</updated>
     <id>https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul</id>
     <content type="html"><![CDATA[<p>The core of <a href="https://github.com/backtrace-labs/umash">UMASH</a> is a
 hybrid <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.105.9929&amp;rep=rep1&amp;type=pdf#page=3">PH</a>/<a href="https://eprint.iacr.org/2004/319.pdf#page=4">(E)NH</a>
@@ -54,7 +54,7 @@ for fingerprinting (\(2^{-128}\) collision probability is overkill
 when we only need \(2^{-70}\)) in order to make do with faster operations.</p>
 
 <p>Turns out he was right! We can use carryless multiplications by sparse
-constants (i.e., concretely, xor-shift and one more shift) without any
+constants (concretely, xor-shift and one more shift) without any
 reducing polynomial, <em>on independent 64-bit halves</em>… and still
 collide with probability at most \(2^{-126}\).</p>
 
@@ -136,7 +136,7 @@ H \oplus H^\prime = 0,\) assuming that the messages differ
 (i.e., there is at least one index \(i\) such that
 \(m_i \neq m^\prime_i\)).</p>
 
-<p>If the two messages only differ in \(m_0 \neq n^\prime_0\) (i.e.,
+<p>If the two messages only differ in \(m_0 \neq n^\prime_0\) (and thus
 \(m_i = m^\prime_i,\,\forall i \in [1, n)\)),</p>
 
 <p>\[ \bigoplus_{i = 1}^{n - 1} h_i = \bigoplus_{i = 1}^{n - 1} h^\prime_i, \]</p>
@@ -269,7 +269,7 @@ when the checksum chunks differ, i.e., when \(m_n \neq m^\prime_n\).</p>
 <p>Let’s now focus on the case when \(m \neq m^\prime\), but \(m_n =
 m^\prime_n\).
 In that case, we know that at least two chunks \(0 \leq i &lt; j &lt; n\)
-differ, i.e., \(m_i \neq m^\prime_i\) and \(m_j \neq m^\prime_j\).</p>
+differ: \(m_i \neq m^\prime_i\) and \(m_j \neq m^\prime_j\).</p>
 
 <p>If only two chunks \(i\) and \(j\) differ, and one of them is the
 \(i = 0\)th chunk, we want to bound the probability that</p>
