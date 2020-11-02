@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-11-01T09:11:34-05:00</updated>
+  <updated>2020-11-01T19:48:43-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -16,7 +16,7 @@
   <entry>
     <title type="html"><![CDATA[1.5x the PH bits for one more CLMUL]]></title>
     <link href="https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/"/>
-    <updated>2020-10-31T18:30:17-04:00</updated>
+    <updated>2020-10-31T18:30:18-04:00</updated>
     <id>https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul</id>
     <content type="html"><![CDATA[<p><small>Turns out the part where I simply asserted a property was slightly off 😉. I had to go back to an older proof with weaker bounds, but that’s not catastrophic: we still collide way more rarely than \(2^{-70}\).</small></p>
 
@@ -368,6 +368,16 @@ of hash information in a plain shift.</p>
 <p>The shifted xor-shifts might be a bit slower to compute, but
 guarantees that we only lose at most 2 bits of information per chunk.
 This feels like an interface that’s harder to misuse.</p>
+
+<p>If one were to change the \(\overline{xs}_i\) family of functions, I
+think it would make more sense to look at a more diverse form of
+(still sparse) multipliers, which would likely let us preserve a
+couple more bits of independence.  Jim has constructed such a family
+of multipliers, in arithmetic modulo \(2^{64}\); I’m sure we could
+find something similar in carryless multiplication.  The hard part is
+implementing these multipliers: in order to exploit the multipliers’
+sparsity, we’d probably have to fully unroll the block hashing loop,
+and that’s not something I like to force on implementations.</p>
 
 <h2 id="what-does-this-look-like-in-code">What does this look like in code?</h2>
 

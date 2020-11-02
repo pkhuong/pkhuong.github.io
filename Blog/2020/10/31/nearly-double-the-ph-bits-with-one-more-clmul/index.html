@@ -466,6 +466,16 @@ of hash information in a plain shift.</p>
 guarantees that we only lose at most 2 bits of information per chunk.
 This feels like an interface that’s harder to misuse.</p>
 
+<p>If one were to change the \(\overline{xs}_i\) family of functions, I
+think it would make more sense to look at a more diverse form of
+(still sparse) multipliers, which would likely let us preserve a
+couple more bits of independence.  Jim has constructed such a family
+of multipliers, in arithmetic modulo \(2^{64}\); I’m sure we could
+find something similar in carryless multiplication.  The hard part is
+implementing these multipliers: in order to exploit the multipliers’
+sparsity, we’d probably have to fully unroll the block hashing loop,
+and that’s not something I like to force on implementations.</p>
+
 <h2 id="what-does-this-look-like-in-code">What does this look like in code?</h2>
 
 <p>The base <a href="https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L336">UMASH block compressor</a>
