@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "1.5x the PH bits for one more CLMUL"
-date: 2020-10-31 18:30:17 -0400
+date: 2020-10-31 18:30:19 -0400
 comments: true
 categories: 
 ---
@@ -14,7 +14,7 @@ block compression function.
 That function is fast
 (it needs one multiplication for each 16-byte "chunk" in a block),
 but relatively weak:
-even with a 128-bit output, the worst-case probability of collision is
+despite a 128-bit output, the worst-case probability of collision is
 \\(2^{-64}\\).
 
 For a [fingerprinting](https://en.wikipedia.org/wiki/Fingerprint_(computing))
@@ -56,7 +56,7 @@ How does UMASH currently work?
 ------------------------------
 
 The current block compressor in UMASH splits a 256-byte block \\(m\\)
-in 16 chunks \\(m_i\, i\in [0, 15]\\) of 128 bits each, and processes
+in 16 chunks \\(m_i,\, i\in [0, 15]\\) of 128 bits each, and processes
 all but the last chunk with a PH loop,
 
 \\[ \bigoplus_{i=0}^{14} \mathtt{PH}(k_i, m_i), \\]
@@ -68,7 +68,7 @@ where
 and each \\(k_i\\) is a randomly generated 128-bit parameter.
 
 The compression loop in UMASH handles the last chunk, along with a
-size tag (to protect against extension attacks) with
+size tag (to protect against extension attacks), with
 [ENH](https://eprint.iacr.org/2004/319.pdf#page=4):
 
 \\[ \mathtt{ENH}(k, x, y) = ((k + x) \bmod 2^{64}) \cdot (\lfloor k / 2^{64}\rfloor + \lfloor x / 2^{64} \rfloor \bmod 2^{64}) + y \mod 2^{128}. \\]
@@ -104,12 +104,12 @@ Otherwise, \\(m_0 = m^\prime_0 \Rightarrow h_i = h^\prime_i\\).
 
 This first chunks stands for the ENH iteration in UMASH.
 
-Every other chunk will instead be mixed with a
+Every remaining chunk will instead be mixed with a
 \\(2^{-w}\\)-XOR-almost-universal hash function:
 if \\(m_i \neq m^\prime_i\\) (\\(0 < i < n\\)),
 \\(\mathrm{P}[h_i \oplus h^\prime_i = y] \leq 2^{-w}\\)
 for any \\(y,\\)
-where the probability is taken over the randomly chosen
+where the probability is taken over the randomly generated
 parameter for the mixer.
 
 This stronger condition represents the PH iterations in UMASH.
@@ -140,7 +140,7 @@ at most \\(2^{-w}\\).
 
 Otherwise, assume that \\(m_j \neq m^\prime_j\\), for some \\(j \in
 [1, n)\\).
-We can rearrange the expression
+We will rearrange the expression
 
 \\[ H \oplus H^\prime = h_j \oplus h^\prime_j \oplus \left(\bigoplus_{i\in [0, n) \setminus \\{ j \\}} h_i \oplus h^\prime_i\right). \\]
 
@@ -195,8 +195,9 @@ single (initial) chunk, mixing a [LRC checksum](https://en.wikipedia.org/wiki/Lo
 gives us an independent hash function, which
 squares the collision probability to \\(2^{-2w}\\).
 
-Now to the interesting bit: we must define a second hash function for
-chunks 0 to \\(n - 1\\) such that its hash values \\(H_2\\) and \\(H^\prime_2\\) collide
+Now to the interesting bit: we must define a second hash function
+that combines \\(h_0,h_1,\ldots, h_{n - 1}\\) and \\(h^\prime_0, h^\prime_1, \ldots, h^\prime_{n - 1}\\)
+such that the resulting hash values \\(H_2\\) and \\(H^\prime_2\\) collide
 independently enough of \\(H\\) and \\(H^\prime\\).
 That's a tall order, but we do have one additional assumption to work
 with: we only care about collisions in this second hash function if the
@@ -250,7 +251,7 @@ and
 
 
 We can finally get down to business and find some collision bounds.
-We've already shown that both \\(H = H^\prime\\) *and* \\(H_2 \oplus_n =
+We've already shown that both \\(H = H^\prime\\) *and* \\(H_2 \oplus h_n =
 H^\prime_2 \oplus h^\prime_n\\) collide simultaneously with probability at most \\(2^{-2w}\\)
 when the checksum chunks differ, i.e., when \\(m_n \neq m^\prime_n\\).
 
@@ -313,11 +314,13 @@ and
 \\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z. \\]
 
 Let's apply the linear function \\(\overline{xs}_i\\) to the first
-condition; since \\(\overline{xs}_i\\) isn't invertible, the result
-isn't equivalent, but is a necessary weaker version.
+condition
 
-\\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_i(\Delta_j) = \overline{xs}_i(y). \\]
+\\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_i(\Delta_j) = \overline{xs}_i(y); \\]
 
+since \\(\overline{xs}_i\\) isn't invertible, the result
+isn't equivalent, but is a weaker (necessary, not sufficient)
+version of the initial condiion.
 
 After xoring that with the second condition
 
@@ -327,15 +330,17 @@ we find
 
 \\[ \overline{xs}_i(\Delta_j) \oplus \overline{xs}_j(\Delta_j) = \overline{xs}_i(y) \oplus z. \\]
 
-By hypothesis, the null space of \\(\overline{xs}_i \oplus \overline{xs}_j\\)
-is "small."  For our concrete definition of \\(\overline{xs}\\), there
+By hypothesis, the null space of
+\\(g(x) = \overline{xs}_i(x) \oplus \overline{xs}_j(x)\\)
+is "small."
+For our concrete definition of \\(\overline{xs}\\), there
 are \\(2^{2j}\\) values in that null space, which means that \\(\Delta_j\\)
 can only satisfy the combined xored condition by taking one of at most
 \\(2^{2j}\\) values; otherwise, the two hashes definitely can't both
 collide.
 
 Since \\(j < n\\), this happens with probability at most \\(2^{2(n -
-1) - w} \leq 2^{-34}\\) since we let \\(w = 64\\) and \\(n =
+1) - w} \leq 2^{-34}\\) since UMASH has \\(w = 64\\) and \\(n =
 16\\).
 
 Finally, for any given \\(\Delta_j\\), there is at most one
@@ -357,16 +362,27 @@ The shifted xor-shifts might be a bit slower to compute, but
 guarantees that we only lose at most 2 bits of information per chunk.
 This feels like an interface that's harder to misuse.
 
+If one were to change the \\(\overline{xs}_i\\) family of functions, I
+think it would make more sense to look at a more diverse form of
+(still sparse) multipliers, which would likely let us preserve a
+couple more bits of independence.  Jim has constructed such a family
+of multipliers, in arithmetic modulo \\(2^{64}\\); I'm sure we could
+find something similar in carryless multiplication.  The hard part is
+implementing these multipliers: in order to exploit the multipliers'
+sparsity, we'd probably have to fully unroll the block hashing loop,
+and that's not something I like to force on implementations.
+
 What does this look like in code?
 ---------------------------------
 
 The base [UMASH block compressor](https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L336)
 mixes all but the last of the message block's 16-byte chunks with
-`PH`: xor the chunk with the corresponding bytes in the parameter
+PH: xor the chunk with the corresponding bytes in the parameter
 array, computes a carryless multiplication of the xored chunks' half
-with the other half.  The last chunk goes through [ENH](https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L358),
-a little bit of mixing to improve the hash's distribution (remember,
-we only rely on \\(\varepsilon\\)-almost-universality),
+with the other half.  The last chunk goes through a variant of
+[ENH](https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L358)
+with an invertible finaliser (safe because we only rely on
+\\(\varepsilon\\)-almost-universality),
 and everything is xored in the accumulator.
 
 The collision proofs above preserved the same structure for the first hash.
@@ -378,9 +394,9 @@ the same time.
 
 The first change for this combined loop is that we need to xor
 together all 16-bytes chunk in the message, and mix the resulting
-checksum with a fresh `PH` function.  That's equivalent to xoring
+checksum with a fresh PH function.  That's equivalent to xoring
 everything in a new accumulator (or two accumulators when working with
-256-bit vectors) initialised with the `PH` parameters, and `CLMUL`ing
+256-bit vectors) initialised with the PH parameters, and `CLMUL`ing
 together the accumulator's two 64-bit halves at the end.
 
 We also have to apply the \\(\overline{xs}_i\\) quasi-xor-shift
@@ -393,9 +409,9 @@ where the left shift on parallel 64-bit halves simply adds `acc`
 to itself.
 
 This additional shifted accumulator includes another special case to
-skip the one \\(\overline{xs}_1(x) = x \mathtt{<<} 1\\); that's not a
+skip \\(\overline{xs}_1(x) = x \mathtt{<<} 1\\); that's not a
 big deal for the code, since we already have to special case the last
-iteration for the `ENH` mixer.
+iteration for the ENH mixer.
 
 Armed with \\(\mathtt{UMASH} = \bigoplus_{i=1}^{n - 1} h_i\\) and
 \\(\mathtt{acc} = \bigoplus_{i=2}^{n - 1} h_i \mathtt{<<} (i - 1),\\)
@@ -407,12 +423,12 @@ We just have to xor in the `PH`-mixed checksum \\(h_n\\), and finally
 extract values out of vector registers).
 
 We added two vector xors and one addition for each chunk in a block,
-and, at the end, one CLMUL plus a couple more xors and adds again.
+and, at the end, one `CLMUL` plus a couple more xors and adds again.
 
 This should most definitely be faster than computing two UMASH at the
-same time, which incurred two vector xors and a CLMUL (or full integer
-multiplication) for each chunk: even when CLMUL can pipeline one
-instruction per cycle, vector additions can dispatch to more
+same time, which incurred two vector xors and a `CLMUL` (or full
+integer multiplication) for each chunk: even when `CLMUL` can pipeline
+one instruction per cycle, vector additions can dispatch to more
 execution units, so the combined throughput is still higher.
 
 One last thing: what if we have blocks of different length?
@@ -421,7 +437,7 @@ One last thing: what if we have blocks of different length?
 It's easy to show that UMASH is relatively safe when one block is
 shorter than the other, and we simply xor together fewer mixed chunks.
 Without loss of generality, we can assume the longer block has \\(n\\)
-chunks; that block's final `ENH` is independent of the shorter block's
+chunks; that block's final ENH is independent of the shorter block's
 UMASH, and any specific value occurs with probability at most
 \\(2^{-63}\\) (the probability of a multiplication by zero).
 
@@ -430,7 +446,7 @@ A similar argument seems more complex to defend for the shifted UMASH.
 Luckily, we can tweak the [LRC checksum](https://en.wikipedia.org/wiki/Longitudinal_redundancy_check)
 we use to generate an additional chunk in the block: rather than xoring
 together the raw message chunks, we'll xor them *after* xoring them
-with the `PH` key, i.e.,
+with the PH key, i.e.,
 
 \\[m_n = \bigoplus_{i=0}^{n - 1} m_i \oplus k_i, \\]
 
@@ -440,13 +456,13 @@ When checksumming blocks of the same size, this is a no-op with respect
 to collision probabilities.  Implementations might however benefit
 from the ability to use a fused `xor` with load from memory[^latency]
 to compute \\(m_i \oplus k_i\\), and feed that both into the checksum
-and into CLMUL for `PH`.
+and into `CLMUL` for PH.
 
 [^latency]: This might also come with a small latency hit, which is unfortunate since PH-ing \\(m_n\\) is likely to be on the critical path... but one cycle doesn't seem that bad.
 
 Unless we're extremely unlucky (\\(m_{n - 1} = k_{n - 1}\\), with
 probability \\(2^{-2w}\\)), the long block's LRC will differ from the
-shorter block's.  As long as we always xor in the same `PH` parameters
+shorter block's.  As long as we always xor in the same PH parameters
 when mixing the artificial LRC, the secondary hashes collide with
 probability at most \\(2^{-64}\\).
 
