@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2020-11-01T19:48:43-05:00</updated>
+  <updated>2020-11-03T07:54:13-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -16,7 +16,7 @@
   <entry>
     <title type="html"><![CDATA[1.5x the PH bits for one more CLMUL]]></title>
     <link href="https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/"/>
-    <updated>2020-10-31T18:30:18-04:00</updated>
+    <updated>2020-10-31T18:30:19-04:00</updated>
     <id>https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul</id>
     <content type="html"><![CDATA[<p><small>Turns out the part where I simply asserted a property was slightly off 😉. I had to go back to an older proof with weaker bounds, but that’s not catastrophic: we still collide way more rarely than \(2^{-70}\).</small></p>
 
@@ -26,7 +26,7 @@ block compression function.
 That function is fast
 (it needs one multiplication for each 16-byte “chunk” in a block),
 but relatively weak:
-even with a 128-bit output, the worst-case probability of collision is
+despite a 128-bit output, the worst-case probability of collision is
 \(2^{-64}\).</p>
 
 <p>For a <a href="https://en.wikipedia.org/wiki/Fingerprint_(computing)">fingerprinting</a>
@@ -67,7 +67,7 @@ that notation.</p>
 <h2 id="how-does-umash-currently-work">How does UMASH currently work?</h2>
 
 <p>The current block compressor in UMASH splits a 256-byte block \(m\)
-in 16 chunks \(m_i\, i\in [0, 15]\) of 128 bits each, and processes
+in 16 chunks \(m_i,\, i\in [0, 15]\) of 128 bits each, and processes
 all but the last chunk with a PH loop,</p>
 
 <p>\[ \bigoplus_{i=0}^{14} \mathtt{PH}(k_i, m_i), \]</p>
@@ -79,7 +79,7 @@ all but the last chunk with a PH loop,</p>
 <p>and each \(k_i\) is a randomly generated 128-bit parameter.</p>
 
 <p>The compression loop in UMASH handles the last chunk, along with a
-size tag (to protect against extension attacks) with
+size tag (to protect against extension attacks), with
 <a href="https://eprint.iacr.org/2004/319.pdf#page=4">ENH</a>:</p>
 
 <p>\[ \mathtt{ENH}(k, x, y) = ((k + x) \bmod 2^{64}) \cdot (\lfloor k / 2^{64}\rfloor + \lfloor x / 2^{64} \rfloor \bmod 2^{64}) + y \mod 2^{128}. \]</p>
@@ -115,12 +115,12 @@ Otherwise, \(m_0 = m^\prime_0 \Rightarrow h_i = h^\prime_i\).</p>
 
 <p>This first chunks stands for the ENH iteration in UMASH.</p>
 
-<p>Every other chunk will instead be mixed with a
+<p>Every remaining chunk will instead be mixed with a
 \(2^{-w}\)-XOR-almost-universal hash function:
 if \(m_i \neq m^\prime_i\) (\(0 &lt; i &lt; n\)),
 \(\mathrm{P}[h_i \oplus h^\prime_i = y] \leq 2^{-w}\)
 for any \(y,\)
-where the probability is taken over the randomly chosen
+where the probability is taken over the randomly generated
 parameter for the mixer.</p>
 
 <p>This stronger condition represents the PH iterations in UMASH.</p>
@@ -151,7 +151,7 @@ at most \(2^{-w}\).</p>
 
 <p>Otherwise, assume that \(m_j \neq m^\prime_j\), for some \(j \in
 [1, n)\).
-We can rearrange the expression</p>
+We will rearrange the expression</p>
 
 <p>\[ H \oplus H^\prime = h_j \oplus h^\prime_j \oplus \left(\bigoplus_{i\in [0, n) \setminus \{ j \}} h_i \oplus h^\prime_i\right). \]</p>
 
@@ -205,8 +205,9 @@ single (initial) chunk, mixing a <a href="https://en.wikipedia.org/wiki/Longitud
 gives us an independent hash function, which
 squares the collision probability to \(2^{-2w}\).</p>
 
-<p>Now to the interesting bit: we must define a second hash function for
-chunks 0 to \(n - 1\) such that its hash values \(H_2\) and \(H^\prime_2\) collide
+<p>Now to the interesting bit: we must define a second hash function
+that combines \(h_0,h_1,\ldots, h_{n - 1}\) and \(h^\prime_0, h^\prime_1, \ldots, h^\prime_{n - 1}\)
+such that the resulting hash values \(H_2\) and \(H^\prime_2\) collide
 independently enough of \(H\) and \(H^\prime\).
 That’s a tall order, but we do have one additional assumption to work
 with: we only care about collisions in this second hash function if the
@@ -263,7 +264,7 @@ the message block \(m\), and similarly for \(H^\prime\) and
 <p>\[ H^\prime_2 \oplus h^\prime_n = \left(\bigoplus_{i = 0}^{n - 1} \overline{xs}_i(h^\prime_i)\right) \oplus h^\prime_n. \]</p>
 
 <p>We can finally get down to business and find some collision bounds.
-We’ve already shown that both \(H = H^\prime\) <em>and</em> \(H_2 \oplus_n =
+We’ve already shown that both \(H = H^\prime\) <em>and</em> \(H_2 \oplus h_n =
 H^\prime_2 \oplus h^\prime_n\) collide simultaneously with probability at most \(2^{-2w}\)
 when the checksum chunks differ, i.e., when \(m_n \neq m^\prime_n\).</p>
 
@@ -326,10 +327,13 @@ and
 \[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z. \]</p>
 
 <p>Let’s apply the linear function \(\overline{xs}_i\) to the first
-condition; since \(\overline{xs}_i\) isn’t invertible, the result
-isn’t equivalent, but is a necessary weaker version.</p>
+condition</p>
 
-<p>\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_i(\Delta_j) = \overline{xs}_i(y). \]</p>
+<p>\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_i(\Delta_j) = \overline{xs}_i(y); \]</p>
+
+<p>since \(\overline{xs}_i\) isn’t invertible, the result
+isn’t equivalent, but is a weaker (necessary, not sufficient)
+version of the initial condiion.</p>
 
 <p>After xoring that with the second condition</p>
 
@@ -339,15 +343,17 @@ isn’t equivalent, but is a necessary weaker version.</p>
 
 <p>\[ \overline{xs}_i(\Delta_j) \oplus \overline{xs}_j(\Delta_j) = \overline{xs}_i(y) \oplus z. \]</p>
 
-<p>By hypothesis, the null space of \(\overline{xs}_i \oplus \overline{xs}_j\)
-is “small.”  For our concrete definition of \(\overline{xs}\), there
+<p>By hypothesis, the null space of
+\(g(x) = \overline{xs}_i(x) \oplus \overline{xs}_j(x)\)
+is “small.”
+For our concrete definition of \(\overline{xs}\), there
 are \(2^{2j}\) values in that null space, which means that \(\Delta_j\)
 can only satisfy the combined xored condition by taking one of at most
 \(2^{2j}\) values; otherwise, the two hashes definitely can’t both
 collide.</p>
 
 <p>Since \(j &lt; n\), this happens with probability at most \(2^{2(n -
-1) - w} \leq 2^{-34}\) since we let \(w = 64\) and \(n =
+1) - w} \leq 2^{-34}\) since UMASH has \(w = 64\) and \(n =
 16\).</p>
 
 <p>Finally, for any given \(\Delta_j\), there is at most one
@@ -383,11 +389,12 @@ and that’s not something I like to force on implementations.</p>
 
 <p>The base <a href="https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L336">UMASH block compressor</a>
 mixes all but the last of the message block’s 16-byte chunks with
-<code>PH</code>: xor the chunk with the corresponding bytes in the parameter
+PH: xor the chunk with the corresponding bytes in the parameter
 array, computes a carryless multiplication of the xored chunks’ half
-with the other half.  The last chunk goes through <a href="https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L358">ENH</a>,
-a little bit of mixing to improve the hash’s distribution (remember,
-we only rely on \(\varepsilon\)-almost-universality),
+with the other half.  The last chunk goes through a variant of
+<a href="https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L358">ENH</a>
+with an invertible finaliser (safe because we only rely on
+\(\varepsilon\)-almost-universality),
 and everything is xored in the accumulator.</p>
 
 <p>The collision proofs above preserved the same structure for the first hash.</p>
@@ -399,9 +406,9 @@ the same time.</p>
 
 <p>The first change for this combined loop is that we need to xor
 together all 16-bytes chunk in the message, and mix the resulting
-checksum with a fresh <code>PH</code> function.  That’s equivalent to xoring
+checksum with a fresh PH function.  That’s equivalent to xoring
 everything in a new accumulator (or two accumulators when working with
-256-bit vectors) initialised with the <code>PH</code> parameters, and <code>CLMUL</code>ing
+256-bit vectors) initialised with the PH parameters, and <code>CLMUL</code>ing
 together the accumulator’s two 64-bit halves at the end.</p>
 
 <p>We also have to apply the \(\overline{xs}_i\) quasi-xor-shift
@@ -414,9 +421,9 @@ where the left shift on parallel 64-bit halves simply adds <code>acc</code>
 to itself.</p>
 
 <p>This additional shifted accumulator includes another special case to
-skip the one \(\overline{xs}_1(x) = x \mathtt{«} 1\); that’s not a
+skip \(\overline{xs}_1(x) = x \mathtt{«} 1\); that’s not a
 big deal for the code, since we already have to special case the last
-iteration for the <code>ENH</code> mixer.</p>
+iteration for the ENH mixer.</p>
 
 <p>Armed with \(\mathtt{UMASH} = \bigoplus_{i=1}^{n - 1} h_i\) and
 \(\mathtt{acc} = \bigoplus_{i=2}^{n - 1} h_i \mathtt{«} (i - 1),\)
@@ -428,12 +435,12 @@ we have
 extract values out of vector registers).</p>
 
 <p>We added two vector xors and one addition for each chunk in a block,
-and, at the end, one CLMUL plus a couple more xors and adds again.</p>
+and, at the end, one <code>CLMUL</code> plus a couple more xors and adds again.</p>
 
 <p>This should most definitely be faster than computing two UMASH at the
-same time, which incurred two vector xors and a CLMUL (or full integer
-multiplication) for each chunk: even when CLMUL can pipeline one
-instruction per cycle, vector additions can dispatch to more
+same time, which incurred two vector xors and a <code>CLMUL</code> (or full
+integer multiplication) for each chunk: even when <code>CLMUL</code> can pipeline
+one instruction per cycle, vector additions can dispatch to more
 execution units, so the combined throughput is still higher.</p>
 
 <h2 id="one-last-thing-what-if-we-have-blocks-of-different-length">One last thing: what if we have blocks of different length?</h2>
@@ -441,7 +448,7 @@ execution units, so the combined throughput is still higher.</p>
 <p>It’s easy to show that UMASH is relatively safe when one block is
 shorter than the other, and we simply xor together fewer mixed chunks.
 Without loss of generality, we can assume the longer block has \(n\)
-chunks; that block’s final <code>ENH</code> is independent of the shorter block’s
+chunks; that block’s final ENH is independent of the shorter block’s
 UMASH, and any specific value occurs with probability at most
 \(2^{-63}\) (the probability of a multiplication by zero).</p>
 
@@ -450,7 +457,7 @@ UMASH, and any specific value occurs with probability at most
 <p>Luckily, we can tweak the <a href="https://en.wikipedia.org/wiki/Longitudinal_redundancy_check">LRC checksum</a>
 we use to generate an additional chunk in the block: rather than xoring
 together the raw message chunks, we’ll xor them <em>after</em> xoring them
-with the <code>PH</code> key, i.e.,</p>
+with the PH key, i.e.,</p>
 
 <p>\[m_n = \bigoplus_{i=0}^{n - 1} m_i \oplus k_i, \]</p>
 
@@ -460,11 +467,11 @@ with the <code>PH</code> key, i.e.,</p>
 to collision probabilities.  Implementations might however benefit
 from the ability to use a fused <code>xor</code> with load from memory<sup id="fnref:latency" role="doc-noteref"><a href="#fn:latency" class="footnote">1</a></sup>
 to compute \(m_i \oplus k_i\), and feed that both into the checksum
-and into CLMUL for <code>PH</code>.</p>
+and into <code>CLMUL</code> for PH.</p>
 
 <p>Unless we’re extremely unlucky (\(m_{n - 1} = k_{n - 1}\), with
 probability \(2^{-2w}\)), the long block’s LRC will differ from the
-shorter block’s.  As long as we always xor in the same <code>PH</code> parameters
+shorter block’s.  As long as we always xor in the same PH parameters
 when mixing the artificial LRC, the secondary hashes collide with
 probability at most \(2^{-64}\).</p>
 
