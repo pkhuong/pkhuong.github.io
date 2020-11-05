@@ -63,7 +63,7 @@ all but the last chunk with a PH loop,
 
 where
 
-\\[ \mathtt{PH}(k_i, m_i) = (k_i \bmod 2^{64}) \oplus (m_i \bmod 2^{64})) \odot (\lfloor k_i / 2^{64} \rfloor \oplus \lfloor m_i / 2^{64} \rfloor) \\]
+\\[ \mathtt{PH}(k_i, m_i) = ((k_i \bmod 2^{64}) \oplus (m_i \bmod 2^{64})) \odot (\lfloor k_i / 2^{64} \rfloor \oplus \lfloor m_i / 2^{64} \rfloor) \\]
 
 and each \\(k_i\\) is a randomly generated 128-bit parameter.
 
@@ -267,7 +267,7 @@ If only two chunks \\(i\\) and \\(j\\) differ, and one of them is the
 
 and
 
-\\[ h_0 \oplus \overline{xs}_j(h_j) = h^\prime_0 \oplus \overline{xs}_j(h^\prime_j) = 0, \\]
+\\[ h_0 \oplus \overline{xs}_j(h_j) = h^\prime_0 \oplus \overline{xs}_j(h^\prime_j), \\]
 
 both at the same time.
 
@@ -340,7 +340,7 @@ can only satisfy the combined xored condition by taking one of at most
 collide.
 
 Since \\(j < n\\), this happens with probability at most \\(2^{2(n -
-1) - w} \leq 2^{-34}\\) since UMASH has \\(w = 64\\) and \\(n =
+1) - w} \leq 2^{-34}\\) for UMASH with \\(w = 64\\) and \\(n =
 16\\).
 
 Finally, for any given \\(\Delta_j\\), there is at most one
@@ -349,15 +349,14 @@ Finally, for any given \\(\Delta_j\\), there is at most one
 \\[ \Delta_i \oplus \Delta_j = y,\\]
 
 and so *both* hashes collide with probability at most \\(2^{-98}\\),
-with \\(w = 64\\) and \\(n = 16\\).
+for \\(w = 64\\) and \\(n = 16\\).
 
 Astute readers will notice that we could let
 \\(\overline{xs}_i(x) = x \mathtt{<<} i\\),
 and find the same combined collision probability.
 However, this results in a much weaker secondary hash, since a chunk
 could lose up to \\(2n - 2\\) bits (\\(n - 1\\) in each 64-bit half)
-of hash information in a plain shift.
-
+of hash information to a plain shift.
 The shifted xor-shifts might be a bit slower to compute, but
 guarantees that we only lose at most 2 bits of information per chunk.
 This feels like an interface that's harder to misuse.
