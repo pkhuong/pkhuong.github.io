@@ -171,7 +171,7 @@ all but the last chunk with a PH loop,</p>
 
 <p>where</p>
 
-<p>\[ \mathtt{PH}(k_i, m_i) = (k_i \bmod 2^{64}) \oplus (m_i \bmod 2^{64})) \odot (\lfloor k_i / 2^{64} \rfloor \oplus \lfloor m_i / 2^{64} \rfloor) \]</p>
+<p>\[ \mathtt{PH}(k_i, m_i) = ((k_i \bmod 2^{64}) \oplus (m_i \bmod 2^{64})) \odot (\lfloor k_i / 2^{64} \rfloor \oplus \lfloor m_i / 2^{64} \rfloor) \]</p>
 
 <p>and each \(k_i\) is a randomly generated 128-bit parameter.</p>
 
@@ -377,7 +377,7 @@ differ: \(m_i \neq m^\prime_i\) and \(m_j \neq m^\prime_j\).</p>
 
 <p>and</p>
 
-<p>\[ h_0 \oplus \overline{xs}_j(h_j) = h^\prime_0 \oplus \overline{xs}_j(h^\prime_j) = 0, \]</p>
+<p>\[ h_0 \oplus \overline{xs}_j(h_j) = h^\prime_0 \oplus \overline{xs}_j(h^\prime_j), \]</p>
 
 <p>both at the same time.</p>
 
@@ -450,7 +450,7 @@ can only satisfy the combined xored condition by taking one of at most
 collide.</p>
 
 <p>Since \(j &lt; n\), this happens with probability at most \(2^{2(n -
-1) - w} \leq 2^{-34}\) since UMASH has \(w = 64\) and \(n =
+1) - w} \leq 2^{-34}\) for UMASH with \(w = 64\) and \(n =
 16\).</p>
 
 <p>Finally, for any given \(\Delta_j\), there is at most one
@@ -459,18 +459,18 @@ collide.</p>
 <p>\[ \Delta_i \oplus \Delta_j = y,\]</p>
 
 <p>and so <em>both</em> hashes collide with probability at most \(2^{-98}\),
-with \(w = 64\) and \(n = 16\).</p>
+for \(w = 64\) and \(n = 16\).</p>
 
 <p>Astute readers will notice that we could let
 \(\overline{xs}_i(x) = x \mathtt{«} i\),
 and find the same combined collision probability.
 However, this results in a much weaker secondary hash, since a chunk
 could lose up to \(2n - 2\) bits (\(n - 1\) in each 64-bit half)
-of hash information in a plain shift.</p>
-
-<p>The shifted xor-shifts might be a bit slower to compute, but
-guarantees that we only lose at most 2 bits of information per chunk.
-This feels like an interface that’s harder to misuse.</p>
+of hash information to a plain shift.
+The shifted xor-shifts might be a bit slower to compute, but
+guarantees that we only lose at most 2 bits<sup id="fnref:one-bit-with-ph" role="doc-noteref"><a href="#fn:one-bit-with-ph" class="footnote">1</a></sup> of
+information per chunk.  This feels like an interface that’s harder to
+misuse.</p>
 
 <p>If one were to change the \(\overline{xs}_i\) family of functions, I
 think it would make more sense to look at a more diverse form of
@@ -562,7 +562,7 @@ with the PH key, i.e.,</p>
 
 <p>When checksumming blocks of the same size, this is a no-op with respect
 to collision probabilities.  Implementations might however benefit
-from the ability to use a fused <code>xor</code> with load from memory<sup id="fnref:latency" role="doc-noteref"><a href="#fn:latency" class="footnote">1</a></sup>
+from the ability to use a fused <code>xor</code> with load from memory<sup id="fnref:latency" role="doc-noteref"><a href="#fn:latency" class="footnote">2</a></sup>
 to compute \(m_i \oplus k_i\), and feed that both into the checksum
 and into <code>CLMUL</code> for PH.</p>
 
@@ -574,7 +574,7 @@ probability at most \(2^{-64}\).</p>
 
 <p>With a small tweak to the checksum function, we can easily guarantee
 that blocks with a different number of chunks collide with probability
-less than \(2^{-126}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" class="footnote">2</a></sup></p>
+less than \(2^{-126}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" class="footnote">3</a></sup></p>
 
 <p><small>Thank you Joonas for helping me rubber duck the presentation, and Jim for pointing me in the right direction, and for the fruitful discussion!</small></p>
 
@@ -582,6 +582,9 @@ less than \(2^{-126}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" 
 
 <div class="footnotes" role="doc-endnotes">
   <ol>
+    <li id="fn:one-bit-with-ph" role="doc-endnote">
+      <p>It’s even better for UMASH, since we obtained these shifted chunks by mixing with PH.  The result of PH is the carryless product of two 64-bit values, so the most significant bit is always 0.  The shifted-xorshift doesn’t erase any information in the high 64-bit half! <a href="#fnref:one-bit-with-ph" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
     <li id="fn:latency" role="doc-endnote">
       <p>This might also come with a small latency hit, which is unfortunate since PH-ing \(m_n\) is likely to be on the critical path… but one cycle doesn’t seem that bad. <a href="#fnref:latency" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
