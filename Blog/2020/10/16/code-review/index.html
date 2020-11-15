@@ -1,0 +1,534 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Code review, sensemaking, and what even is an abstraction? - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2020/10/16/code-review/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Code review, sensemaking, and what even is an abstraction?</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Oct
+  
+16th, 
+2020
+
+
+
+
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>When I review code, my main objective is to make sense not of the
+system we actually obtain when running that code, but of the system
+the code is trying to describe.  This
+<a href="https://en.wikipedia.org/wiki/Sensemaking_(information_science)">sensemaking</a>
+process can be slow; it’s essentially unscalable in the worst case,
+and responds non-linearly to some small changes in the source.
+However, once constructed, the result–something like a theory of
+operations for the software system in question–lets me quickly plan
+and evaluate changes.</p>
+
+<p>When faced with a large piece of production code that is difficult for
+me to make sense of, I can only ask for documentation, which I’ll
+usually find lacking, and start interfacing with that code in an
+inefficient manner.  Over time, I’ll either work so little with that
+code that it won’t matter, or I’ll create sense where I couldn’t find
+it: that’s the main driver for refactors on my end.</p>
+
+<p>I don’t expect much out of documentation for running software that’s
+hard to make sense of because it’s difficult to fully write down
+complex and inconsistent rules; at best, the result is often
+descriptive, but not usefully prescriptive.  Unless there are dodgy
+power dynamics between coding and documenting, an attempt to document
+code that’s hard to document would result in first making the code
+easier to document, thus making it easier to understand, and then in
+documentation for that modified codebase.</p>
+
+<p>This also gives us a good rule of thumb for avoiding “personal
+preference” refactors: does the refactor come with documentation that
+better describes the code (the system described by the code)? In
+particular, can the documentation help me determine more quickly how
+to implement a given change, or whether a certain implementation is
+certainly incorrect?  If that’s a no, the diff has better be a trivial
+change.</p>
+
+<p>More frequently, I will review patches to modify pre-existing code
+(assuming a “make the change easy to make, then make the change”
+workflow).  These reviews are easier because I don’t have to make
+sense of the code, I simply have to convince myself that the changes
+are “sense-neutral,” except for what the commit message or cover
+letter says.</p>
+
+<p>The real issue comes with patches that add new modules, functions, or
+larger regions of code that I now have to make sense of.  I could ask
+for documentation, but no one writes documentation detailed enough,
+and we mostly don’t have the vocabulary to efficiently do that anyway.
+One exception is resource management: computer programmers do share
+words and <em>concepts</em> to describe common patterns (e.g., ownership,
+reference count, garbage collection, destructor, cleanup label, …)
+and classes of bugs (e.g., leak, double-free, use after free, reclaim
+race, goto fail). Thread-safety and shared memory concurrency is
+another exception: we have enough vocabulary to describe a few useful
+ways to structure systems, and programmers accept that usage patterns
+that are hard to describe are probably bug-prone and should be avoided
+altogether. This may in fact be an argument for microservices:
+programmers seem to be cultivating a shared understanding of SRE-level
+concerns in networked services.<sup id="fnref:style-guide" role="doc-noteref"><a href="#fn:style-guide" class="footnote">1</a></sup></p>
+
+<p>So I instead have to extract an internally consistent theory of
+operations (ToP) out of the new code, see that the code matches the
+ToP, and then try to evaluate whether the ToP is something we want.</p>
+
+<p>A major failure mode here is when a patch includes both modifications
+to pre-existing code and new functionality in the same commit: it
+means I have to engage the heavier sense-making process for
+everything, instead of fast-pathing most changes to pre-existing code
+to my internal “sense-neutrality-modulo-commit-message” checker.</p>
+
+<p>When I see a patch like that, I tend to reject it purely on the
+technical reason that it should have been split in more diffs.</p>
+
+<h2 id="how-my-sensemaking-goes-wrong">How my sensemaking goes wrong</h2>
+
+<p>I like to use resource management in hypotheticals, even though
+resource management is usually easy to handle: the rich vocabulary we
+share for resource management makes it easy to setup clear
+hypothetical situations.</p>
+
+<h3 id="inference-for-resource-management-rules">Inference for resource management rules</h3>
+
+<p>Let’s look at a few very similar patches that add a pointer (a
+resource) field to a struct (class), and directly releases that
+pointer.</p>
+
+<pre><code>foo.h:
+struct foo {
+    ...
+    ...
+    char *buf;  /* &lt;- new field added here. */
+};
+
+
+bar.c:
+existing_function_a()
+{
+    struct foo tmp;
+    ...
+    tmp.buf = ...;  /* &lt;- new statement */
+    ...
+    free(tmp.buf);  /* &lt;- new statement */
+    ...
+}
+</code></pre>
+
+<p>I would tend to accept such a diff with a request to better document
+that <code>buf</code> isn’t owned by <code>struct foo</code>.  If it were <code>const char *buf;</code>,
+I wouldn’t even ask for that.</p>
+
+<p>Here’s another slighly more complex case, with the same change to
+<code>struct foo</code> in <code>foo.h</code>.</p>
+
+<pre><code>baz.c:
+existing_function_b(struct foo *foo)
+{
+    ...
+    foo-&gt;buf = ...;  /* &lt;- new statement */
+    ...
+}
+
+existing_function_c(struct foo *foo)
+{
+    ...
+    free(foo-&gt;buf);  /* &lt;- new statement */
+    ...
+}
+</code></pre>
+
+<p>Here I would definitely ask for more comments <em>in <code>struct foo</code></em> on how
+the <code>buf</code> field is initialised, and how it should be managed.  It’s
+very important for me that the memory management discipline for
+<code>foo::buf</code> be described in <code>struct foo</code> because that’s how I can scale
+my understanding of the code: I’ll read the definition of <code>struct
+foo</code>, along with the comments on how it should be used, then look at
+users of <code>struct foo</code> to make sure they match the definition and
+expected discipline.  This process may then lead me to ask for more
+documentation on how <code>existing_funcion_b</code> and <code>existing_funcion_c</code>
+are used to satisfy the usage discipline for <code>foo::buf</code>.</p>
+
+<p>One last example, which would lead me to immediately ask for changes
+and stop reviewing, because it’s likely a waste of time.</p>
+
+<pre><code>quux.c:
+existing_function_d(struct foo *foo)
+{
+    ...
+    free(foo-&gt;buf);  /* &lt;- new statement */
+    foo_destroy(foo);  /* &lt;- pre-existing statement */
+    ..
+}
+</code></pre>
+
+<p>In this case, I can’t really make sense of the code as it is: it’s too
+ambiguous whether <code>foo::buf</code> is an arbitrary field that users for
+users to stash their opaque pointer (in which case, <code>void *buf;</code> may
+be more appropriate), or if it’s actually owned by <code>foo</code> and should be
+freed in <code>foo_destroy</code>.  I would probably assume the latter and
+suggest that the <code>free</code> call be moved to <code>foo_destroy</code> and to document
+the ownership… but any further review of the code will be cursory,
+because all I really know is that I don’t know what the code is trying
+to do.</p>
+
+<p>I can see how the range of responses can be confusing and frustrating
+from the outside: the hypothetical patches are of the same complexity
+and describe very similar code, yet the first is quickly rubber
+stamped, while the last fully interrupts the review process with a
+barrage of questions.</p>
+
+<p>The reason for this non-linear response is that the comments on a
+review are the result of an internal sensemaking repair and inference
+process.  When I offer concrete suggestions for the code, that’s
+because the process succeeded.  When I instead have a lot of
+questions, the process stalled, and I don’t have suggestions (yet).
+That’s usually fixed by changing the code to make it clearly
+inferrable for me, since we lack a shared vocabulary to efficiently
+discuss domain-specific abstractions, preconditions, invariants… and
+the process of making the code transparent to my mental analyses also
+tends to highlight what I would have flagged during a review.</p>
+
+<p>I suppose it would be less surprising to consistently ask for all the
+documentation I’m usually able to infer, but I think that would be
+consistently unproductive.</p>
+
+<h3 id="the-difference-between-what-and-how">The difference between what and how</h3>
+
+<p>In the resource management examples above, the first thing I ask for
+tends to be documentation, not code changes.  That’s because I can’t
+know if the code should be changed until I know what it wants to be.</p>
+
+<p>For resource management or locking, documentation is easy enough:
+programmers share a common vocabulary to describe usage patterns, so
+people naturally describe a discipline from which I can infer
+invariants, preconditions, etc.  That’s not the case for pretty much
+anything else.</p>
+
+<p>Common trigger words for me are “context,” “info,” “process” (as a
+verb), and “misc” (as a file or module name).  They tend to accompany
+bags of data or functions that are described by how they currently
+are, and not what they’re trying to be.  Sometimes, we also get a
+description of how they’re used, which still isn’t enough.</p>
+
+<p>The common “context” antipattern goes as follows.  We create a new
+struct/tuple/object type, and we stick values in there.  Usually, each
+field is well described, but the struct itself isn’t.  For example, if
+we populate the struct with database queries, we might have a
+<code>DbContext</code>.  That tells me how it’s populated, not <em>why</em>, and
+certainly doesn’t help me determine whether a new value I also happen
+to extract from the database should go in that <code>DbContext</code>, or
+somewhere else.</p>
+
+<p>It usually helps to look at the users.  If we only pass <code>DbContext</code> to
+<code>$Verb$Noun</code>, then maybe it’s really a <code>$VerbInfo</code>.  Of course, this
+heuristic can fail when a project is young, and there is only one
+using function because the rest haven’t been created yet.</p>
+
+<p>This tends to lead to frustrating conversions that would go something
+like in a kitchen setting:</p>
+
+<p>PK: What does this do?</p>
+
+<p>X: It cracks two eggs, beats them, and pours the mixture in a pan</p>
+
+<p>PK: That’s just a prose reformulation of the code, what does this actually do?</p>
+
+<p>X: … cracks two eggs, beats them, and pours the mixture in a pan!</p>
+
+<p>PK: OK, let’s try another angle. How is this function used?</p>
+
+<p>X: Easy peasy. It’s called every morning at 8 AM, except Sundays.</p>
+
+<p>PK: Let me rephrase: when does it make sense to call this function?</p>
+
+<p>X: Call this whenever you’re hungry.</p>
+
+<p>PK: Oh I see. This is the breakfast routine? Let’s say I develop a
+    craving for blueberries.  Where in this function do I insert
+    “sprinkle a generous handful of blueberries?”</p>
+
+<p>X: Oh, no no no. This only works if you’re making an omelet.</p>
+
+<p>PK: Ah. So the answer to “what does this do?” is “it makes an omelet,”
+    and we should only call it with a pre-heated pan.</p>
+
+<p>That’s important because we can now see that while a three egg omelet
+option can be accomodated, my blueberry muffin ask should probably
+live somewhere else.  We also improved the naming, and found a
+pre-condition to document explicitly.</p>
+
+<h3 id="why-i-care-so-much-about-the-rule-of-three">Why I care so much about the <a href="https://wiki.c2.com/?RuleOfThree">rule of three</a></h3>
+
+<p>The difference between “what” (how) something does and “what” (why)
+something does is nowhere near as apparent as in generic code.</p>
+
+<p>In generic code, the answer to “what” (how) is essentially “anything,”
+or “whatever you put in that method or callback.”</p>
+
+<p>And sometimes, when you’re writing Haskell, that’s really what you
+mean.</p>
+
+<p>Usually, though, we have more assumptions (c.f. monad laws), and
+spelling them out makes it easier to understand what the generic code
+should do and what its specific instantiations mean (what as in why,
+not how).</p>
+
+<p>What I’m looking for is clear documentation on the discipline for the
+concepts introduced by the new generic code.  However, getting that
+out of programmers is like pulling teeth: I’ll find documentation that
+tells me things like “pass in callbacks foo and bar; foo is called
+when X happens, bar is called Y times a second.”  This merely restates
+the code, and thus fails at actually creating an abstraction.  While
+the generic may save characters, it doesn’t help the sensemaking
+process; whenever we encounter an instantiation of that generic code,
+we have to monomorphise the code and analyse it inline, in its
+context, and that’s not scalable.</p>
+
+<p>A good abstraction is the opposite: knowing what each component is
+supposed to do, we can check that, e.g., each function argument
+matches the contract, and apply something like a program algebra to
+quickly summarise the meaning of the instantiation.  One example of
+such an abstraction is MapReduce over monoids.  Faced with an
+instantiation of the pattern, we can ask what the input and output
+monoids are, and check that the reduction function is associative.
+After that, we know at a high level what the MapReduce instance
+computes, without having to look at the specific implementation of the
+generic MapReduce driver.  In the other direction, we can also check
+that an implementation satisfies its contract without having to look
+at every instantiation.</p>
+
+<p>I believe that’s the main reason we try to convince people to use well
+known abstractions instead of creating new ones: it’s not that new
+ones are hard to understand, but that we expect they will be badly
+documented.  Bad documentation for a known abstraction (e.g.,
+MapReduce) isn’t as much of a problem, since “what does it do?” is
+already common knowledge.</p>
+
+<p>If we must use a bespoke abstraction, and we find the documentation is
+lacking, we’re kind of stuck: the answer to “what is this function
+argument/extension point” is “anything,” and documenting by restating
+the generic code defeats the purpose of abstraction.</p>
+
+<p>That’s why I like to wait for three potential users before creating a
+new generic abstraction.  If we have multiple users, we can try to
+improve the documentation by looking at what the function arguments or
+extension points (methods) actually do in practice.  Having multiple
+users means we can more easily look for commonalities, and try to
+figure out what’s accidental and what’s essential.</p>
+
+<p>The c2 wiki will tell us we should wait for multiple concrete
+instantiations because we often find that interfaces don’t split
+naturally where we expect them to.  That’s often true, but sometimes
+the interface is obvious.  I find it’s more important to delay
+abstraction because having multiple users gives us access to a more
+effective heuristic (look at n &gt;= 3 instances) to come up with
+descriptive names and to document what the new abstraction means.</p>
+
+<p>It’s only then that abstraction is useful.  In the words of Dijkstra,
+“The purpose of abstraction is not to be vague, but to create a new
+semantic level in which one can be absolutely precise.”</p>
+
+<p>My beef with “low level code” isn’t that it’s too detailed, but that
+it lacks information in practice: Programmers, having spelled out
+so many domain-independent (-irrelevant) details, think they’ve
+specified how the system defined by the code behaves, when in reality
+we only have a description of how it does whatever it is that it does.</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:style-guide" role="doc-endnote">
+      <p>In a way, I found Google’s C++ style guide helps make it easier to describe more properties than just resource management.  Some of it the addition of more vocabulary (e.g., thread-hostile and thread-compatible), but mostly because we have one recommended way to do $X, so we don’t have to document how we do $X.  Rather than trying to make sense of code that does something like $X in a bespoke manner, I, as a reviewer, can ask to do $X how the style guide mandates it be done. <a href="#fnref:style-guide" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Oct
+  
+16th, 
+2020
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/" title="Previous Post: UMASH: a fast and universal enough hash">&laquo; UMASH: a fast and universal enough hash</a>
+      
+      
+      
+      
+        <a class="basic-alignment right" href="/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/" title="Next Post: 1.5x the PH bits for one more CLMUL">1.5x the PH bits for one more CLMUL &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2020 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>
