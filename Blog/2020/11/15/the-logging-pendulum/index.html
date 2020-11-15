@@ -1,0 +1,376 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>The logging pendulum - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2020/11/15/the-logging-pendulum/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">The logging pendulum</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Nov
+  
+15th, 
+2020
+
+
+
+
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>An application’s logging development lifecycle usually goes something
+like this:</p>
+
+<ol>
+  <li>
+    <p>Add enough log statements to convince yourself it works, and
+sprinkle some more to debug some early issues, if you don’t have
+access to a real debugger.</p>
+  </li>
+  <li>
+    <p>Roll out to a less nimble environment: either someone else’s
+computer, or hundreds of your own computers.</p>
+  </li>
+  <li>
+    <p>Something bad happens, and someone goes “if only we had logged $X.”</p>
+  </li>
+  <li>
+    <p>Sprinkle more logging, which encourages people to insert their own
+logging statements when they add new code.</p>
+  </li>
+</ol>
+
+<p>With experienced (scarred) people on the team, it’s easy to leapfrog
+any of the steps above.  The next step, however, is easier to avoid by
+improving the expressivity of the runtime system than anything else.</p>
+
+<ol>
+  <li>Death by logging.  One bad situation became much worse because of
+logging overhead.  I’m not talking about “oh, there are too many
+useless lines here and there” because that’s something you should
+trivially address in a log reader or <code>grep -v</code>.  I’m not really
+talking about effects like running out of disk (log rotation should
+be shared tech),<sup id="fnref:distributed-log" role="doc-noteref"><a href="#fn:distributed-log" class="footnote">1</a></sup> but more about issues like “we
+didn’t expect to call this code in a tight loop, but we do when
+$SITUATION and now we’re spending 90% of our time formatting log
+records.”</li>
+</ol>
+
+<p>At this point, every new log statement becomes an exercise in
+balancing imponderables: is this log line more likely to help me debug
+a problem, or will it instead turn a bad situation into a catastrophe?</p>
+
+<p>There’s often no good answer to this question; not only because the
+sufficiently smart developer is a myth, but also because a given piece
+of logging may be invaluable in some situations, but often harmful
+given their level of details.</p>
+
+<p>In my experience, “just be smart” isn’t a useful policy, and the end
+result is that people instead stop thinking about logging… and the
+application goes back to something like step 2 in the logging
+lifecycle above.</p>
+
+<h2 id="how-to-stabilise-the-pendulum-of-verbosity">How to stabilise the pendulum of verbosity</h2>
+
+<p>I know of two ways to stop swinging back and forth between
+under-logging and over-logging.  In both cases, the key is to make the
+downside of under- or over- logging (respectively) so small that we
+can consistently err on one side.</p>
+
+<p>Neither of these approaches solves the problem of knowing what to log
+ahead of time.  That comes with operational experience; well placed
+log statements are scar tissues.  However, they help us decide what to
+do for new situations that have yet to make their imprint on the code.</p>
+
+<p>We can address the reason for “over logging” in the first place (steps
+2/3), and favour of a dynamic <em>deployment</em> environment, where the
+operator is deeply familiar with the program, and empowered to hot
+patch the code in production.  This would be an unsustainable
+nightmare at scale, but not everything has to scale! In fact, even in
+large-scale systems, there are pockets of small scale deployments; I
+have worked on systems that were so efficient at doing a simple job
+that they wouldn’t need to scale past ~15 machines until the world
+population hit ten billion people.</p>
+
+<p>When we go “all-in” on nimbleness in production, we not only have
+access to a REPL in production (e.g., a slime listener in common lisp,
+or an ipython kernel), but, more importantly, the whole application
+itself is designed for replacing bits of code on the fly.  For
+example, any long-running loops will be written with the whole loop
+body as a call to a toplevel function, with state passed around
+explicitly as arguments and return values; this makes it easier to
+hotpatch the loop body at runtime.</p>
+
+<p>In that setting, a missing log statement can be inserted as soon as we
+realise it might be useful.  This flexibility means we also don’t rely
+as strongly on predicting what information would be useful to log in
+advance, a famously intractable problem.</p>
+
+<p>By embracing late binding and dynamism in production, we have made it
+easy to err on the side of underlogging, since a skilled operator can
+always insert log calls as needed on the running system, and later go
+through the regular process to hard code in the improved
+observability.</p>
+
+<p>Admittedly, small scale deployments with operators who deeply understand the
+application aren’t always feasible… but I think we also
+<a href="https://hackernoon.com/big-and-small-computing-73dc49901b9a">over-apply big computing patterns</a>,
+simply because a lot of developers were never exposed to anything
+else.</p>
+
+<h2 id="controlled-dynamism-in-big-computing">Controlled dynamism in big computing</h2>
+
+<p>When a small team is responsible for running your code on hundreds of
+machines, or you claim it can be run on-premises by non-specialist
+operators, a REPL and “just patch in the print statements you need”
+isn’t viable.</p>
+
+<p>Injecting code at runtime definitely isn’t enterprise… but disabling
+pre-existing code is!</p>
+
+<p>That’s why we expect “production” logging frameworks to let us change
+log levels with fine grained policy (e.g., verbosity levels per module
+or file), and, most importantly, to make it easy to do so without
+rebuilding the application.</p>
+
+<p>Ideally, we can fine tune log levels on a running application, but
+updating a config file and restarting the app is usually acceptable.</p>
+
+<p>That’s not enough to pin the logging pendulum in place: when we
+prevent records from making it to logs, we must also be confident that
+the performance impact of disabled log statements is very close to
+rebuilding with the statement commented out.</p>
+
+<p>Without such strong guarantees, disabling log statements differs only
+marginally from filtering them out in a log viewer, and we will remain
+wary of log statements taking down our code, even once disabled.</p>
+
+<p>When we do have understandable guarantees on the performance overhead
+of disabled log statements, we can more easily err on the side of
+over-logging (perhaps at a level that’s disabled by default), knowing
+that the log statements are as good as commented out when we don’t
+want them, but can be re-activated when they would be useful.</p>
+
+<p>We still have to guess what information would be useful to log, but at
+least we don’t have to also weigh the usefulness against the risk of
+over-logging: we know that disabled log statements have a marginal
+runtime impact.</p>
+
+<p>I want to stress that we’re not interested in the actual performance
+of the application when it logs or doesn’t log something, as much as
+we are concerned with the <em>performance model of disabled log
+statements</em>.  It’s the performance model that lets us simplify the
+decisions we have to make when writing the code… and I would thus
+prioritise keeping the performance model simple and the worst-case
+overhead low, even over improving empirical performance.</p>
+
+<h2 id="ok-so-how-far-can-we-practically-go-down-that-route">OK, so how far can we practically go down that route?</h2>
+
+<p>We had <a href="https://github.com/appnexus/acf/blob/master/common/an_hook.h">a simple runtime code toggling mechanism at AppNexus</a>.
+The direct overhead of a piece of code that’s disabled by default is a
+5-byte <code>TEST</code> instruction (a nop, practically), and additional code in
+the “cold” section.</p>
+
+<p>The direct overhead of a piece of code that’s enabled by default and
+is later disabled is an unconditional jump over the disabled code.</p>
+
+<p>There are of course second order effects on code generation and memory
+footprint, but those are negligible for most code… and for pieces
+of code where that matters, developers should look at disassembly.</p>
+
+<p>With the hooking mechanism, it was possible to toggle individual log
+statements at runtime and in via a config file (for persistence). For
+more common cases, one could enable with regexes to tweak log levels
+per file.</p>
+
+<p>Total amount of work, including the hooking code itself: &lt; 1 week?</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:distributed-log" role="doc-endnote">
+      <p>As always, distributing the logging system so that logs have to go over the network adds more failure modes. <a href="#fnref:distributed-log" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Nov
+  
+15th, 
+2020
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/" title="Previous Post: 1.5x the PH bits for one more CLMUL">&laquo; 1.5x the PH bits for one more CLMUL</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2020 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>
