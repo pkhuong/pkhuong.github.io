@@ -26,6 +26,9 @@
     {% endunless %}
   </header>
 {% endunless %}
+{% if post.draft or page.draft %}
+<p><em>This is a draft post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+{% endif %}
 {% if index %}
   <div class="entry-content" style="font-family: {{ post.font }}; font-size: {{ post.fontsize }}">{{ content | excerpt }}</div>
   {% capture excerpted %}{{ content | has_excerpt }}{% endcapture %}
