@@ -358,8 +358,11 @@ However, this results in a much weaker secondary hash, since a chunk
 could lose up to \\(2n - 2\\) bits (\\(n - 1\\) in each 64-bit half)
 of hash information to a plain shift.
 The shifted xor-shifts might be a bit slower to compute, but
-guarantees that we only lose at most 2 bits of information per chunk.
-This feels like an interface that's harder to misuse.
+guarantees that we only lose at most 2 bits[^one-bit-with-ph] of
+information per chunk.  This feels like an interface that's harder to
+misuse.
+
+[^one-bit-with-ph]: It's even better for UMASH, since we obtained these shifted chunks by mixing with PH.  The result of PH is the carryless product of two 64-bit values, so the most significant bit is always 0.  The shifted-xorshift doesn't erase any information in the high 64-bit half!
 
 If one were to change the \\(\overline{xs}_i\\) family of functions, I
 think it would make more sense to look at a more diverse form of
