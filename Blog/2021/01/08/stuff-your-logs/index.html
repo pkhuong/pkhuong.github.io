@@ -386,7 +386,7 @@ input data at a block boundary.  When we encode the block for the
 final stuff sequence, we stop (and append a stuff sequence to
 delimit the end of the record).</p>
 
-<p>You can find our <a href="https://gist.github.com/pkhuong/8736396cee3c54f0a12840e5b8978697#file-word_stuff-h">MIT-licensed implementation in this gist</a>.</p>
+<p>You can find our <a href="https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-word_stuff-c">MIT-licensed implementation in this gist</a>.</p>
 
 <p>When encoding short records, we already noted that the encoding step
 is often equivalent to adding a one-byte size prefix.  In fact, we can
@@ -429,7 +429,7 @@ and flat for decoding performance), but there’s no special coupling
 between the stream of word-stuffed records and the payload’s 
 format.</p>
 
-<p><a href="https://gist.github.com/pkhuong/8736396cee3c54f0a12840e5b8978697#file-record_stream-h">Our MIT-licensed implementation</a>
+<p><a href="https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-record_stream-c">Our MIT-licensed implementation</a>
 let writers output to buffered <code>FILE</code> streams, or directly to file descriptors.</p>
 
 <p>Buffered streams offer higher write throughput, but are only safe
@@ -491,7 +491,7 @@ and re-using the word-stuffed record format was an obvious choice.</p>
 <p>Word stuffing is simple, efficient, and robust.  If you can’t just
 defer to a real database (maybe you’re trying to write one yourself)
 for your data stream, give it a shot!  Feel free to
-<a href="https://gist.github.com/pkhuong/8736396cee3c54f0a12840e5b8978697">try our MIT-licensed code</a>
+<a href="https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-license">try our MIT-licensed code</a>
  if you don’t want to write your own.</p>
 
 <p><hr style="width: 50%" /></p>
