@@ -1,0 +1,588 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Polymorphic refinement-preserving interpretation with dataflow types - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2020/12/05/polymorphic-refinement-preserving-interpretation-with-dataflow-types/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Polymorphic refinement-preserving interpretation with dataflow types</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Dec
+  
+5th, 
+2020
+
+
+
+
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>Many years ago, I started looking into
+<a href="http://okmij.org/ftp/tagless-final/">Carette, Kisyelov, and Shan’s tagless-final EDSL</a>:
+it felt like a nice hack to bootstrap a library of type-safe
+yet lightweight program transformers
+(e.g., <a href="https://en.wikipedia.org/wiki/Partial_evaluation">partial evaluators</a>)
+without having to worry about type checking failures at runtime…
+in fact, simple cases shift all the type checking before runtime,
+so there’s no need to embed any type checker at all.</p>
+
+<p>Combine that with the implicit function in
+http://okmij.org/ftp/tagless-final/course/optimizations.html#reassoc,
+and it’s pretty compelling for simple runtime rewriting.</p>
+
+<p>However, the simple types classically handled by tagless-final
+embedding isn’t really useful to catch the type of issues I find
+interesting in the sort of code I like to play with.  For things like
+proving the absence of integer overflow, or safely optimising away
+bound checks, <a href="https://en.wikipedia.org/wiki/Refinement_type">refinement types</a> seem more appropriate… but it’s not obvious how to extend
+the tagless-final style to also handle refinements: refinement
+type systems tend to trade power and regularity in order to ensure
+decidability (a pragmatic choice if I ever saw one).  In particular,
+higher-order quantified SAT seems really hard (:</p>
+
+<p>It took until 2018 for me to grok a promisingly polymorphic refinement
+typing approach: <a href="https://arxiv.org/abs/1706.08007">Cosman and Jhala’s Fusion Types</a>.
+I eventually realised that the key to that polymorphism approach was
+exploiting forall polymorphism to approximate dataflow. For example,
+given <code>compose :: ('a -&gt; 'b) -&gt; ('b -&gt; 'c) -&gt; 'a -&gt; 'c</code>, we know the
+only way this can be implemented is as the composition of two
+functions  (or error out); i.e., <code>compose f g x = g(f x)</code>.  We can
+use that information to derive a refinement for <code>(compose f g)</code>,
+without inlining <code>compose</code>.  For example, if we have <code>f :: {v:int | v &gt;= 0} -&gt; {r: int | r = v + 1}</code>, and <code>g :: {v:int | v &gt;= 1} -&gt; {r:int | r = v - 1}</code>,
+Fusion typing would approximate the return value of <code>f</code> with
+<code>\exist v &gt;= 0 s.t. r = v + 1</code> (i.e., <code>r &gt;= 1</code>), check that it
+satisfies <code>g</code>’s precondition, and find a return value for g
+that satisfies <code>\exists v &gt;= 0 s.t. r = v + 1 - 1</code> (i.e., <code>r &gt;= 0</code>).</p>
+
+<p>After wrestling with the paper for a couple months, I realised we
+could do better by <a href="https://github.com/pkhuong/palladium">paying closer attention to the dataflow</a>;
+in particular, keeping track of when bound values were still in scope
+lets us derive a strong refinement, <code>h = (compose f g) :: {v:int | v &gt;= 0} -&gt; {r:int | r = v}</code>.</p>
+
+<p>Once a type is polymorphic enough, it only has one (pure) inhabitant,
+and so nothing is lost by reconstructing dataflow from types.
+However, that approach doesn’t work for code that isn’t polymorphic
+over types, but is polymorphic over refinements (e.g., a <code>compose</code>
+function that only accepts integer-valued functions).  A dataflow
+approach addresses that problem.</p>
+
+<p>Playing with the type system approach also convinced me that abstract
+interpretation is a much easier <em>refinement checking</em> approach for me:
+I think the UX of refinement types clearly hits a useful local optimum,
+but there’s no need to stick to the type viewpoint when checking them,
+especially when we require programmers to annotate toplevel or recursive
+definitions, eliminating the need for type synthesis.</p>
+
+<h2 id="a-dataflow-view-of-refinement-polymorphism">A dataflow view of refinement polymorphism</h2>
+
+<p>Let’s say we had an “integer compose” function
+<code>int_compose :: (int -&gt; int) -&gt; (int -&gt; int) -&gt; int -&gt; int</code>.</p>
+
+<p>From a type perspective, either natural implementation <code>int_compose f
+g x = g(f x)</code> or <code>f(g x)</code> works… as well as many more, like
+<code>int_compose f g x = 0</code>: a less polymorphic type has many more
+inhabitants.</p>
+
+<p>Let’s annotate the ground types <code>int</code> with some dataflow tags
+(I don’t know what a good/standard syntax for this looks like):
+<code>int_compose :: ({int @ a} -&gt; {int @ b}) -&gt; ({int @ b} -&gt; {int @ c}) -&gt; {int @ a} -&gt; {int @ c}</code>.</p>
+
+<p>This says we must pass the third argument (it’s the only argument
+or funarg return value [… generalise to valence]) tagged with <code>a</code>
+to the first function (its argument is tagged with <code>a</code>), and we
+must pass the result of that function call to the second function,
+in order to compute the final return value.</p>
+
+<p>Dataflow information is another way to describe subtyping constraints,
+and subtyping for refinement types is type equality combined with
+predicate implication.</p>
+
+<p>When using this dataflow information to type check he
+<code>int_compose f g x</code>, we would first check that the types (<code>int</code> everywhere)
+match, and then that the refinement predicate on <code>x</code>
+implies the predicate for <code>f</code>’s argument… and we can
+then decide how hard we want to go when checking <code>g</code>’s
+argument, depending on purity assumptions, and how much complexity
+is reasonable in a type checker.  What’s important is that the dataflow
+information lets us reduce that check to confirming that the
+refinement predicate for <code>f</code>’s return value implies that the predicate
+for <code>g</code>’s argument is always satisfied.  Subtle design choices only
+relate to how we handle bound values in the return value’s predicate,
+and I’m pretty sure that’s irrelevant for the 
+<a href="http://okmij.org/ftp/tagless-final/JFP.pdf#page=17">tagless-final use case</a></p>
+
+<p>What’s more interesting is that we can use the same dataflow approach
+to typecheck <code>int_compose</code> over arbitrary refinements.  Let’s say we had
+<code>int:compose :: ({v: int | 'a(v) } -&gt; {w: int | 'b(w)}) -&gt; ({x: int | 'b(v) } -&gt; {y: int | 'c(w)}) -&gt; {z: int | 'a(v)} -&gt; {s: int | 'c(s)}</code>,
+where <code>'a</code>, <code>'b</code> and <code>'c</code> are forall-quantified refinement predicates.</p>
+
+<p>These predicates are arbitrary (they could even always be vacuously
+true or false), so the implementation of <code>int_compose</code> can’t do
+anything with them.  However, since they’re arbitrary, we also know
+it’s impossible to construct a value <code>v</code> that satisfies, e.g.,
+<code>'a(v)</code>; we must receive one as an argument or as a return value from
+one of our function arguments.  Rather than directly checking
+entailment of SMT formulae with higher-order quantification, we can
+simply check dataflow conditions: confirm that only values tagged with
+<code>a</code> flow into arguments tagged with <code>a</code>, and similarly for <code>b</code> and
+<code>c</code>.  That’s a huge simplification!</p>
+
+<p>For predicates like <code>v = x + y /\ a(x) /\ b(y)</code>, we can
+peel off the constraints from the toplevel expression, and
+convert <code>a(x)</code> to <code>x = a_value_1 \/ a_value_2 ...</code>, where
+these <code>a_value</code>s are SMT variables for values that were generated
+with an <code>a</code> dataflow tag.</p>
+
+<p>This gets dicier for constraints like <code>(if x a(v) b(v))</code>, but
+we should be able to rephrase that (e.g., <code>(if x (= v t) (= v u)) /\ (x =&gt; a(t)) /\ (-x =&gt; b(u))</code>), and I’m pretty sure we don’t need stuff
+like that for our partial evaluation use case.</p>
+
+<p>I think we can replace quanified predicates on values flowing into the
+function-under-typechecking with explicit dataflow tags, and
+macroexpand the same predicates when the FUT generates a value with an
+equality check.</p>
+
+<h2 id="what-does-this-mean-for-final-tagless-edsl">What does this mean for final-tagless EDSL?</h2>
+
+<p>Let’s look at <a href="http://okmij.org/ftp/tagless-final/JFP.pdf#page=17">a simple method from the Symantics module</a>,
+<code>add : ('c,int,int) repr -&gt; ('c,int,int) repr -&gt; ('c,int,int) repr</code>.</p>
+
+<p>This type is very free-form, and doesn’t give us enough “grip” to have
+any form of refinement preservation guarantee.  Let’s pretend the type
+constructor <code>repr</code> could also be parameterised over refinement
+predicates; we might have</p>
+
+<p><code>add : ('c,int,int,{v|a(v)}) repr -&gt; ('c,int,int,{w|b(w)}) repr -&gt; ('c,int,int,{r | \exists x,y s.t. a(x) /\ b(y) /\ r = x + y}) repr</code></p>
+
+<p>Now, <code>repr</code> is of course free to do what it wants with the predicate,
+including discarding it.  However, whatever it does, it has to be
+consistent about it since <code>repr</code> can’t deconstruct or otherwise
+examine its predicate argument (just like type arguments).</p>
+
+<p>This means we can typecheck with refinements as though we were using
+the metacircular implementation of <code>Symantics</code> (e.g., <code>add x y = x + y</code>),
+and then know that any implementation will preserve that, modulo
+whatever its <code>repr</code> does to type predicates.</p>
+
+<p>Checking a specific implementation is also tractable.  Let’s start with
+the type constructor 
+<code>type (’c,’sv,’dv) repr = {st: ’sv option; dy: (’c,’dv) code}</code> from
+the final-tagless partial evaluator.  We might extend that to handle
+predicates as
+<code>type (’c,’sv,’dv,p) repr = {st: {v:’sv | p(v)} option; dy: (’c,{v:’dv | p(v)}) code}</code>.</p>
+
+<p>This yields the following type for <code>add: {st: {v:’sv | a(v)} option; dy: (’c,{v:’dv | a(v)}) code} -&gt; {st: {w:’sv | b(w)} option; dy: (’c,{w:’dv | b(w)}) code} -&gt; {st: {r:’sv | \exists x,y s.t. a(x) /\ b(y) /\ r = x + y} option; dy: (’c,{r:’dv | \exists x,y s.t. a(x) /\ b(y) /\ r = x + y}) code}</code></p>
+
+<p>Let’s now try and check each arm of</p>
+
+<pre><code>let add e1 e2 = match e1, e2 with
+                | {st = Some 0}, e | e, {st = Some 0} -&gt; e
+                | {st = Some m}, {st = Some n} -&gt; int (R.add m n)
+                | _ -&gt; pdyn (C.add (abstr e1) (abstr e2))
+</code></pre>
+
+<p>The zero-eliminating case <code>{st = Some 0}, e -&gt; e</code>
+should work: we find <code>a(0)</code> and <code>b(w)</code> hold, and thus <code>r = w = w + 0</code>
+satisfies <code>\exists x,y s.t. a(x) /\ b(y) /\ r = x + y</code>.</p>
+
+<p>Similarly, <code>{st = Some m}, {st = Some n} -&gt; int (R.add m n)</code> is satisfied
+with plain dataflow on predicates <code>a</code> and <code>b</code>.</p>
+
+<p>The catch-all case <code>_ -&gt; pdyn (C.add (abstr e1) (abstr e2))</code> works if
+the constructor <code>C.add</code> is also polymorphic over refinement
+predicates.  Alternatively, one could also fully drop the predicates
+for residualised expressions… the key is that <code>repr</code> must do the
+same thing for arguments as for return values, so it’s internally
+consistent.</p>
+
+<p>Refinement preservation can catch logic bugs in our partial
+evaluator(!), and can be checked without having to think about
+predicate quantification, or potential scope issues in the predicates.</p>
+
+<p>We keep things maximally polymorphic in specific implementations,
+and can check finally encoded programs however we want, assuming
+that <code>('c,'sv,'dv,p) repr = {v:'dv | p(v)}</code>.</p>
+
+<p>The <code>lam</code> function is more complex (as always); we want to do
+something like the following,</p>
+
+<pre><code>val lam : ((’c,’sa,’da,p) repr -&gt; (’c,’sb,’db,q) repr as ’x)
+-&gt; (’c,’x,{v:’da | p(v)} -&gt; {r:’db | q(r)}) repr
+</code></pre>
+
+<p>but that doesn’t match the pattern.  Does it make sense to assume the
+dynamic value type always has the refinement predicates applied?  A
+priori, yes, since <code>dv</code> only exists for residual terms, and we want
+those to preserve refinements.</p>
+
+<p>We could also explode the parameter list even more and have both <code>dv</code>
+and <code>rawdv</code> (without refinements).</p>
+
+<p>The one key thing for refinement preservation is the way we handle
+<code>if</code>:</p>
+
+<pre><code>val if_ : (’c,bool,bool) repr
+          -&gt; (unit -&gt; ’x) -&gt; (unit -&gt; ’x) -&gt; ((’c,’sa,’da) repr as ’x)
+</code></pre>
+
+<p>doesn’t guarantee we’ll use the correct arm, never mind that the
+<code>then</code> arm will only be evaluated if the <code>bool</code> argument is true.</p>
+
+<p>We could try to impose that the correct arm is returned with</p>
+
+<pre><code>val if_ : (’c,bool,bool,{?}) repr
+          -&gt; (unit -&gt; ('c,'sa,'da,{p(v)}) repr) -&gt; (unit -&gt; ('c,'sa,'da,{q(v)})) -&gt; (’c,’sa,’da, {(if ??? p(v) q(v))}) repr
+</code></pre>
+
+<p>but it’s not clear how to refer to the selector.  Let’s first use
+dataflow to guaranee that the return value is one of the arms:</p>
+
+<pre><code>val if_ : (’c,bool,bool,{?}) repr
+          -&gt; (unit -&gt; ('c,'sa,'da,{p(v)}) repr) -&gt; (unit -&gt; ('c,'sa,'da,{q(v)})) -&gt; (’c,’sa,’da, {p(v) \/ q(v)}) repr
+</code></pre>
+
+<p>Now that the only way to generate the return value is clearly o invoke
+one of the two arms, let’s make sure they’re invoked when the selector
+has the correct value!</p>
+
+<pre><code>val if_ : (’c,bool,bool,{s(v)}) repr
+          -&gt; ((’c,bool,bool,{v /\ s(v)}) repr -&gt; ('c,'sa,'da,{p(v)}) repr) -&gt; ((’c,bool,bool,{-v /\ s(v)}) repr -&gt; ('c,'sa,'da,{q(v)})) -&gt; (’c,’sa,’da, {(ite selector p(v) q(v))}) repr
+</code></pre>
+
+<p>This type is satisfied by the constant-folding half of <code>if_</code>, and the
+residualised version should be fine as as long as the constructor is
+polymorphic over refinements… or we can give the option to just drop
+refinements, with an additional <code>rawdv</code> type.</p>
+
+<p>It’s a bit annoying that we can’t detect when both arms evaluate to
+the same thing: we can’t invoke either arm to see what’s hiding
+underneath it all without a witness that the selector has the correct
+value (true or false).</p>
+
+<p>Maybe we can solve that with an intensional equality check for
+functions (smth like <code>if x == y -&gt; Some(x | y)</code>), but interesting
+cases of identical arms will tend to require extensional equality…
+(?)</p>
+
+<p>What if we just provide an axiom:</p>
+
+<p><code>fold_if : bool -&gt; (bool -&gt; a) -&gt; (bool -&gt; a) -&gt; a option</code>,</p>
+
+<p>which returns something iff applying the two functions returns the
+same thing?</p>
+
+<p>Problem is evaluating the static part could easily rely on a
+precondition enforced by the branch, and then it all goes to shit.</p>
+
+<p>DON’T ALLOW THAT! A Symantics implementation may not assume
+preconditions hold?  Or must be written in safe subset that
+throws on errors (kind of sucks for embedding in C programs)?</p>
+
+<p>However, we can do something with the residual value, which construct
+terms. Let’s add the axiom that, if the residuals are the same when
+passed a residual variable, then we can extract their value… no,
+that doesn’t work: the unoptimised static part might still be unsafe!</p>
+
+<p>Let’s say we add magic to compare functions… we could do something
+fun, but only if the body of lambdas are pre-reduced.</p>
+
+<p>… or we pass in a “function eq” non-standard evaluation functor,
+which does arbitrary rewriting before spitting back a fingerprint, and
+use that as our equality test.  More axioms, but it’s not a surprise
+that testing expressions for equality is hard.</p>
+
+<p>http://okmij.org/ftp/tagless-final/cookbook.html#simple-staging / http://okmij.org/ftp/meta-programming/let-insertion.pdf has some ideas
+to generate typed closures instead of quotations. (http://okmij.org/ftp/meta-programming/calculi.html#metafx)</p>
+
+<h2 id="ok-ok-what-about-moving-more-logic-to-the-embedding-dsl">OK OK, what about moving more logic to the embedding DSL?</h2>
+
+<p>We want to reduce under the lambda mostly to determine when the
+lambda’s argument is ultimately irrelevant to its body.</p>
+
+<p>That’s something we can do with a variant of the partial evaluator
+that can deal with “missing” dynamic values (in which case
+missing-ness propagates to the result).</p>
+
+<p>In fact, we could reuse the same PE, with a side condition that
+the result is never None when its inputs aren’t?</p>
+
+<p>We’d then have <code>let f = (\x . ...) in lam f (maybe_reduce f)</code>?</p>
+
+<p>So… this might work, but super-linear complexity, since we traverse
+nested lambdas multiple times :\</p>
+
+<p>Potential avenues: see https://link.springer.com/chapter/10.1007/BFb0033849</p>
+
+<p>We could then reduce under lambda and ask if the remaining functions
+are identical?</p>
+
+<h2 id="other-problem-generating-typed-closures-has-overhead">Other problem: generating typed closures has overhead</h2>
+
+<p>https://link.springer.com/article/10.1023/A:1010058213619 ?</p>
+
+<p>But then https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.48.1653&amp;rep=rep1&amp;type=pdf ?!</p>
+
+<p>This isn’t necessarily an issue for runtime performance, since I can
+see us fully lowering to, e.g., a Forth for the final performance
+sensitive execution.  However, it would be nice to be able to
+specialise some code, then pass it around some more for further
+specialisation.  This doesn’t work as well if the result of
+specialisation (into code) adds linear overhead for each pass.</p>
+
+<p>That overhead stems from the need to flatten thunks <code>() -&gt; value</code>,
+e.g., <code>\_ -&gt; (a ()) + (b ())</code> instead of <code>a + b</code>.</p>
+
+<p>Would that be fixed by non-strict evaluation under lambda?</p>
+
+<p>Would call-by-need suffice?</p>
+
+<p>Evaluation under lambda seems promising, but I think we can make this
+less magical by extending lambdas with a special operator that gives us
+the value if the argument is irrelevant.</p>
+
+<p>In other words, we’d have <code>remove_binding: ('a -&gt; 'b) -&gt; 'b option</code>,
+as an axiom.  That’d be enough to detect when an <code>if</code> can be converted
+to a <code>select</code>; unclear if we can also detect two equivalent but
+residualised arms, or even if that’s a useful transform.</p>
+
+<p>Again, we run into performance issues if we implement the
+<code>remove_binding</code> operator without integrating it into the global
+evaluation strategy.  We might instead look into 
+<code>remove_binding: ('a -&gt; 'b) -&gt; 'b option * ('a -&gt; 'b)</code>,
+where the second return value is equivalent to the argument function,
+but with some stuff pre-reduced?</p>
+
+<p>This means we assume purity and non-strict evaluation, which also
+obviates the reason for passing a witness of the selector bool’s
+value.</p>
+
+<p>Non-strict evaluation means we can’t rely on refinement predicates in
+the embedded language for the safety of static evaluation… probably
+a good idea anyway: we don’t <em>have</em> to constant fold operators, and
+those that are folded should probably be done in an obviously safe
+manner (:</p>
+
+<p>https://web.archive.org/web/20201111222712/http://thyer.name/phd-thesis/thesis-thyer.pdf ??</p>
+
+<p>See Augustsson’s <code>small</code> language.</p>
+
+<p>Thyer claims victory with slowdown linear in the tower’s height
+(rather than geometric)… and we already have that with regular final
+encodings to typed closures.</p>
+
+<p>So…</p>
+
+<ol>
+  <li>call-by-need with some aggressive re-merging of the expression graph?</li>
+  <li>use de bruijn indices and tag subgraphs with variables that are used?
+See Xi’s evaluation under lambda; we only need one depth number?</li>
+</ol>
+
+<h2 id="take-a-step-back">Take a step back</h2>
+
+<p>We simply want to evaluate to a static value when we don’t know the
+static argument.  Instead of a static value of type <code>'a -&gt; 'b</code>, we
+simply need <code>'a option -&gt; 'b option</code>!</p>
+
+<p>Should we extend the <code>repr</code> type constructor to also take a <code>repr
+option -&gt; repr option</code> type?  This additional type represents the
+option to evaluate under a lambda without knowing the argument’s
+value.</p>
+
+<p>In fact, this is all we need for our direct-style PE use case, but a
+CPS transformation might want the non-option case.  Another angle is
+to add more complexity with an “arrow” type constructor.  I think we
+can type check that by macro expansion, while abstracting with
+polymorphic types and refinement predicates?</p>
+
+<p>OK, so we just have to switch to de bruijn indexes http://okmij.org/ftp/tagless-final/course/PE-dB.html ??</p>
+
+<p>Let’s make sure we can make that work with refinement preservation??</p>
+
+<p>OR OR OR… we can make the environment bind to a special Option type,
+where instances can’t be constructed directly, and thus None is only
+accessible if we found a None binding.  If all bound values are
+populated, then we can’t get a “None” value out… ?</p>
+
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Dec
+  
+5th, 
+2020
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/" title="Previous Post: 1.5x the PH bits for one more CLMUL">&laquo; 1.5x the PH bits for one more CLMUL</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2021 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>
