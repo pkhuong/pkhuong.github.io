@@ -118,132 +118,150 @@ Jan
 <p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
 
 
-<div class="entry-content" style="font-family: ; font-size: "><p>Having more than satisfied the <a href="https://wiki.c2.com/?RuleOfThree">rule of three</a>, I feel comfortable claiming
-that one’s representation of first resort for binary logs
-(write-ahead, recovery, replay, or anything else that may be
-consumed by a program) should use a 
+<div class="entry-content" style="font-family: ; font-size: "><p>Having more than satisfied the <a href="https://wiki.c2.com/?RuleOfThree">rule of three</a>,
+I feel comfortable claiming that one’s representation of first resort
+for binary logs (write-ahead, recovery, replay, or anything else that
+may be consumed by a program) should use a
 <a href="https://en.wikipedia.org/wiki/Self-synchronizing_code">self-synchronising code</a>.</p>
 
 <p>At <a href="https://www.backtrace.io">Backtrace</a>, we’ve settled on a variant of 
 <a href="http://www.stuartcheshire.org/papers/COBSforToN.pdf">consistent overhead byte stuffing (COBS)</a>
-that improves encoding and decoding speed at the expense of higher buffering
-requirements (up to 64KB instead of 254 bytes).  We target servers and
-always access full records at a time, so this downside is a non-issue for us.</p>
+that improves encoding and decoding speed at the expense of increased
+buffering requirements (up to 64KB instead of 254 bytes).  We target
+servers and always access full records at a time, so this downside is
+a non-issue for us.</p>
 
-<p>I’ll describe the format later in this post.  Bur first, why do I
+<p>I’ll describe the format later in this post.  But first, why do I
 make that claim?</p>
 
 <h2 id="why-is-self-synchronisation-important">Why is self-synchronisation important?</h2>
 
 <p>Logs are never more useful than when things go wrong, so it’s crucial
-that they be robust and simple to write. 
-<a href="https://en.wikipedia.org/wiki/Self-synchronizing_code">Self-synchronising encodings</a>
+that they be robust and simple to write.  Of course, the storage layer
+should detect and correct errors, but things will sometimes fall
+through, especially for on-premises software, where no one fully
+controls deployments.  When that happens, we should aim for graceful
+partial failure, rather than losing all data in a file whenever one of
+its pages goes to the great bit bucket in the sky.</p>
+
+<p><a href="https://en.wikipedia.org/wiki/Self-synchronizing_code">Self-synchronising encodings</a>
 like <a href="https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing">COBS</a>
 can not only recover from overwritten data (e.g., when a network
-switch flipped a bit, or weak error handling in a filesystem results
-in silently zero-filling a page), but also from garbage inserted in
+switch flips a bit, or weak error handling in a filesystem results
+in a silently zero-filled page), but also from garbage inserted in
 the middle of a stream, and even from vanishing bytes (e.g., a
-couple bytes lost to incorrect ad hoc backup logic).</p>
+couple bytes lost to buggy ad hoc backup logic).</p>
 
 <p>A COBS encoding for log records achieves all that by unambiguously
 separating records with a reserved byte (e.g., 0), and encoding each
-record to avoid that separator byte.  A reader can thus assume that a
-potential record starts at a log file’s first byte, that a record
-ends at the last byte, and otherwise look for separator bytes
-to know where to cut records.  When data is lost or corrupt, the only
-records affected are those that immediately surround the bad data: the
-reader’s re-synchronises to a good state as soon as it finds a
-valid separator byte in the stream of log byte.</p>
+record to avoid that separator byte.  A reader can thus assume that
+potential records starts and end at a log file’s first and last bytes,
+and otherwise look for separator bytes to determine where to cut
+records.  When bytes are lost, inserted, or overwritten, the only
+records affected are those that immediately surround the corruption:
+readers resynchronise as soon as they find a valid separator byte in
+the encoded stream.</p>
 
 <p>This encoding does not reliably detect invalid records; it only
-guarantees that readers can always identify where valid records begin and
-end, when these records are not corrupt nor next to corrupt
-(overwritten, missing, or inserted) data.  Corruption (e.g., a
-duplicated page) may result in hallucinating framed data; higher-level
-code should compare checksums once potential records are identified,
-and the log consuming logic itself should handle duplicate data.</p>
+guarantees that readers can always identify where valid records begin
+and end, for records that aren’t corrupt nor next to corrupt
+(missing, inserted, or overwritten) data.  Corruption (e.g., a
+duplicated page) may lead readers to hallucinate correctly framed
+data; higher-level code should compare checksums once potential
+records are identified, and the log processing logic itself should
+handle duplicate valid records.</p>
 
-<p>On the write side, the encoding logic is simple (couple dozen lines of
-C code), and uses a predictable amount of space, as expected from an
-algorithm suitable for microcontrollers.</p>
+<p>On the write side, the encoding logic is simple (a couple dozen lines
+of C code), and uses a predictable amount of space, as expected from
+an algorithm suitable for microcontrollers.</p>
 
-<p>Actually writing encoded data is also simple: on POSIX filesystems, we can
-make sure each record is delimited (e.g., prefixed with the
-delimiter byte), and issue a
+<p>Actually writing encoded data is also easy:
+on POSIX filesystems, we can make sure each record is delimited (e.g.,
+prefixed with the delimiter byte), and issue a
 <a href="https://pubs.opengroup.org/onlinepubs/007904875/functions/write.html">regular <code>O_APPEND</code> write(2)</a>.
 Vectored writes can even insert delimiters without copying in
 userspace.</p>
 
 <p>When a write errors out, we can blindly (maybe once or twice) try
 again: the encoding is independent of the output file’s state.  When a
-write is cut short, we can just issue the same<sup id="fnref:suffix" role="doc-noteref"><a href="#fn:suffix" class="footnote">1</a></sup> write call: the
-encoding and the read-side logic already protect against that kind of
-corruption.</p>
+write is cut short, we can still issue the same<sup id="fnref:suffix" role="doc-noteref"><a href="#fn:suffix" class="footnote">1</a></sup> write call,
+without trying to “fix” the short write: the encoding and the
+read-side logic already protect against that kind of corruption.</p>
 
-<p>What if multiple threads or processes write to the same log file? If
-we <a href="https://pubs.opengroup.org/onlinepubs/007904875/functions/open.html">open with <code>O_APPEND</code></a>, the operating system can handle the rest.  This
-doesn’t make contention disappear, but at least we’re not adding
-a bottleneck in userspace on top of what is necessary to append to
-the same file.</p>
+<p>What if multiple threads or processes write to the same log file?
+When we <a href="https://pubs.opengroup.org/onlinepubs/007904875/functions/open.html">open with <code>O_APPEND</code></a>,
+the operating system can handle the rest.  This doesn’t make
+contention disappear, but at least we’re not adding a bottleneck in
+userspace on top of what is necessary to append to the same file.</p>
 
-<p>This simplicity also plays well 
+<p>This simplicity also plays well  with
 <a href="https://kernel.dk/io_uring.pdf">high-throughput I/O primitives like <code>io_uring</code></a>, and with 
 <a href="https://docs.microsoft.com/en-us/rest/api/storageservices/append-block">blob stores that support appends</a>:
-independent workers can concurrently queue up blind append requests, and
-retry on failure.  There’s no need for application-level concurrency
-control.</p>
+independent workers can concurrently queue up blind append requests and
+retry on failure.
+There’s no need for application-level mutual exclusion or rollback.</p>
 
 <h2 id="fun-tricks-with-robust-readers">Fun tricks with robust readers</h2>
 
-<p>Our log encoding lets readers recover from missing bytes; we also
-assume that readers rejec invalid records, and that the log processing
-logic itself handles duplicate records.  These are table stakes for a
-reliable log consumer.</p>
+<p>Our log encoding lets readers recover from bad bytes; we also assume
+that readers reject invalid records, and that the log processing logic
+handles duplicate records.  These are table stakes for a reliable log
+consumer.</p>
 
 <p>What I find interesting is that we can turn this robustness into
 new capabilities.</p>
 
 <p>It’s often useful to process the tail of a log at a regular cadence.
 For example, I once maintained a system that regularly tailed hourly
-logs to maintain approximate views up to date, and re-computed
-everything from scratch once the data was old enough, to make sure the
-views were eventually accurate. One could support that use case with
-length footers on each record… however, with COBS framing, we can
-also start scanning for a valid record from an arbitrary byte
-location, and then process the rest of the data.</p>
+logs to update approximate views. One could support that use case with
+length footers… however, with COBS framing, we can also start
+scanning for a valid record from an arbitrary byte location, and read
+the rest of the data normally.</p>
 
-<p>When logs grow large enough, we want to process them in parallel.  A
-simple solution is to shard log streams, but that unfortunately
+<p>When logs grow large enough, we want to process them in parallel.  The
+standard solution is to shard log streams, but that unfortunately
 couples the parallelisation and storage strategies, and
-adds complexity to the write side.  With COBS framing, we can partition a
-data file arbitrarily (e.g., in fixed size chunks) for independent
-workers.  A worker will scan for the first valid record starting at or
-after its start byte, and handle every record that <em>starts</em> in its
-assigned range; this last condition guarantees we’ll process records that
+adds complexity to the write side.</p>
+
+<p>With COBS framing, we can partition a data file arbitrarily (e.g., in
+fixed size chunks) for independent workers.  A worker will scan for
+the first valid record starting inside its assigned chunk, and handle
+every record that <em>starts</em> in its chunk. Filtering on the start byte
+means that a worker may read past the logical end of its chunk, in order
+to fully read the last record that starts in the chunk: that’s how we
+unambiguously assign a worker to every record, including records that
 straddle chunk boundaries.</p>
 
-<p>In fact, random access even lets us implement a form of binary or
-interpolation search on raw unindexed logs, when we known the records
-are (k-)sorted on the search key!</p>
+<p>Random access even lets us implement a form of binary or interpolation
+search on raw unindexed logs, when we know the records are (k-)sorted
+on the search key!</p>
 
-<p>Eventually, we might also want to truncate our logs.  We can do so by
-simply punching a hole at the head of log files, or
-<a href="https://man7.org/linux/man-pages/man2/fallocate.2.html">collapsing old data away</a>.
+<p>Eventually, we might also want to truncate our logs.</p>
+
+<p>Contemporary filesystems like XFS (and even Ext4) support large sparse
+files.  For example, sparse files can reach \(2^{63} - 1\) bytes on
+XFS with a minimal metadata-only footprint: the on-disk data for such
+sparse files is only allocated when we issue actual writes.  Nowadays,
+we can <a href="https://lwn.net/Articles/415889/">sparsify files after the fact</a>,
+and convert ranges of non-zero data into zero-filled “holes” in order
+to release storage without messing with file offsets
+(or even atomically
+<a href="https://lwn.net/Articles/589260/">collapse old data away</a>).
 Filesystems can only execute these operations at coarse granularities,
-but it’s safe to leave garbage behind for readers to ignore, as long
-as they implement logic to skip sparse holes.</p>
+but that’s not an issue for our readers: they must merely remember to
+skip sparse holes, and the decoding loop will naturally handle any
+garbage partial record left behind.</p>
 
-<h2 id="backtraces-variant-of-byte-stuffing"><a href="https://www.backtrace.io">Backtrace</a>’s variant of byte stuffing</h2>
+<h2 id="backtraces-word-stuffing-variant"><a href="https://www.backtrace.io">Backtrace</a>’s word stuffing variant</h2>
 
 <p><a href="http://www.stuartcheshire.org/papers/COBSforToN.pdf">Cheshire and Baker’s original byte stuffing scheme</a>
-targets small machines and slow transport (amateur radio and
+targets small machines and slow transports (amateur radio and
 phone lines).  That’s why it bounds the amount of buffering needed to
-254 bytes for writers and one 1-byte counter for readers, and
-attempts to minimise space overhead, beyong its worst-case bound of
-0.4%.</p>
+254 bytes for writers and 9 bits of state for readers, and attempts to
+minimise space overhead, beyond its worst-case bound of 0.4%.</p>
 
 <p>The algorithm is also reasonable. A writer buffers data until it
-encounters a forbidden 0 (delimiter) “stuff” byte, or there’s 254
+encounters a forbidden 0 “stuff” byte (a delimiter byte), or there are 254
 bytes of buffered data.  Whenever a writer stops buffering, it outputs a
 block, whose contents are described by its first byte.  If the
 writer stopped buffering because it found a “stuff” byte, it emits one
@@ -257,8 +275,23 @@ end of a record with an implicit delimiter: when we run out of data to
 decode, we should have just decoded an extra delimiter byte that’s not
 really part of the data.</p>
 
+<p>With framing, an encoded record surrounded by delimiters thus looks like the following</p>
+
+<pre><code>|0   |blen|(blen - 1) literal data bytes....|blen|literal data bytes ...|0    |
+</code></pre>
+
+<p>The delimiting “0” bytes are optional at the beginning and end of a
+file, and each <code>blen</code> size prefix is one byte with value in
+\([1, 255]\).  A value \(\mathtt{blen} \in [1, 254]\) represents
+a block \(\mathtt{blen} - 1\) literal bytes, followed by an implicit
+“stuff” 0 byte.  If we instead have \(\mathtt{blen} = 255\), we
+have a block of \(254\) bytes, without any implicit byte.  Readers
+only need to remember how many bytes remain until the end of the
+current block (one byte for a counter), and whether they should insert
+an implicit stuff byte before decoding the next block (one binary flag).</p>
+
 <p>We have different goals for the software we write at <a href="https://www.backtrace.io">Backtrace</a>.
-For our logging use cases, we pass wround fully constructed records,
+For our logging use cases, we pass around fully constructed records,
 and we want to issue a single atomic write syscall per record.
 Buffering is baked in, so there’s no point in making sure we can work
 with a small write buffer.  We also don’t care as much about the space
@@ -270,47 +303,66 @@ stuffing scheme.</p>
 
 <p>In the past, I’ve seen
 <a href="https://issues.apache.org/jira/browse/AVRO-27">“word” stuffing schemes</a>
-that aim to reduce the runtime overhead of COBS codecs by scaling up
+aim to reduce the runtime overhead of COBS codecs by scaling up
 the COBS loops to work on two or four bytes at a time.  However,
-searching for a byte is trivial to vectorise, and there is no
-guarantee that frameshift corruption will be aligned to word
-boundaries (for example, POSIX allows short writes to stop after an
-arbitrary number of bytes).</p>
+a byte search is trivial to vectorise, and there is no guarantee that
+frameshift corruption will be aligned to word boundaries (for example,
+POSIX allows short writes of an arbitrary number of bytes).</p>
 
 <p>Our hybrid word-stuffing instead looks for a forbidden two-byte
 delimiter sequence at arbitrary byte offsets.  We must still
 conceptually process bytes one at a time, but we can now encode
-wider spans of literal data (up to almost \(2^{16} =
-64\textrm{KB}\)), and that’s a win on larger records: short
-variable-length <code>memcpy</code> aren’t great.</p>
+wider spans of literal data (nearly up to \(2^{16} = 64\textrm{KB}\)),
+and that’s a win when encoding larger records: short variable-length
+<code>memcpy</code> aren’t great.</p>
 
-<p>Delimiting with a pair of bytes instead of only one byte also makes it
+<p>Delimiting with a pair of bytes instead of with a single byte also makes it
 easier to carefully select a delimiter that’s unlikely to appear in our data.
-Cheshire and Baker aim for the opposite, and suggest to use a frequent
-byte (0) to eliminate the space overhead in the common case.  We care
-a lot more about encoding and decoding speed, so an unlikely delimiter
-makes more sense for us.  We picked <code>0xfe 0xfd</code> because that sequence 
-doesn’t appear in small integer (unsigned, two’s complement, varint)
-regardless of endianness, nor in valid UTF-8 data.</p>
+Cheshire and Baker do the opposite, and use a frequent byte (0) to
+eliminate the space overhead in the common case.  We care a lot more
+about encoding and decoding speed, so an unlikely delimiter makes more
+sense for us.  We picked <code>0xfe 0xfd</code> because that sequence doesn’t
+appear in small integers (unsigned, two’s complement, varint, single
+or double float) regardless of endianness, nor in valid UTF-8 data.</p>
 
 <p>With a 2-byte forbidden sequence, we can encode the size of each block
 in radix 253 (<code>0xfd</code>), which goes up to \(253^2 - 1 = 64008\).
-That’s a reasonable size for <code>memcpy</code>.  With this radix conversion, we
-don’t need any off-by-one weirdness: that part of the original COBS
-algorithm actually convert values in \([0, 254]\) to one byte while
-avoiding the stuff byte, 0.</p>
+That’s a reasonable size for <code>memcpy</code>.  The radix conversion replaces
+the off-by-one weirdness in COBS: that part of the original algorithm
+actually encodes values in \([0, 254]\) into one byte while avoiding
+the 0 stuff byte.</p>
 
 <p>A two-byte size prefix is a bit ridiculous for small records (our
-records tend to be on the order of 30-50 bytes). We encode the first
-block specially, with a single radix-253 byte for the size prefix.
-Since the stuff sequence <code>0xfe 0xfd</code> is unlikely to appear in our
-data, the encoding for short record often boils down to adding a byte-sized 
-length prefix.</p>
+records tend to be on the order of 30-50 bytes). We thus encode the
+first block specially, with a single radix-253 byte for the size
+prefix.  Since the stuff sequence <code>0xfe 0xfd</code> is unlikely to appear in
+our data, the encoding for short record often boils down to adding a
+byte-sized length prefix.</p>
 
-<p>The encoding algorithm is only slightly more complex than the original
-COBS scheme.</p>
+<p>A framed encoded record now looks like</p>
+<pre><code>|0xfe|0xfd|blen|blen literal bytes...|blen_1|blen_2|literal bytes...|0xfe|0xfd|
+</code></pre>
 
-<p>Assume the data to encode has been appended with the 2-byte stuff
+<p>The first <code>blen</code> is in \([0, 252]\) and tells us how many literal
+bytes follow in the initial block.  If the initial \(\mathtt{blen} =
+252\), the literal bytes are immediately followed by the next block’s
+decoded contents.  Otherwise, we must first append an implicit <code>0xfe
+0xfd</code> stuff sequence… which may be the artificial stuff sequence we
+virtually append at the end of every record before encoding.</p>
+
+<p>Every subsequent block comes with a two-byte size prefix, in little-endian
+radix-253.  In other words, <code>|blen_1|blen_2|</code> represents the
+block size \(\mathtt{blen}\sb{1} + 253 \cdot \mathtt{blen}\sb{2}\), where
+\(\mathtt{blen}_{{1, 2}} \in [0, 252]\).  Again, if the block
+size is the maximum encodable value, \(253^2 - 1 = 64008\), we
+have literal data followed by the next block; otherwise, we must
+append a <code>0xfe 0xfd</code> stuff sequence to the decoded output before
+moving on to the next block.</p>
+
+<p>The encoding algorithm is only slightly more complex than for the
+original COBS scheme.</p>
+
+<p>Assume the data to encode is suffixed with an artificial 2-byte stuff
 sequence <code>0xfe 0xfd</code>.</p>
 
 <p>For the first block, look for the stuff sequence in the first 252
@@ -322,7 +374,7 @@ by 252 bytes of data, and resume regular encoding after those bytes.</p>
 
 <p>For regular (all but the first) blocks, look for the stuff sequence in
 the next 64008 bytes.  If we find it, emit the sequence’s byte offset
-(must be less than 64008) in little endian radix 253, followed by the
+(must be less than 64008) in little-endian radix 253, followed by the
 data up to but not including the stuff sequence, and resume encoding
 after the sequence.  If we don’t find the stuff sequence, emit 64008
 in radix 253 (<code>0xfc 0xfc</code>), copy the next 64008 bytes of data, and
@@ -336,15 +388,29 @@ delimit the end of the record).</p>
 
 <p>You can find our <a href="https://gist.github.com/pkhuong/8736396cee3c54f0a12840e5b8978697#file-word_stuff-h">MIT-licensed implementation in this gist</a>.</p>
 
+<p>When encoding short records, we already noted that the encoding step
+is often equivalent to adding a one-byte size prefix.  In fact, we can
+encode and decode all records of size up to \(252 + 64008 = 64260\)
+bytes in place, and only ever have to slide the initial 252-byte
+block: whenever a block is shorter than the maximum length (252 bytes
+for the first block, 64008 for subsequent ones), that’s
+because we found a stuff sequence in the decoded data.  We can replace
+that stuff sequence with a size header when encoding, and undo the
+operation when decoding.</p>
+
+<p>Our code does not implement these optimisations because encoding and
+decoding stuffed bytes aren’t bottlenecks for our use cases, but it’s
+good to know that we’re nowhere near the performance ceiling.</p>
+
 <h2 id="a-resilient-record-stream-on-top-of-word-stuffing">A resilient record stream on top of word stuffing</h2>
 
-<p>The stuffing scheme only provides resilient framing.  That’s good, but
-not enough for a record abstraction.  At the very least, we need a
-checksum, to detect invalid records that happen to be correctly
-encoded (e.g., a non-stuff literal byte was overwritten with another
-non-stuff byte).</p>
+<p>The stuffing scheme only provides resilient framing.  That’s
+essential, but not enough for a record abstraction.  At the very
+least, we need checksums in order to detect invalid records that
+happen to be correctly encoded (e.g., when a non-stuff literal byte is
+overwritten).</p>
 
-<p>Our (pre-stuffed) records start with the little-endian header</p>
+<p>Our pre-stuffed records start with the little-endian header</p>
 
 <pre><code>struct record_header {
         uint32_t crc;
@@ -358,75 +424,81 @@ arbitrary 32-bit payload that we added for forward compatibility.
 There is no size field: the framing already handles that.</p>
 
 <p>The remaining bytes in a record are an arbitrary payload.  We use
-protobuf messages to help with schema evolution (and keep them small
+protobuf messages to help with schema evolution (and keep messages small
 and flat for decoding performance), but there’s no special coupling
 between the stream of word-stuffed records and the payload’s 
 format.</p>
 
-<p>For writers, <a href="https://gist.github.com/pkhuong/8736396cee3c54f0a12840e5b8978697#file-record_stream-h">our MIT-licensed implementation</a>
-can write to buffered <code>FILE</code> streams, or directly to file descriptors.
-Buffered streams offer higher write throughput, but are only safe
-if synchronisation and flushing happens at a higher level; we use them
-as part of a commit protocol that handles
-<a href="https://pubs.opengroup.org/onlinepubs/009695399/functions/fsync.html">fsync</a>
-and publishes data with
-<a href="https://pubs.opengroup.org/onlinepubs/009695399/functions/rename.html">atomic <code>rename</code> syscalls</a>.
-During normal operations, we instead use file descriptors opened with
-<code>O_APPEND</code> and a background fsync worker: in practice, the kernel is
-more stable than our software, so it’s more important that log records
-immediately reach the kernel than all the way to persistent storage.</p>
+<p><a href="https://gist.github.com/pkhuong/8736396cee3c54f0a12840e5b8978697#file-record_stream-h">Our MIT-licensed implementation</a>
+let writers output to buffered <code>FILE</code> streams, or directly to file descriptors.</p>
 
-<p>For readers, we can either read from a buffer, or <code>mmap</code> a file
-descriptor in, and read from the resulting buffer.  While we expose a
-linear iterator interface, we can also override the start and stop
-byte offset of an iterator; we use that capability to replay logs in
-parallel.  Finally, when readers advance an iterator they choose to
-receive a raw data buffer, or have it decoded with a protobuf descriptor.</p>
+<p>Buffered streams offer higher write throughput, but are only safe
+when the caller handles synchronisation and flushing; we use them
+as part of a commit protocol that
+<a href="https://pubs.opengroup.org/onlinepubs/009695399/functions/fsync.html">fsync</a>s
+and publishes files with
+<a href="https://pubs.opengroup.org/onlinepubs/009695399/functions/rename.html">atomic <code>rename</code> syscalls</a>.
+During normal operations, we instead write to file descriptors opened with
+<code>O_APPEND</code> and a background fsync worker: in practice, the operating
+system is more stable than our software, so it’s more important that
+encoded records immediately make it to the kernel than all the way to
+persistent storage.</p>
+
+<p>For readers, we can either read from a buffer, or <code>mmap</code> in a file,
+and read from the resulting buffer.  While we expose a linear iterator
+interface, we can also override the start and stop byte offset of an
+iterator; we use that capability to replay logs in parallel.  Finally,
+when readers advance an iterator, they can choose to receive a raw data
+buffer, or have it decoded with a protobuf message descriptor.</p>
 
 <h2 id="whats-next">What’s next?</h2>
 
-<p>We have happily been using this log format to store metadata records
-that we replay every time the <a href="https://www.backtrace.io">Backtrace</a> server restarts.
-Decoupling writes from the parallel read strategy let us work on
-startup times incrementally without any hard migration.  The use of a
-real schema language (protocol buffers) also made it easier to start
-small and incrementally add more optional metadata, before forcing a
-hard switch-over.</p>
+<p>We have happily been using this log format for more than nine months
+to store metadata records that we replay every time the
+<a href="https://www.backtrace.io">Backtrace</a> server restarts.</p>
 
-<p>This piece-meal approach let us transition from a length-prefixed
-data format to one where all important metadata lives in a record
+<p>Decoupling writes from the parallel read strategy let us improve our
+startup time incrementally, without any hard migration.  Serialising
+with a real schema language (protocol buffers) also made it easier to
+start small and slowly add optional metadata, before forcing a hard
+switch-over.</p>
+
+<p>This piece-meal approach let us transition from a length-prefixed data
+format to one where all important metadata lives in a resilient record
 stream, without breaking backward compatibility.  We slowly added more
-metadata to the record stream and parallelised loading from the
-metadata record stream, while preserving backward compatibility.
-Finally, nearly 6 months later, we flipped the switch and made the
-new, more robust, format mandatory; the old length-prefixed data files
-still exist, but are now treated as bags of arbitrary checksummed
-data bytes, with all the control metadata in record streams.</p>
+metadata to records and eventually parallelised loading from the
+metadata record stream, all while preserving backward and forward
+compatibility.  Finally, six months after the initial rollout, we
+flipped the switch and made the new, more robust, format mandatory;
+the old length-prefixed data files still exist, but are now treated as
+bags of arbitrary checksummed data bytes, with all the control
+metadata in record streams.</p>
 
 <p>By now, we’ve had a respectable amount of pleasant operational
 experience with the format, and, while performance is more than good
-enough for us (the parallel loading phase is bottlenecked on disk I/O
-and <code>protobuf-c</code>), we also know there’s plenty of
-headroom: short records can usually be decoded without any write, and
-<em>all</em> records could be decoded in-place with a single byte of head
-padding.</p>
+enough for us (the parallel loading phase is currently dominated by
+disk I/O and parsing in <code>protobuf-c</code>), we also know there’s plenty of
+headroom: our records are short enough that they can usually be
+decoded without any write, and always in place, by replacing every
+2-byte block length prefix with the stuff sequence.</p>
 
-<p>We’re now starting to work on distributing our single-node embedded
-database and making it interact more easily with other data stores.
-The first step will be generating a
+<p>We’re now starting laying the groundwork to distribute our single-node
+embedded database and making it interact more fluently with other data
+stores.  The first step will be generating a
 <a href="https://materialize.com/change-data-capture-part-1/">change data capture stream</a>,
 and re-using the word-stuffed record format was an obvious choice.</p>
 
 <p>Word stuffing is simple, efficient, and robust.  If you can’t just
-rely on a real database (maybe you’re trying to write one yourself)
-for your data stream, give it a shot!  Feel free to use our
-MIT-licensed code, or simply write your own implementation.</p>
+defer to a real database (maybe you’re trying to write one yourself)
+for your data stream, give it a shot!  Feel free to
+<a href="https://gist.github.com/pkhuong/8736396cee3c54f0a12840e5b8978697">try our MIT-licensed code</a>
+ if you don’t want to write your own.</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
   <ol>
     <li id="fn:suffix" role="doc-endnote">
-      <p>If you append with the delimiter, it probably makes sense to special-case short writes and prepend with the delimiter after failures, to let readers resynchronise. <a href="#fnref:suffix" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>If you append with the delimiter, it probably makes sense to special-case short writes and also prepend with the delimiter after failures, in order to help readers resynchronise. <a href="#fnref:suffix" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:initialize-your-crc" role="doc-endnote">
       <p>We overwrite the <code>crc</code> field with <code>UINT32_MAX</code> before computing a checksum for the header and its trailing data.  It’s important to avoid zero prefixes because the result of crc-ing a 0 byte into a 0 state is… 0. <a href="#fnref:initialize-your-crc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
