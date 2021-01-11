@@ -139,7 +139,7 @@ decoding, resilience to data corruption, and a restricted form of
 random access decoding.</p>
 
 <p>Before describing
-<a href="https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-readme-md">the encoding we used in our migration</a>,
+<a href="https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-00record_stream-md">the encoding we used in our migration</a>,
 let’s first support this claim.</p>
 
 <h2 id="why-is-self-synchronisation-important">Why is self-synchronisation important?</h2>
@@ -581,7 +581,7 @@ and re-using the word-stuffed record format was an obvious choice.</p>
 <p>Word stuffing is simple, efficient, and robust.  If you can’t just
 defer to a real database (maybe you’re trying to write one yourself)
 for your log records, give it a shot!  Feel free to
-<a href="https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-readme-md">try our MIT-licensed code</a>
+<a href="https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-00record_stream-md">try our MIT-licensed code</a>
 if you don’t want to roll your own.</p>
 
 <p><small> Thank you, Ruchir and Alex, for helping me clarify and restructure an earlier version. </small></p>
@@ -593,7 +593,7 @@ if you don’t want to roll your own.</p>
       <p>If you append with the delimiter, it probably makes sense to special-case short writes and also prepend with the delimiter after failures, in order to make sure readers will observe a delimiter before the new record. <a href="#fnref:suffix" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:why-not-fewer" role="doc-endnote">
-      <p>High-throughput writers should batch records.  We implemented a straightforward syscall-per-record scheme because the write load for the current use case is so sporadic that any batching logic would usually end up writing individual records.  For now, batching would introduce complexity and bug potential for a minimal impact on write throughput. <a href="#fnref:why-not-fewer" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>High-throughput writers should batch records.  We do syscall-per-record because the write load for the current use case is so sporadic that any batching logic would usually end up writing individual records.  For now, batching would introduce complexity and bug potential for a minimal impact on write throughput. <a href="#fnref:why-not-fewer" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:initialize-your-crc" role="doc-endnote">
       <p>We overwrite the <code>crc</code> field with <code>UINT32_MAX</code> before computing a checksum for the header and its trailing data.  It’s important to avoid zero prefixes because the result of crc-ing a 0 byte into a 0 state is… 0. <a href="#fnref:initialize-your-crc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
