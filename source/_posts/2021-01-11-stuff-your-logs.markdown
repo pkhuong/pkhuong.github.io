@@ -1,9 +1,8 @@
 ---
 layout: post
 title: "Stuff your logs!"
-date: 2021-01-08 13:11:23 -0500
-hidden: true
-draft: true
+author: Paul Khuong
+date: 2021-01-11 15:11:23 -0500
 comments: true
 categories:
 ---
@@ -20,49 +19,71 @@ corruption in local files, and then parallelise data hydration, which
 improved startup times by a factor of 10... without any hard
 migration from the old to the current on-disk data format.
 
-Given this and prior experiences with COBS, I feel comfortable
-claiming that one's representation of first resort for binary logs
-(write-ahead, recovery, replay, or anything else that may be consumed
-by a program) should use a self-synchronising code.  Such codes can
-offer low space overhead for framing, fast encoding and faster
-decoding, resilience to data corruption, and a restricted form of
-random access decoding.
+In this post, I will explain why I believe that the representation of
+first resort for binary logs (write-ahead, recovery, replay, or
+anything else that may be consumed by a program) should be
+self-synchronising, backed by this migration and by prior experience
+with COBS-style encoding.  I will also describe the
+[specific algorithm (available under the MIT license)](https://github.com/backtrace-labs/stuffed-record-stream)
+we implemented for our server software.
 
-Before describing
-[the encoding we used in our migration](https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-00record_stream-md),
-let's first support this claim.
+This encoding offers low space overhead for framing, fast encoding and
+faster decoding, resilience to data corruption, and a restricted form
+of random access.  Maybe it makes sense to use it for your own data!
 
-Why is self-synchronisation important?
---------------------------------------
+What is self-synchronisation, and why is it important?
+------------------------------------------------------
 
-Logs are never more useful than when things go wrong, so it's crucial
-that they be simple to write and robust.  Of course, the storage layer
-should detect and correct errors, but things will sometimes fall
-through... especially for on-premises software, where no one fully
-controls deployments.  When that happens, we should aim for graceful
-partial failure, rather than, e.g., losing all the data in a file
-whenever one of its pages goes to the great bit bucket in the sky.
+A [code is self-synchronising](https://en.wikipedia.org/wiki/Self-synchronizing_code)
+when it's always possible to unambiguously detect where a valid code
+word (record) starts in a stream of symbols (bytes).  That's a
+stronger property than prefix codes like Huffman codes, which only
+detect when valid code words end.  For example, the UTF-8
+encoding is self-synchronising, because initial bytes and continuation
+bytes differ in their high bits.  That's why it's possible to decode
+multi-byte code points when tailing a UTF-8 stream.
+
+The UTF-8 code was designed for small integers (Unicode code points),
+and can double the size of binary data.  Other encodings are more
+appropriate for arbitrary bytes; for example,
+[consistent overhead byte stuffing (COBS)](http://www.stuartcheshire.org/papers/COBSforToN.pdf),
+a self-synchronising code for byte streams, offers a worst-case
+space overhead of one byte plus a 0.4% space blow-up.
+
+Self-synchronisation is important for binary logs because it lets us
+efficiently (with respect to both run time and space overhead) frame
+records in a simple and robust manner... and we want simplicity and
+robustness because logs are most useful when something has gone wrong.
+
+Of course, the storage layer should detect and correct errors, but
+things will sometimes fall through, especially for on-premises
+software, where no one fully controls deployments.  When that happens,
+graceful partial failure is preferable to, e.g., losing all the
+information in a file because one of its pages went to the great bit
+bucket in the sky.
 
 One easy solution is to spread the data out over multiple files or
 blobs.  However, there's a trade-off between keeping data
 fragmentation and file metadata overhead in check, and minimising the
-blast radius of minor corruption.  Our server also runs
-independently on individual nodes, so is unable to exercise additional
-options available to replicated systems... but bugs
-tend to be correlated across replicas, so there is something to be
-said for defense in depth, even with distributed storage.
+blast radius of minor corruption.  Our server must be able to run
+on isolated nodes, so we can't rely on design options available to
+replicated systems... plus bugs tend to be correlated across replicas,
+so there is something to be said for defense in depth, even with
+distributed storage.
 
-When each record is converted to a
+When each record is converted with a
 [self-synchronising code](https://en.wikipedia.org/wiki/Self-synchronizing_code)
 like
 [COBS](https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing)
-before persisting to disk, we can guarantee that any corrupt range of
-data will only make us lose the records directly impacted by the
-corruption, and, at most, the two records that immediately precede or
-follow the corrupt range.  This guarantee covers overwritten data
-(e.g., when a network switch flips a bit, or a read syscall silently
-errors out with a zero-filled page), as well as bytes removed or garbage
-inserted in the middle of log files.
+before persisting to disk, we can decode all records that weren't
+directly impacted by corruption, exactly like decoding a stream of
+mostly valid UTF-8 bytes.  Any form of corruption will only make
+us lose the records whose bytes were corrupted, and, at most, the two records
+that immediately precede or follow the corrupt byte range.  This
+guarantee covers overwritten data (e.g., when a network switch flips a
+bit, or a read syscall silently errors out with a zero-filled page),
+as well as bytes removed or garbage inserted in the middle of log
+files.
 
 The coding doesn't store redundant information: replication or erasure
 coding is the storage layer's responsibility.  It instead guarantees
@@ -91,9 +112,9 @@ on POSIX filesystems, we can make sure each record is delimited (e.g.,
 prefixed with the delimiter byte), and issue a
 [regular `O_APPEND` write(2)](https://pubs.opengroup.org/onlinepubs/007904875/functions/write.html).
 Vectored writes can even insert delimiters without copying in
-userspace.  Realistically, our code is probably less stable than the
-Linux kernel and the hardware it runs on, so we make sure our writes
-make it to the kernel as soon as possible, and let `fsync`s
+userspace.  Realistically, our code is probably less stable than
+operating system and the hardware it runs on, so we make sure our
+writes make it to the kernel as soon as possible, and let `fsync`s
 happen on a timer.
 
 When a write errors out, we can blindly (maybe once or twice) try
@@ -123,7 +144,7 @@ There's no need for application-level mutual exclusion or rollback.
 Fun tricks with robust readers
 ------------------------------
 
-Our log encoding can recover from bad bytes, as long as readers can
+Our log encoding will recover from bad bytes, as long as readers can
 detect and reject invalid records as a whole; the processing logic
 should also handle duplicated valid records.  These are table stakes
 for a reliable log consumer.
@@ -132,11 +153,11 @@ In our variable-length metadata use case, each record describes a
 symbolicated call stack, and we recreate in-memory data structures by
 replaying an append-only log of metadata records, one for each
 unique call stack.  The hydration phase handles invalid records by
-ignoring (not recreating) the call stack with corrupt metadata,
-but only that call stack.  That's definitely an improvement over the
+ignoring (not recreating) any call stack with corrupt metadata,
+but only those call stacks.  That's definitely an improvement over the
 previous situation, where corruption in a size header would prevent us
 from decoding the remainder of the file, and thus make us forget about
-*all* call stacks stored at file offsets after the corrupt header.
+*all* call stacks stored at file offsets after the corruption.
 
 Of course, losing data should be avoided, so we are careful to
 `fsync` regularly and recommend reasonable storage configurations.
@@ -163,8 +184,8 @@ COBS framing lets us parallelise readers independently of the writer.
 The downside is that the read-side code and I/O patterns are now more
 complex, but, all other things being equal, that's a trade-off I'll
 gladly accept, especially given that our servers run on independent
-machines, and we store our files on local (i.e., reads are
-fine-grained and latency relatively low) filesystems.
+machines and store their data in files, where reads are fine-grained
+and latency relatively low.
 
 A parallel COBS reader partitions a data file arbitrarily (e.g., in
 fixed size chunks) for independent workers.  A worker will scan for
@@ -197,8 +218,8 @@ but that's not an issue for our readers: they must merely remember to
 skip sparse holes, and the decoding loop will naturally handle any
 garbage partial record left behind.
 
-[Backtrace](https://www.backtrace.io)'s word stuffing variant
--------------------------------------------------------------
+The original consistent overhead byte stuffing scheme
+-----------------------------------------------------
 
 [Cheshire and Baker's original byte stuffing scheme](http://www.stuartcheshire.org/papers/COBSforToN.pdf)
 targets small machines and slow transports (amateur radio and
@@ -206,22 +227,25 @@ phone lines).  That's why it bounds the amount of buffering needed to
 254 bytes for writers and 9 bits of state for readers, and attempts to
 minimise space overhead, beyond its worst-case bound of 0.4%.
 
-The algorithm is also reasonable. A writer buffers data until it
-encounters a forbidden 0 "stuff" byte (a delimiter byte), or there are 254
-bytes of buffered data.  Whenever a writer stops buffering, it outputs a
-block whose contents are described by its first byte.  If the
-writer stopped buffering because it found a "stuff" byte, it emits one
-byte with `buffer_size + 1` before writing and clearing the
+The algorithm is also reasonable. The encoder buffers data until it
+encounters a reserved 0 byte (a delimiter byte), or there are 254
+bytes of buffered data.  Whenever the encoder stops buffering, it
+outputs a block whose contents are described by its first byte.  If
+the writer stopped buffering because it found a reserved byte, it
+emits one byte with `buffer_size + 1` before writing and clearing the
 buffer.  Otherwise, it outputs 255 (one more than the buffer size),
-followed by the buffer's contents.  On the read side, we know that the
-first byte we read describes the current block of data (255 means
-254 bytes of literal data, any other value is one more than the number
-of literal bytes to copy, followed by a "stuff" byte).  We denote the
-end of a record with an implicit delimiter: when we run out of data to
-decode, we should have just decoded an extra delimiter byte that's not
-really part of the data.
+followed by the buffer's contents.
 
-With framing, an encoded record surrounded by delimiters thus looks like the following
+On the decoder side, we know that the first byte of each block
+describes its size and decoded value (255 means 254 bytes of literal
+data, any other value is one more than the number of literal bytes to
+copy, followed by a reserved 0 byte).  We denote the end of a record
+with an implicit delimiter: when we run out of data to decode, we
+should have just decoded an extra delimiter byte that's not really
+part of the data.
+
+With framing, an encoded record surrounded by delimiters thus looks
+like the following
 
 ```
 |0   |blen|(blen - 1) literal data bytes....|blen|literal data bytes ...|0    |
@@ -231,11 +255,14 @@ The delimiting "0" bytes are optional at the beginning and end of a
 file, and each `blen` size prefix is one byte with value in
 \\([1, 255]\\).  A value \\(\mathtt{blen} \in [1, 254]\\) represents
 a block \\(\mathtt{blen} - 1\\) literal bytes, followed by an implicit
-"stuff" 0 byte.  If we instead have \\(\mathtt{blen} = 255\\), we
+ 0 byte.  If we instead have \\(\mathtt{blen} = 255\\), we
 have a block of \\(254\\) bytes, without any implicit byte.  Readers
 only need to remember how many bytes remain until the end of the
 current block (eight bits for a counter), and whether they should insert
-an implicit stuff byte before decoding the next block (one binary flag).
+an implicit 0 byte before decoding the next block (one binary flag).
+
+[Backtrace](https://www.backtrace.io)'s word stuffing variant
+-------------------------------------------------------------
 
 We have different goals for the software we write at
 [Backtrace](https://www.backtrace.io).  For our logging use case, we
@@ -249,13 +276,21 @@ do about encoding and decoding speed.
 [^why-not-fewer]: High-throughput writers should batch records.  We do syscall-per-record because the write load for the current use case is so sporadic that any batching logic would usually end up writing individual records.  For now, batching would introduce complexity and bug potential for a minimal impact on write throughput.
 
 These different design goals lead us to an updated hybrid word/byte
-stuffing scheme, with a carefully chosen two-byte stuff sequence.
-This hybrid scheme improves encoding and decoding speed, and even
-marginally lowers the asymptotic space overhead.  At the low end, the
-worst-case overhead is only slightly worse than that of traditional
-COBS: we need three additional bytes, including the framing separator,
-for records of 252 bytes or fewer, and five bytes for records of
-253-64260 bytes.
+stuffing scheme:
+
+1. it uses a two-byte "reserved sequence," carefully chosen to appear
+   infrequently in our data
+2. the size limit for the first block is slightly smaller (252 bytes instead
+   of 254)
+3. ... but the limit for every subsequent block is much larger,
+   65008 bytes, for an asymptotic space overhead of 0.0031%.
+
+This hybrid scheme improves encoding and decoding speed compared to
+COBS, and even marginally improves the asymptotic space overhead.  At
+the low end, the worst-case overhead is only slightly worse than that
+of traditional COBS: we need three additional bytes, including the
+framing separator, for records of 252 bytes or fewer, and five bytes
+for records of 253-64260 bytes.
 
 In the past, I've seen
 ["word" stuffing schemes](https://issues.apache.org/jira/browse/AVRO-27)
@@ -265,11 +300,13 @@ a byte search is trivial to vectorise, and there is no guarantee that
 frameshift corruption will be aligned to word boundaries (for example,
 POSIX allows short writes of an arbitrary number of bytes).
 
-Our hybrid word-stuffing instead looks for a forbidden two-byte
-delimiter sequence at arbitrary byte offsets.  We must still
-conceptually process bytes one at a time, but delimiting with a pair
-of bytes instead of with a single byte makes it easier to craft a
-delimiter that's unlikely to appear in our data.
+### Much ado about two bytes
+
+Our hybrid word-stuffing looks for a reserved two-byte delimiter
+sequence at arbitrary byte offsets.  We must still conceptually
+process bytes one at a time, but delimiting with a pair of bytes
+instead of with a single byte makes it easier to craft a delimiter
+that's unlikely to appear in our data.
 
 Cheshire and Baker do the opposite, and use a frequent byte (0) to
 eliminate the space overhead in the common case.  We care a lot more
@@ -310,17 +347,31 @@ have their top bit set (indicating a multi-byte code point), but neither
 looks like a continuation byte: the two most significant bits are
 `0b11` in both cases, while UTF-8 continuations must have `0b10`.
 
-With this two-byte forbidden sequence, we can encode the size of each
-block in radix 253 (`0xfd`); with a two-byte prefix per block, sizes
+### Encoding data to avoid the reserved sequence
+
+Consistent overhead byte stuffing rewrites reserved 0 bytes away by
+counting the number of bytes from the beginning of a record until the
+next 0, and storing that count in a block size header followed by the
+non-reserved bytes, then resetting the counter, and doing the same
+thing for the remaining of the record. A complete record is stored as
+a sequence of encoded blocks, none of which include the reserved
+byte 0.  Each block header spans exactly one byte, and must never
+itself be 0, so the byte count is capped at 254, and incremented by
+one (e.g., a header value of 1 represents a count of 0); when the
+count in the header is equal to the maximum, the decoder knows that
+the encoder stopped short without finding a 0.
+
+With our two-byte reserved sequence, we can encode the size of each
+block in radix 253 (`0xfd`); given a two-byte header for each block, sizes
 can go up to \\(253^2 - 1 = 64008\\).  That's a reasonable granularity
 for `memcpy`.  This radix conversion replaces the off-by-one weirdness
 in COBS: that part of the original algorithm merely encodes values
-from \\([0, 254]\\) into one byte while avoiding the "stuff" value 0.
+from \\([0, 254]\\) into one byte while avoiding the reserved byte 0.
 
 A two-byte size prefix is a bit ridiculous for small records (ours
 tend to be on the order of 30-50 bytes). We thus encode the first
 block specially, with a single byte in \\([0, 252]\\) for the size
-prefix.  Since the stuff sequence `0xfe 0xfd` is unlikely to appear in
+prefix.  Since the reserved sequence `0xfe 0xfd` is unlikely to appear in
 our data, the encoding for short record often boils down to adding a
 `uint8_t` length prefix.
 
@@ -333,7 +384,7 @@ The first `blen` is in \\([0, 252]\\) and tells us how many literal
 bytes follow in the initial block.  If the initial \\(\mathtt{blen} =
 252\\), the literal bytes are immediately followed by the next block's
 decoded contents.  Otherwise, we must first append an implicit `0xfe
-0xfd` stuff sequence... which may be the artificial stuff sequence that
+0xfd` sequence... which may be the artificial reserved sequence that
 mark the end of every record.
 
 Every subsequent block comes with a two-byte size prefix, in little-endian
@@ -342,37 +393,37 @@ block size \\(\mathtt{blen}\sb{1} + 253 \cdot \mathtt{blen}\sb{2}\\), where
 \\(\mathtt{blen}_{\{1, 2\}} \in [0, 252]\\).  Again, if the block
 size is the maximum encodable size, \\(253^2 - 1 = 64008\\), we
 have literal data followed by the next block; otherwise, we must
-append a `0xfe 0xfd` stuff sequence to the output before
+append a `0xfe 0xfd` sequence to the output before
 moving on to the next block.
 
 The encoding algorithm is only a bit more complex than for the
 original COBS scheme.
 
 Assume the data to encode is suffixed with an artificial two-byte
-stuff sequence `0xfe 0xfd`.
+reserved sequence `0xfe 0xfd`.
 
-For the first block, look for the stuff sequence in the first 252
+For the first block, look for the reserved sequence in the first 252
 bytes.  If we find it, emit its position (must be less than 251) in
-one byte, then all the data bytes up to but not including the stuff
-sequence, and enter regular encoding after the stuff sequence.  If
+one byte, then all the data bytes up to but not including the reserved
+sequence, and enter regular encoding after the reserved sequence.  If
 the sequence isn't in the first block, emit `252`, followed
 by 252 bytes of data, and enter regular encoding after those bytes.
 
-For regular (all but the first) blocks, look for the stuff sequence in
+For regular (all but the first) blocks, look for the reserved sequence in
 the next 64008 bytes.  If we find it, emit the sequence's byte offset
 (must be less than 64008) in little-endian radix 253, followed by the
-data up to but not including the stuff sequence, and skip that sequence
-before encoding the rest of the data.  If we don't find the stuff
+data up to but not including the reserved sequence, and skip that sequence
+before encoding the rest of the data.  If we don't find the reserved
 sequence, emit 64008 in radix 253 (`0xfc 0xfc`), copy the next 64008
 bytes of data, and encode the rest of the data without skipping anything.
 
-Remember that we conceptually padded the data with a stuff sequence at
+Remember that we conceptually padded the data with a reserved sequence at
 the end.  This means we'll always observe that we fully consumed the
 input data at a block boundary.  When we encode the block that stops
-at the artificial stuff sequence, we stop (and frame with a stuff
+at the artificial reserved sequence, we stop (and frame with a reserved
 sequence to delimit a record boundary).
 
-You can find our [MIT-licensed implementation in this gist](https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-word_stuff-c).
+You can find our [implementation in the stuffed-record-stream repository](https://github.com/backtrace-labs/stuffed-record-stream/blob/main/src/word_stuff.c).
 
 When writing short records, we already noted that the encoding step is
 often equivalent to adding a one-byte size prefix.  In fact, we can
@@ -380,9 +431,9 @@ encode and decode all records of size up to \\(252 + 64008 = 64260\\)
 bytes in place, and only ever have to slide the initial 252-byte
 block: whenever a block is shorter than the maximum length (252 bytes
 for the first block, 64008 for subsequent ones), that's because we
-found a stuff sequence in the decoded data.  When that happens, we can
-replace the stuff sequence with a size header when encoding, and undo
-the substitution when decoding.
+found a reserved sequence in the decoded data.  When that happens, we
+can replace the reserved sequence with a size header when encoding,
+and undo the substitution when decoding.
 
 Our code does not implement these optimisations because encoding and
 decoding stuffed bytes aren't bottlenecks for our use case, but it's
@@ -395,7 +446,7 @@ The stuffing scheme only provides resilient framing.  That's
 essential, but not enough for an abstract stream or sequence of
 records.  At the very least, we need checksums in order to detect
 invalid records that happen to be correctly encoded (e.g., when a
-non-stuff literal byte is overwritten).
+block's literal data is overwritten).
 
 Our pre-stuffed records start with the little-endian header
 
@@ -419,7 +470,7 @@ to help with schema evolution (and keep messages small and flat for
 decoding performance), but there's no special relationship between the
 stream of word-stuffed records and the payload's format.
 
-[Our MIT-licensed implementation](https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-record_stream-c)
+[Our implementation](https://github.com/backtrace-labs/stuffed-record-stream/blob/main/include/record_stream.h)
 let writers output to buffered `FILE` streams, or directly to file descriptors.
 
 Buffered streams offer higher write throughput, but are only safe
@@ -485,7 +536,7 @@ and re-using the word-stuffed record format was an obvious choice.
 Word stuffing is simple, efficient, and robust.  If you can't just
 defer to a real database (maybe you're trying to write one yourself)
 for your log records, give it a shot!  Feel free to
-[try our MIT-licensed code](https://gist.github.com/pkhuong/79054e80d672a8c23d8005ee0aa352c9#file-00record_stream-md)
+[play with our code](https://github.com/backtrace-labs/stuffed-record-stream)
 if you don't want to roll your own.
 
 <small> Thank you, Ruchir and Alex, for helping me clarify and restructure an earlier version. </small>
