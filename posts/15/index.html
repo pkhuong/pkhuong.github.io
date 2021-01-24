@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2018/06/24/an-old-conjecture-on-stream-transducers/">An old conjecture on stream transducers</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2018/07/06/testing-slo-type-properties-with-the-confidence-sequence-method/">The Confidence Sequence Method: a computer-age test for statistical SLOs</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-June
+July
   
-24th, 
+6th, 
 2018
 
 
 
 
         
-         | <a href="/Blog/2018/06/24/an-old-conjecture-on-stream-transducers/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2018/06/24/an-old-conjecture-on-stream-transducers/"
+         | <a href="/Blog/2018/07/06/testing-slo-type-properties-with-the-confidence-sequence-method/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2018/07/06/testing-slo-type-properties-with-the-confidence-sequence-method/"
 	      >Comments</a>
         
         
@@ -117,61 +117,1585 @@ June
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I’ve been thinking about stream processing again, and came back to 
-<a href="https://www.pvk.ca/Blog/Lisp/Pipes/introducing_pipes.html">an old pick-two-of-three conjecture</a>
-of mine: for stream processing without dynamic allocation, “arbitrary
-outputs per input, multiple consumers, multiple producers: choose
-two.”</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><em>This post goes over <a href="https://github.com/pkhuong/csm">some code that I pushed to github today</a>. All the snippets below should be <a href="https://github.com/pkhuong/csm/blob/master/csm.lisp">in the repo</a>,
+which also <a href="https://github.com/pkhuong/csm/blob/master/csm.h">includes</a>
+<a href="https://github.com/pkhuong/csm/blob/master/csm.c">C</a> and
+<a href="https://github.com/pkhuong/csm/blob/master/csm.py">Python code</a> with the same structure.</em></p>
 
-<p>The question is interesting because stream processing
-in constant space is a subset of <a href="https://complexityzoo.uwaterloo.ca/Complexity_Zoo:L">L</a>
-(or <a href="https://en.wikipedia.org/wiki/FL_(complexity)">FL</a>, and thus
-probably not P-complete, let alone Turing complete. Having easily characterisable
-subsets of stream processing that can be implemented in constant
-space would be a boon for the usability of stream DSLs.</p>
+<p>I recently resumed thinking about balls and bins for hash tables. This
+time, I’m looking at large bins (on the order of one 2MB huge page).
+There are 
+<a href="https://en.wikipedia.org/wiki/Cuckoo_hashing">many</a>
+<a href="https://xlinux.nist.gov/dads/HTML/twoLeftHashing.html">hashing</a>
+<a href="https://en.wikipedia.org/wiki/Dynamic_perfect_hashing">methods</a>
+with solid worst-case guarantees that unfortunately query multiple
+uncorrelated locations; I feel like we could automatically adapt them
+to modern hierarchical storage (or address translation) to make them
+more efficient, for a small loss in density.</p>
 
-<p>I think I find this academic trope as suspicious as 
-<a href="https://twitter.com/DRMacIver">@DRMavIver</a> 
-does, so I have mixed feelings about the fact that this one still
-feels true seven years later.</p>
+<p>In theory, 
+<a href="https://en.wikipedia.org/wiki/Balls_into_bins#Random_allocation">large enough bins can be allocated statically with a minimal waste of space</a>.
+I wanted some actual non-asymptotic numbers, so I 
+<a href="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/balls-and-bins.ispc">ran numerical experiments</a> and got the following distribution of
+global utilisation (fill rate) when the first bin fills up.</p>
 
-<blockquote class="tw-center-align twitter-tweet" data-lang="en"><p lang="en" dir="ltr">Is it just me or do impossibility theorems which claim &quot;these three obviously desirable properties cannot simultaneously be satisfied&quot; always include at least one obviously undesirable or at least suspicious property?</p>&mdash; David R. MacIver (@DRMacIver) <a href="https://twitter.com/DRMacIver/status/1008977092028059648?ref_src=twsrc%5Etfw">June 19, 2018</a></blockquote>
-<script async="" src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+<p><a href="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/grid.png">
+<img class="center" src="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/grid-small.png" />
+</a></p>
 
-<p>The main reason I believe in this conjecture is the following
-example, <code>F(S(X), X)</code>, where <code>S</code> is the function that takes a stream
-and ouputs every other value. Or, more formally, \(F\sb{i} = f(X\sb{2i}, X\sb{i})\).</p>
+<p>It looks like, even with one thousand bins of thirty thousand values,
+we can expect almost 98% space utilisation until the first bin
+saturates. I want something more formal.</p>
 
-<p><img class="center" src="/images/2018-06-24-an-old-conjecture-on-stream-transducers/network.png" /></p>
+<p>Could I establish something like a service level objective, “When
+distributing balls randomly between one thousand bins with individual
+capacity of thirty thousand balls, we can utilise at least 98% of the
+total space before a bin fills up, x% of the time?”</p>
 
-<p>Let’s say <code>X</code> is some stream of values that can’t be easily
-re-computed (e.g., each output value is the result of a slow
-computation). How do we then compute <code>F(S(X), X)</code> without either
-recomputing the stream <code>X</code>, or buffering an unbounded amount of past
-values from that stream? I don’t see a way to do so, not just in any
-stream processing DSL (domain specific language), but also in any
-general purpose language.</p>
+<p>The natural way to compute the “x%” that makes the proposition
+true is to first fit a distribution on the observed data, then find
+out the probability mass for that distribution that lies above 98%
+fill rate. Fitting distributions takes a lot of judgment, and I’m not
+sure I trust myself that much.</p>
 
-<p>For me, the essence of the problem is that the two inputs to <code>F</code> are
-out of sync with respect to the same source of values, <code>X</code>: one
-consumes two values of <code>X</code> per invocation of <code>F</code>, and the other only
-one. This issue could also occur if we forced stream transducers
-(processing nodes) to output a fixed number of value at each
-invocation: let <code>S</code> repeat each value of <code>X</code> twice,
-i.e., interleave <code>X</code> with <code>X</code> (\(F\sb{i} = f(X\sb{\lfloor i / 2\rfloor}, X\sb{i})\)).</p>
+<p>Alternatively, we can observe independent
+identically distributed fill rates, check if they achieve 98% space
+utilisation, and bound the success rate for this
+<a href="https://en.wikipedia.org/wiki/Bernoulli_process">Bernoulli process</a>.</p>
 
-<p>Forcing each invocation of a transducer to always produce exactly one
-value is one way to rule out this class of stream processing network.
-Two other common options are to forbid either forks (everything is
-single-use or subtrees copied and recomputed for each reuse) or
-joins (only single-input stream processing nodes).</p>
+<p>There are some non-trivial questions associated with this approach.</p>
 
-<p>I don’t think this turtle-and-hare desynchronisation problem is a
-weakness in stream DSLs, I only see a reasonable task that can’t be
-performed in constant space.  Given the existence of such tasks, I’d
-like to see stream processing DSLs be explicit about the tradeoffs
-they make to balance performance <em>guarantees</em>, expressiveness, and
-usability, especially when it comes to the performance model.</p>
+<ol>
+  <li>How do we know when to stop generating more observations… without
+fooling ourselves with \(p\)-hacking?</li>
+  <li>How can we generate something like a confidence interval for the
+success rate?</li>
+</ol>
+
+<p>Thankfully, I have been sitting on a
+<a href="https://github.com/pkhuong/csm">software package</a>
+to compute satisfaction rate for exactly this kind of <a href="https://landing.google.com/sre/book/chapters/service-level-objectives.html">SLO</a>-type properties,
+properties of the form “this indicator satisfies $PREDICATE x% of the
+time,” with arbitrarily bounded false positive rates.</p>
+
+<p>The code takes care of adaptive stopping, generates a credible
+interval, and spits out a report like this <a href="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/1k-30k-report.svg"><img src="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/1k-30k-report.svg" width="100px" style="vertical-align: middle" /></a>:
+we see the threshold (0.98), the empirical success rate estimate
+(0.993 ≫ 0.98), a credible interval for the success rate, and
+the shape of the probability mass for success rates.</p>
+
+<p>This post shows how to compute credible intervals for the Bernoulli’s
+success rate, how to implement a dynamic stopping criterion, and how
+to combine the two while compensating for multiple hypothesis
+testing. It also gives two examples of converting more general
+questions to SLO form, and answers them with the same code.</p>
+
+<h1 id="credible-intervals-for-the-binomial">Credible intervals for the Binomial</h1>
+
+<p>If we run the same experiment \(n\) times, and observe \(a\)
+successes (\(b = n - a\) failures), it’s natural to ask for
+an estimate of the success rate \(p\) for the underlying 
+<a href="https://en.wikipedia.org/wiki/Bernoulli_process">Bernoulli process</a>,
+assuming the observations are independent and identically distributed.</p>
+
+<p>Intuitively, that estimate should be close to \(a / n\), the
+empirical success rate, but that’s not enough. I also want something
+that reflects the uncertainty associated with small \(n\), much like
+in the following 
+<a href="http://serialmentor.com/blog/2017/9/15/goodbye-joyplots">ridge line plot</a>,
+where different phrases are assigned not only a different average
+probability, but also a different spread.</p>
+
+<p><a href="https://github.com/zonination/perceptions">
+<img class="center" src="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/perception-probability.png" />
+</a></p>
+
+<p>I’m looking for an interval of plausible success rates \(p\) that
+responds to both the empirical success rate \(a / n\) and the sample
+size \(n\); that interval should be centered around \(a / n\), be
+wide when \(n\) is small, and become gradually tighter as \(n\)
+increases.</p>
+
+<p>The Bayesian approach is straightforward, if we’re willing to shut up
+and calculate. Once we fix the underlying success rate \(p = \hat{p}\),
+the conditional probability of observing \(a\) successes and \(b\)
+failures is</p>
+
+<p><span>
+\[P((a, b) | p = \hat{p}) \sim \hat{p}^{a} \cdot (1 - \hat{p})^{b},\]
+</span>
+where the right-hand side is a proportion<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote">1</a></sup>, rather than a
+probability.</p>
+
+<p>We can now apply 
+<a href="https://en.wikipedia.org/wiki/Bayes%27_theorem">Bayes’s theorem</a> to 
+invert the condition and the event. The inversion will give us the
+conditional probability that \(p = \hat{p}\), given that we observed
+\(a\) successes and \(b\) successes. We only need to impose a
+prior distribution on the underlying rate \(p\). For simplicity,
+I’ll go with the uniform \(U[0, 1]\), i.e., every success rate is
+equally plausible, at first. We find</p>
+
+<p><span>
+\[P(p = \hat{p} | (a, b)) = \frac{P((a, b) | p = \hat{p}) P(p = \hat{p})}{P(a, b)}.\]
+</span></p>
+
+<p>We already picked the uniform prior, 
+\(P(p = \hat{p}) = 1,\quad\forall\, \hat{p}\in [0,1],\)
+and the denominator is a constant with respect to \(\hat{p}\).
+The expression simplifies to</p>
+
+<p><span>
+\[P(p = \hat{p} | (a, b)) \sim \hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b},\]
+</span>
+or, if we normalise to obtain a probability,</p>
+
+<p><span>
+\[P(p = \hat{p} | (a, b)) = \frac{\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}}{\int\sb{0}\sp{1} \hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\, d\hat{p}} = \textrm{Beta}(a+1, b+1).\]
+</span></p>
+
+<p>A bit of calculation, and we find that our credibility estimate for
+the underlying success rate follows a
+<a href="https://en.wikipedia.org/wiki/Beta_distribution">Beta distribution</a>. If
+one is really into statistics, they can observe that the uniform prior
+distribution is just the \(\textrm{Beta}(1, 1)\) distribution, and
+rederive that the Beta is the 
+<a href="https://en.wikipedia.org/wiki/Conjugate_prior_distribution">conjugate distribution</a>
+ for the 
+<a href="https://en.wikipedia.org/wiki/Binomial_distribution">Binomial</a>
+distribution.</p>
+
+<p>For me, it suffices to observe that the distribution
+\(\textrm{Beta}(a+1, b+1)\) is unimodal, does peak around
+\(a / (a + b)\), and becomes tighter as the number of observations
+grows. In the following image, I plotted three Beta distributions, all
+with empirical success rate 0.9; red corresponds to \(n = 10\)
+(\(a = 9\), \(b = 1\), \(\textrm{Beta}(10, 2)\)), black to 
+\(n = 100\) (\(\textrm{Beta}(91, 11)\)), and blue to \(n =
+1000\) (\(\textrm{Beta}(901, 101)\)).</p>
+
+<p><a href="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/credible-beta-large.png">
+<img class="center" src="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/credible-beta.png" />
+</a></p>
+
+<p>We calculated, and we got something that matches my
+intuition. Before trying to understand <em>what it means</em>, let’s take a
+detour to simply plot points from that un-normalised proportion function
+\(\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\), on an arbitrary \(y\)
+axis.</p>
+
+<p>Let \(\hat{p} = 0.4\), \(a = 901\), \(b = 101\). Naïvely
+entering the expression at the REPL yields nothing useful.</p>
+
+<pre><code>CL-USER&gt; (* (expt 0.4d0 901) (expt (- 1 0.4d0) 101))
+0.0d0
+</code></pre>
+
+<p>The issue here is that the un-normalised proportion is so small that
+it underflows double floats and becomes a round zero. We can
+guess that the normalisation factor \(\frac{1}{\mathrm{Beta}(\cdot,\cdot)}\)
+quickly grows very large, which will bring its own set of issues
+when we do care about the normalised probability.</p>
+
+<p>How can we renormalise a set of points without underflow? The usual
+trick to handle extremely small or large magnitudes is to work in the
+log domain. Rather than computing
+\(\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\), we shall compute</p>
+
+<p><span>
+\[\log\left[\hat{p}\sp{a} \cdot (1 - \hat{p})\sp{b}\right] = a \log\hat{p} + b \log (1 - \hat{p}).\]
+</span></p>
+
+<pre><code>CL-USER&gt; (+ (* 901 (log 0.4d0)) (* 101 (log (- 1 0.4d0))))
+-877.1713374189787d0
+CL-USER&gt; (exp *)
+0.0d0
+</code></pre>
+
+<p>That’s somewhat better: the log-domain value is not \(-\infty\), but
+converting it back to a regular value still gives us 0.</p>
+
+<p>The \(\log\) function is monotonic, so we can find the maximum
+proportion value for a set of points, and divide everything by that
+maximum value to get plottable points. There’s one last thing that
+should change: when \(x\) is small, \(1 - x\) will round most of
+\(x\) away.
+<a href="https://www.johndcook.com/blog/2010/06/07/math-library-functions-that-seem-unnecessary/">Instead of <code>(log (- 1 x))</code>, we should use <code>(log1p (- x))</code></a>
+to compute \(\log (1 + -x) = \log (1 - x)\). Common 
+Lisp did not standardise <a href="https://linux.die.net/man/3/log1p"><code>log1p</code></a>,
+but SBCL does have it in internals, as a wrapper around <code>libm</code>. We’ll
+just abuse that for now.</p>
+
+<pre><code>CL-USER&gt; (defun proportion (x) (+ (* 901 (log x)) (* 101 (sb-kernel:%log1p (- x)))))
+PROPORTION
+CL-USER&gt; (defparameter *points* (loop for i from 1 upto 19 collect (/ i 20d0)))
+*POINTS*
+CL-USER&gt; (reduce #'max *points* :key #'proportion)
+-327.4909190001001d0
+</code></pre>
+
+<p>We have to normalise in the log domain, which is simply a subtraction:
+\(\log(x / y) = \log x - \log y\). In the case above, we will subtract
+\(-327.49\ldots\), or add <em>a massive</em> \(327.49\ldots\) to each log
+proportion (i.e., multiply by \(10\sp{142}\)). The resulting values
+should have a reasonably non-zero range.</p>
+
+<pre><code>CL-USER&gt; (mapcar (lambda (x) (cons x (exp (- (proportion x) *)))) *points*)
+((0.05d0 . 0.0d0)
+ (0.1d0 . 0.0d0)
+ [...]
+ (0.35d0 . 3.443943164733533d-288)
+ [...]
+ (0.8d0 . 2.0682681158181894d-16) 
+ (0.85d0 . 2.6252352579425913d-5)
+ (0.9d0 . 1.0d0)
+ (0.95d0 . 5.65506756824607d-10))
+</code></pre>
+
+<p>There’s finally some signal in there. This is still just an
+un-normalised proportion function, not a probability density function,
+but that’s already useful to show the general shape of the density
+function, something like the following, for \(\mathrm{Beta}(901, 101)\).</p>
+
+<p><a href="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/proportion.svg">
+<img class="center" src="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/proportion.svg" />
+</a></p>
+
+<p>Finally, we have a probability density function for the Bayesian update of
+our belief about the success rate after \(n\) observations of a
+Bernoulli process, and we know how to compute its proportion
+function. Until now, I’ve carefully avoided the question of what all
+these computations even mean. No more (:</p>
+
+<p>The Bayesian view assumes that the underlying success rate
+(the value we’re trying to estimate) is unknown, but sampled from some
+distribution. In our case, we assumed a uniform
+distribution, i.e., that every success rate is <em>a priori</em> equally
+likely. We then observe \(n\) outcomes (successes or failures), and
+assign an updated probability to each success rate. It’s like
+a many-world interpretation in which we assume we live in one of a set of
+worlds, each with a success rate sampled from the uniform
+distribution; after observing 900 successes and 100 failures,
+we’re more likely to be in a world where the success rate is 0.9 than
+in one where it’s 0.2. With Bayes’s theorem to formalise the update,
+we assign posterior probabilities to each potential success rate
+value.</p>
+
+<p>We can compute an
+<a href="https://en.wikipedia.org/wiki/Credible_interval">equal-tailed credible interval</a>
+from that 
+\(\mathrm{Beta}(a+1,b+1)\)
+posterior distribution by excluding the left-most values, \([0,
+l)\), such that the 
+<a href="https://en.wikipedia.org/wiki/Beta_distribution">Beta</a> CDF 
+(<a href="https://en.wikipedia.org/wiki/Cumulative_distribution_function">cumulative distribution function</a>) 
+at \(l\) is \(\varepsilon / 2\), and doing
+the same with the right most values to cut away \(\varepsilon / 2\) of the
+probability density. The CDF for \(\mathrm{Beta}(a+1,b+1)\) at
+\(x\) is the <a href="https://dlmf.nist.gov/8.17">incomplete beta function</a>,
+\(I\sb{x}(a+1,b+1)\). That
+function is really hard to compute (<a href="http://www.dtic.mil/dtic/tr/fulltext/u2/a210118.pdf">this technical report</a> 
+detailing <a href="https://dl.acm.org/citation.cfm?id=131776">Algorithm 708</a>
+deploys <em>five</em> different evaluation strategies), so I’ll address that
+later.</p>
+
+<p>The more orthodox “frequentist” approach to confidence intervals
+treats the whole experiment, from data colleaction to analysis (to
+publication, independent of the observations 😉) as an 
+<a href="https://en.wikipedia.org/wiki/Atlantic_City_algorithm">Atlantic City algorithm</a>:
+if we allow a false positive rate of \(\varepsilon\) (e.g.,
+\(\varepsilon=5\%\)), the experiment must return a confidence
+interval that includes the actual success rate (population statistic
+or parameter, in general) with probability \(1 - \varepsilon\), for
+any actual success rate (or underlying population statistic /
+parameter). When the procedure fails, with probability at most
+\(\varepsilon\), it is allowed to fail in an arbitrary manner.</p>
+
+<p>The same Atlantic City logic applies to \(p\)-values. An experiment
+(data collection and analysis) that accepts when the \(p\)-value is
+at most \(0.05\) is an Atlantic City algorithm that returns a
+correct result (including “don’t know”) with probability at least
+\(0.95\), and is otherwise allowed to yield any result with
+probability at most \(0.05\). The \(p\)-value associated with a
+conclusion, e.g., “success rate is more than 0.8” (the confidence level
+associated with an interval) means something like “I’m pretty sure that the
+success rate is more than 0.8, because the odds of observing our data
+if that were false are small (less than 0.05).” If we set that
+threshold (of 0.05, in the example) <em>ahead of time</em>, we get an
+Atlantic City algorithm to determine if “the success rate is more than
+0.8” with failure probability 0.05. (In practice,
+reporting is censored in all sorts of ways, so…)</p>
+
+<p>There are ways to recover a classical confidence interval, given \(n\) observations from a Bernoulli. However,
+they’re pretty convoluted, and, as 
+<a href="https://bayes.wustl.edu/etj/articles/confidence.pdf">Jaynes argues in his note on confidence intervals</a>, the classical
+approach gives values that are roughly the same<sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote">2</a></sup> as the Bayesian
+approach… so I’ll just use the Bayesian credibility interval instead.</p>
+
+<p><em>See <a href="https://stats.stackexchange.com/questions/2272/whats-the-difference-between-a-confidence-interval-and-a-credible-interval/2287#2287">this stackexchange post</a> 
+for a lot more details.</em></p>
+
+<h1 id="dynamic-stopping-for-binomial-testing">Dynamic stopping for Binomial testing</h1>
+
+<p>The way statistics are usually deployed is that someone collects a
+data set, as rich as is practical, and squeezes that static data set
+dry for significant results. That’s exactly the setting for the
+credible interval computation I sketched in the previous section.</p>
+
+<p>When studying the properties of computer programs or systems, we can
+usually generate additional data on demand, given more time. The problem
+is knowing when it’s ok to stop wasting computer time, because we have
+enough data… and how to determine that without running into multiple
+hypothesis testing issues (<a href="https://www.google.com/search?q=a%2Fb+test+early+stopping">ask anyone who’s run A/B tests</a>).</p>
+
+<p>Here’s an example of an intuitive but completely broken dynamic
+stopping criterion. Let’s say we’re trying to find out if the success
+rate is less than or greater than 90%, and are willing to be wrong 5%
+of the time. We could get \(k\) data points, run a statistical test
+on those data points, and stop if the data let us conclude with 95%
+confidence that the underlying success rate differs from
+90%. Otherwise, collect \(2k\) fresh points, run the same test;
+collect \(4k, \ldots, 2\sp{i}k\) points. Eventually, we’ll have enough data.</p>
+
+<p>The issue is that each time we execute the statistical test that
+determines if we should stop, we run a 5% risk of being totally
+wrong. For an extreme example, if the success rate is exactly 90%, we
+will eventually stop, with probability 1. When we do stop, we’ll
+inevitably conclude that the success rate differs from 90%, and we
+will be wrong. The worst-case (over all underlying success rates)
+false positive rate is 100%, not 5%!</p>
+
+<p>In my experience, programmers tend to sidestep the question by wasting
+CPU time with a large, fixed, number of iterations…  people are then
+less likely to run our statistical tests, since they’re so slow, and
+everyone loses (the other popular option is to impose a reasonable CPU
+budget, with error thresholds so lax we end up with a smoke test).</p>
+
+<p>Robbins, in 
+<a href="https://projecteuclid.org/euclid.aoms/1177696786">Statistical Methods Related to the Law of the Iterated Logarithm</a>,
+introduces a criterion that, given a threshold success rate \(p\) and a
+sequence of (infinitely many!) observations from the same Bernoulli with
+unknown success rate parameter, will be satisfied infinitely often when
+\(p\) differs from the Bernoulli’s success rate. Crucially,
+Robbins also bounds the false positive rate, the probability that the
+criterion be satisfied <em>even once in the infinite sequence of
+observations</em> if the Bernoulli’s unknown success rate is exactly equal
+to \(p\). That criterion is</p>
+
+<p><span>
+\[{n \choose a} p\sp{a} (1-p)\sp{n-a} \leq \frac{\varepsilon}{n+1},\]
+</span></p>
+
+<p>where \(n\) is the number of observations, \(a\) the number of
+successes, \(p\) the threshold success rate, and \(\varepsilon\)
+the error (false positive) rate. As the number of
+observation grows, the criterion becomes more and more stringent to
+maintain a bounded false positive rate over the whole infinite
+sequence of observations.</p>
+
+<p>There are similar “Confidence Sequence” results for other
+distributions (see, for example,
+<a href="https://projecteuclid.org/euclid.aos/1176343406">this paper of Lai</a>),
+but we only care about the Binomial here.</p>
+
+<p>More recently, <a href="https://arxiv.org/abs/1611.01675">Ding, Gandy, and Hahn</a>
+showed that Robbins’s criterion also guarantees that, when it is
+satisfied, the empirical success rate (\(a/n\)) lies on the correct
+side of the threshold \(p\) (same side as the actual unknown success
+rate) with probability \(1-\varepsilon\). This result leads
+them to propose the use of Robbins’s criterion to stop Monte Carlo
+statistical tests, which they refer to as the Confidence Sequence Method (CSM).</p>
+
+<pre><code>(defun csm-stop-p (successes failures threshold eps)
+  "Pseudocode, this will not work on a real machine."
+  (let ((n (+ successes failures)))
+    (&lt;= (* (choose n successes) 
+           (expt threshold successes)
+           (expt (- 1 threshold) failures))
+        (/ eps (1+ n)))))
+</code></pre>
+
+<p>We may call this predicate at any time with more independent and
+identically distributed results, and stop as soon as it returns true.</p>
+
+<p>The CSM is simple (it’s all in Robbins’s criterion), but still
+provides good guarantees. The downside is that it is conservative when
+we have a limit on the number of observations: the method “hedges”
+against the possibility of having a false positive in the infinite
+number of observations after the limit, observations we will never
+make. For computer-generated data sets, I think having a principled
+limit is pretty good; it’s not ideal to ask for more data than
+strictly necessary, but not a blocker either.</p>
+
+<p>In practice, there are still real obstacles to implementing the CSM on
+computers with finite precision (floating point) arithmetic,
+especially since I want to preserve the method’s theoretical guarantees
+(i.e., make sure rounding is one-sided to overestimate the left-hand
+side of the inequality).</p>
+
+<p>If we implement the expression well, the effect of rounding on
+correctness should be less than marginal. However, I don’t want to be
+stuck wondering if my bad results are due to known approximation
+errors in the method, rather than errors in the code. Moreover, if we
+do have a tight expression with little rounding errors, adjusting it
+to make the errors one-sided should have almost no impact. That seems
+like a good trade-off to me, especially if I’m going to use the CSM
+semi-automatically, in continuous integration scripts, for example.</p>
+
+<p>One look at <code>csm-stop-p</code> shows we’ll have the same problem we had with
+the proportion function for the Beta distribution: we’re multiplying
+very small and very large values. We’ll apply the same fix: work in
+the log domain and exploit \(\log\)’s monotonicity.</p>
+
+<p><span>
+\[{n \choose a} p\sp{a} (1-p)\sp{n-a} \leq \frac{\varepsilon}{n+1}\]
+</span></p>
+
+<p>becomes</p>
+
+<p><span>
+\[\log {n \choose a} + a \log p + (n-a)\log (1-p) \leq \log\varepsilon -\log(n+1),\]
+</span>
+or, after some more expansions, and with \(b = n - a\),</p>
+
+<p><span>
+\[\log n! - \log a! - \log b! + a \log p + b \log(1 - p) + \log(n+1) \leq \log\varepsilon.\]
+</span></p>
+
+<p>The new obstacle is computing the factorial \(x!\), or the
+log-factorial \(\log x!\). We shouldn’t compute the
+factorial iteratively: otherwise, we could spend more time in the stopping criterion than in the data generation subroutine.
+<a href="https://www-fourier.ujf-grenoble.fr/~marin/une_autre_crypto/articles_et_extraits_livres/Robbin_H.-A_remark_on_Stirling%5C's_Formula.pdf">Robbins has another useful result</a>
+for us:</p>
+
+<p><span>
+\[\sqrt{2\pi} n\sp{n + 1/2} \exp(-n) \exp\left(\frac{1}{12n+1}\right) &lt; n! &lt; \sqrt{2\pi} n\sp{n + 1/2} \exp(-n) \exp\left(\frac{1}{12n}\right),\]
+</span></p>
+
+<p>or, in the log domain,</p>
+
+<p><span>
+\[\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n + \frac{1}{12n+1} &lt; \log n! &lt; \log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n}.\]
+</span></p>
+
+<p>This double inequality gives us a way to over-approximate 
+\(\log {n \choose a} = \log \frac{n!}{a! b!} = \log n! - \log a! - \log b!,\)
+where \(b = n - a\):</p>
+
+<p><span>
+\[\log {n \choose a} &lt; -\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n} - \left(a + \frac{1}{2}\right)\log a +a - \frac{1}{12a+1}  - \left(b + \frac{1}{2}\right)\log b +b - \frac{1}{12b+1},\]
+</span></p>
+
+<p>where the right-most expression in Robbins’s double inequality
+replaces \(\log n!\), which must be over-approximated, and the
+left-most \(\log a!\) and \(\log b!\), which must be
+under-approximated.</p>
+
+<p>Robbins’s approximation works well for us because, it is
+one-sided, and guarantees that the (relative) error in \(n!\),
+\(\frac{\exp\left(\frac{1}{12n}\right) - \exp\left(\frac{1}{12n+1}\right)}{n!},\)
+is small, even for small values like \(n = 5\) 
+(error \(&lt; 0.0023\%\)), and decreases with \(n\): as we perform
+more trials, the approximation is increasingly accurate, thus less
+likely to spuriously prevent us from stopping.</p>
+
+<p>Now that we have a conservative approximation of Robbins’s criterion
+that only needs the four arithmetic operations and logarithms (and
+<code>log1p</code>), we can implement it on a real computer. The only challenge
+left is regular floating point arithmetic stuff: if rounding must
+occur, we must make sure it is in a safe (conservative) direction for
+our predicate.</p>
+
+<p>Hardware usually lets us manipulate the rounding mode to force
+floating point arithmetic operations to round up or down, instead of
+the usual round to even. However, that tends to be slow, so most
+language (implementations) don’t support changing the rounding mode, or
+do so badly…  which leaves us in a multi-decade
+hardware/software co-evolution Catch-22.</p>
+
+<p>I could think hard and derive tight bounds on the round-off error, but I’d
+rather apply a bit of brute force. IEEE-754 compliant implementations
+must round the four basic operations correctly. This means that
+\(z = x \oplus y\) is at most half a ULP away from \(x + y,\) 
+and thus either \(z = x \oplus y \geq x + y,\) or the next floating
+point value after \(z,\) \(z^\prime \geq x + y\). We can find this
+“next value” portably in Common Lisp, with
+<code>decode-float</code>/<code>scale-float</code>, and some hand-waving for denormals.</p>
+
+<pre><code>(defun next (x &amp;optional (delta 1))
+  "Increment x by delta ULPs. Very conservative for
+   small (0/denormalised) values."
+  (declare (type double-float x)
+           (type unsigned-byte delta))
+  (let* ((exponent (nth-value 1 (decode-float x)))
+         (ulp (max (scale-float double-float-epsilon exponent)
+                   least-positive-normalized-double-float)))
+    (+ x (* delta ulp))))
+</code></pre>
+
+<p>I prefer to manipulate IEEE-754 bits directly. That’s theoretically
+not portable, but the platforms I care about make sure we can treat
+floats as sign-magnitude integers.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>next </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="o">#+</span><span class="nv">sbcl</span>
+</span><span class="line"><span class="p">(</span><span class="k">progn</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">inline</span> <span class="nv">%float-bits</span> <span class="nv">%bits-float</span> <span class="nv">next</span> <span class="nv">prev</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">defun</span> <span class="nv">%float-bits</span> <span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+</span><span class="line">    <span class="s">&quot;Convert a double float x to sign-extended sign/magnitude, and</span>
+</span><span class="line"><span class="s">     then to 2&#39;s complement.&quot;</span>
+</span><span class="line">    <span class="p">(</span><span class="k">declare</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="nv">x</span><span class="p">))</span>
+</span><span class="line">    <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">hi</span> <span class="p">(</span><span class="nv">sb-kernel:double-float-high-bits</span> <span class="nv">x</span><span class="p">))</span>
+</span><span class="line">           <span class="p">(</span><span class="nv">lo</span> <span class="p">(</span><span class="nv">sb-kernel:double-float-low-bits</span> <span class="nv">x</span><span class="p">))</span>
+</span><span class="line">           <span class="p">(</span><span class="nv">word</span> <span class="p">(</span><span class="nb">+</span> <span class="p">(</span><span class="nb">ash</span> <span class="p">(</span><span class="nb">ldb</span> <span class="p">(</span><span class="nb">byte</span> <span class="mi">31</span> <span class="mi">0</span><span class="p">)</span> <span class="nv">hi</span><span class="p">)</span> <span class="mi">32</span><span class="p">)</span> <span class="nv">lo</span><span class="p">)))</span>
+</span><span class="line">      <span class="c1">;; hi is the high half of the 64 bit sign-magnitude</span>
+</span><span class="line">      <span class="c1">;; representation… in two&#39;s complement. Extract the significand,</span>
+</span><span class="line">      <span class="c1">;; and then apply the sign bit. We want to preserve signed zeros,</span>
+</span><span class="line">      <span class="c1">;; so return -1 - word instead of -word.</span>
+</span><span class="line">      <span class="c1">;;</span>
+</span><span class="line">      <span class="c1">;; (- -1 word) = (lognot word) = (logxor word -1).</span>
+</span><span class="line">      <span class="p">(</span><span class="nb">logxor</span> <span class="nv">word</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">hi</span> <span class="mi">-32</span><span class="p">))))</span>
+</span><span class="line">
+</span><span class="line">  <span class="p">(</span><span class="nb">defun</span> <span class="nv">%bits-float</span> <span class="p">(</span><span class="nv">bits</span><span class="p">)</span>
+</span><span class="line">    <span class="s">&quot;Convert 2&#39;s complement to sign-extended sign/magnitude, then</span>
+</span><span class="line"><span class="s">     double float.&quot;</span>
+</span><span class="line">    <span class="p">(</span><span class="k">declare</span> <span class="p">(</span><span class="k">type</span> <span class="p">(</span><span class="kt">signed-byte</span> <span class="mi">64</span><span class="p">)</span> <span class="nv">bits</span><span class="p">))</span>
+</span><span class="line">    <span class="c1">;; convert back to sign-magnitude: if bits is negative, all but the</span>
+</span><span class="line">    <span class="c1">;; sign bit must be flipped again.</span>
+</span><span class="line">    <span class="p">(</span><span class="k">let</span> <span class="p">((</span><span class="nv">bits</span> <span class="p">(</span><span class="nb">logxor</span> <span class="nv">bits</span>
+</span><span class="line">                        <span class="p">(</span><span class="nb">ldb</span> <span class="p">(</span><span class="nb">byte</span> <span class="mi">63</span> <span class="mi">0</span><span class="p">)</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">bits</span> <span class="mi">-64</span><span class="p">)))))</span>
+</span><span class="line">      <span class="p">(</span><span class="nv">sb-kernel:make-double-float</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">bits</span> <span class="mi">-32</span><span class="p">)</span>
+</span><span class="line">                                   <span class="p">(</span><span class="nb">ldb</span> <span class="p">(</span><span class="nb">byte</span> <span class="mi">32</span> <span class="mi">0</span><span class="p">)</span> <span class="nv">bits</span><span class="p">))))</span>
+</span><span class="line">
+</span><span class="line">  <span class="p">(</span><span class="nb">defun</span> <span class="nv">next</span> <span class="p">(</span><span class="nv">x</span> <span class="k">&amp;optional</span> <span class="p">(</span><span class="nv">delta</span> <span class="mi">1</span><span class="p">))</span>
+</span><span class="line">    <span class="s">&quot;Increment x by delta ULPs.&quot;</span>
+</span><span class="line">    <span class="p">(</span><span class="k">declare</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="nv">x</span><span class="p">)</span>
+</span><span class="line">             <span class="p">(</span><span class="k">type</span> <span class="kt">unsigned-byte</span> <span class="nv">delta</span><span class="p">))</span>
+</span><span class="line">    <span class="p">(</span><span class="nv">%bits-float</span> <span class="p">(</span><span class="nb">+</span> <span class="p">(</span><span class="nv">%float-bits</span> <span class="nv">x</span><span class="p">)</span> <span class="nv">delta</span><span class="p">)))</span>
+</span><span class="line">
+</span><span class="line">  <span class="p">(</span><span class="nb">defun</span> <span class="nv">prev</span> <span class="p">(</span><span class="nv">x</span> <span class="k">&amp;optional</span> <span class="p">(</span><span class="nv">delta</span> <span class="mi">1</span><span class="p">))</span>
+</span><span class="line">    <span class="s">&quot;Decrement x by delta ULPs.&quot;</span>
+</span><span class="line">    <span class="p">(</span><span class="k">declare</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="nv">x</span><span class="p">)</span>
+</span><span class="line">             <span class="p">(</span><span class="k">type</span> <span class="kt">unsigned-byte</span> <span class="nv">delta</span><span class="p">))</span>
+</span><span class="line">    <span class="p">(</span><span class="nv">%bits-float</span> <span class="p">(</span><span class="nb">-</span> <span class="p">(</span><span class="nv">%float-bits</span> <span class="nv">x</span><span class="p">)</span> <span class="nv">delta</span><span class="p">))))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<pre><code>CL-USER&gt; (double-float-bits pi)
+4614256656552045848
+CL-USER&gt; (double-float-bits (- pi))
+-4614256656552045849
+</code></pre>
+
+<p>The two’s complement value for <code>pi</code> is one less than 
+<code>(- (double-float-bits pi))</code> because two’s complement does not support
+signed zeros.</p>
+
+<pre><code>CL-USER&gt; (eql 0 (- 0))
+T
+CL-USER&gt; (eql 0d0 (- 0d0))
+NIL
+CL-USER&gt; (double-float-bits 0d0)
+0
+CL-USER&gt; (double-float-bits -0d0)
+-1
+</code></pre>
+
+<p>We can quickly check that the round trip from float to integer and back
+is an identity.</p>
+
+<pre><code>CL-USER&gt; (eql pi (bits-double-float (double-float-bits pi)))
+T
+CL-USER&gt; (eql (- pi) (bits-double-float (double-float-bits (- pi))))
+T
+CL-USER&gt; (eql 0d0 (bits-double-float (double-float-bits 0d0)))
+T
+CL-USER&gt; (eql -0d0 (bits-double-float (double-float-bits -0d0)))
+T
+</code></pre>
+
+<p>We can also check that incrementing or decrementing the integer
+representation does increase or decrease the floating point value.</p>
+
+<pre><code>CL-USER&gt; (&lt; (bits-double-float (1- (double-float-bits pi))) pi)
+T
+CL-USER&gt; (&lt; (bits-double-float (1- (double-float-bits (- pi)))) (- pi))
+T
+CL-USER&gt; (bits-double-float (1- (double-float-bits 0d0)))
+-0.0d0
+CL-USER&gt; (bits-double-float (1+ (double-float-bits -0d0)))
+0.0d0
+CL-USER&gt; (bits-double-float (1+ (double-float-bits 0d0)))
+4.9406564584124654d-324
+CL-USER&gt; (bits-double-float (1- (double-float-bits -0d0)))
+-4.9406564584124654d-324
+</code></pre>
+
+<p>The code doesn’t handle special values like infinities or NaNs, but
+that’s out of scope for the CSM criterion anyway. That’s all we need
+to nudge the result of the four operations to guarantee an over- or
+under- approximation of the real value. We can also look at the
+documentation for our <code>libm</code> (e.g., <a href="https://www.gnu.org/software/libc/manual/html_node/Errors-in-Math-Functions.html">for GNU libm</a>) 
+to find error bounds on functions like <code>log</code>; GNU claims their
+<code>log</code> is never off by more than 3 ULP. We can round up to the
+fourth next floating point value to obtain a conservative upper bound
+on \(\log x\).</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>log </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">type</span> <span class="p">(</span><span class="kt">unsigned-byte</span> <span class="mi">31</span><span class="p">)</span> <span class="vg">*libm-error-limit*</span><span class="p">))</span>
+</span><span class="line"><span class="p">(</span><span class="nb">defvar</span> <span class="vg">*libm-error-limit*</span> <span class="mi">4</span>
+</span><span class="line">  <span class="s">&quot;Assume libm is off by less than 4 ULPs.&quot;</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line"><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">inline</span> <span class="nv">log-up</span> <span class="nv">log-down</span><span class="p">))</span>
+</span><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">log-up</span> <span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+</span><span class="line">  <span class="s">&quot;Conservative upper bound on log(x).&quot;</span>
+</span><span class="line">  <span class="p">(</span><span class="k">declare</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="nv">x</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">log</span> <span class="nv">x</span><span class="p">)</span> <span class="vg">*libm-error-limit*</span><span class="p">))</span>
+</span><span class="line">
+</span><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">log-down</span> <span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+</span><span class="line">  <span class="s">&quot;Conservative lower bound on log(x).&quot;</span>
+</span><span class="line">  <span class="p">(</span><span class="k">declare</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="nv">x</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="nv">prev</span> <span class="p">(</span><span class="nb">log</span> <span class="nv">x</span><span class="p">)</span> <span class="vg">*libm-error-limit*</span><span class="p">))</span>
+</span><span class="line">
+</span><span class="line"><span class="o">#+</span><span class="nv">sbcl</span>
+</span><span class="line"><span class="p">(</span><span class="k">progn</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">inline</span> <span class="nv">log1p-up</span> <span class="nv">log1p-down</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">defun</span> <span class="nv">log1p-up</span> <span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+</span><span class="line">    <span class="s">&quot;Convervative upper bound on log(1 + x).&quot;</span>
+</span><span class="line">    <span class="p">(</span><span class="k">declare</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="nv">x</span><span class="p">))</span>
+</span><span class="line">    <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nv">sb-kernel:%log1p</span> <span class="nv">x</span><span class="p">)</span> <span class="vg">*libm-error-limit*</span><span class="p">))</span>
+</span><span class="line">
+</span><span class="line">  <span class="p">(</span><span class="nb">defun</span> <span class="nv">log1p-down</span> <span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+</span><span class="line">    <span class="s">&quot;Conservative lower bound on log(1 + x)&quot;</span>
+</span><span class="line">    <span class="p">(</span><span class="k">declare</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="nv">x</span><span class="p">))</span>
+</span><span class="line">    <span class="p">(</span><span class="nv">prev</span> <span class="p">(</span><span class="nv">sb-kernel:%log1p</span> <span class="nv">x</span><span class="p">)</span> <span class="vg">*libm-error-limit*</span><span class="p">)))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>I could go ahead and use the building blocks above (ULP nudging for
+directed rounding) to directly implement Robbins’s criterion,</p>
+
+<p><span>
+\[\log {n \choose a} + a \log p + b\log (1-p) + \log(n+1) \leq \log\varepsilon,\]
+</span></p>
+
+<p>with Robbins’s factorial approximation,</p>
+
+<p><span>
+\[\log {n \choose a} &lt; -\log\sqrt{2\pi} + \left(n + \frac{1}{2}\right)\log n -n +\frac{1}{12n} - \left(a + \frac{1}{2}\right)\log a +a - \frac{1}{12a+1}  - \left(b + \frac{1}{2}\right)\log b +b - \frac{1}{12b+1}.\]
+</span></p>
+
+<p>However, even in the log domain, there’s a lot of cancellation: we’re
+taking the difference of relatively large numbers to find a small
+result. It’s possible to avoid that by re-associating some of the
+terms above, e.g., for \(a\):</p>
+
+<p><span>
+\[-\left(a + \frac{1}{2}\right) \log a + a - a \log p = 
+   -\frac{\log a}{2} + a (-\log a + 1 - \log p).\]
+</span></p>
+
+<p>Instead, I’ll just brute force things (again) with 
+<a href="https://en.wikipedia.org/wiki/Kahan_summation_algorithm">Kahan summation</a>.
+Shewchuk’s presentation in <a href="http://www.cs.cmu.edu/~quake/robust.html">Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates</a>
+highlights how the only step where we may lose precision to
+rounding is when we add the current compensation term to the new
+summand. We can implement Kahan summation with directed rounding in
+only that one place: all the other operations are exact!</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"kahan summation" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+<span class="line-number">61</span>
+<span class="line-number">62</span>
+<span class="line-number">63</span>
+<span class="line-number">64</span>
+<span class="line-number">65</span>
+<span class="line-number">66</span>
+<span class="line-number">67</span>
+<span class="line-number">68</span>
+<span class="line-number">69</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="c1">;;; Kahan-style summation.</span>
+</span><span class="line"><span class="c1">;;;</span>
+</span><span class="line"><span class="c1">;;; Represent the accumulator as an evaluated sum of two doubles. As</span>
+</span><span class="line"><span class="c1">;;; long as the compensation term is initially 0, the result is a safe</span>
+</span><span class="line"><span class="c1">;;; upper bound on the real value, and the two terms are</span>
+</span><span class="line"><span class="c1">;;; &quot;non-overlapping.&quot;  For more details, see &quot;Adaptive Precision</span>
+</span><span class="line"><span class="c1">;;; Floating-Point Arithmetic and Fast Robust Geometric Predicates&quot;,</span>
+</span><span class="line"><span class="c1">;;; Shewchuk, 1997; Technical report CMU-CS-96-140R / Discrete &amp; Comp</span>
+</span><span class="line"><span class="c1">;;; Geom 18(3), October 1997. Theorem 6 in particular.</span>
+</span><span class="line">
+</span><span class="line"><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">inline</span> <span class="nv">sum-update-up</span> <span class="nv">sum-update-finish</span><span class="p">))</span>
+</span><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">sum-update-up</span> <span class="p">(</span><span class="nv">accumulator</span> <span class="nv">compensation</span> <span class="nv">term</span> <span class="k">&amp;optional</span> <span class="nv">ordered</span><span class="p">)</span>
+</span><span class="line">  <span class="s">&quot;Given an evaluated sum</span>
+</span><span class="line"><span class="s">     (accumulator + compensation),</span>
+</span><span class="line"><span class="s">   return a new unevaluated sum for an upper bound on</span>
+</span><span class="line"><span class="s">     (accumulator + compensation + term).</span>
+</span><span class="line">
+</span><span class="line"><span class="s">   If ordered, assume</span>
+</span><span class="line"><span class="s">     term &lt; accumulator,</span>
+</span><span class="line"><span class="s">   or</span>
+</span><span class="line"><span class="s">     accumulator = compensation = 0.&quot;</span>
+</span><span class="line">  <span class="p">(</span><span class="k">declare</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="nv">accumulator</span> <span class="nv">compensation</span>
+</span><span class="line">                 <span class="nv">term</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">when</span> <span class="p">(</span><span class="nb">and</span> <span class="p">(</span><span class="nb">not</span> <span class="nv">ordered</span><span class="p">)</span>
+</span><span class="line">             <span class="p">(</span><span class="nb">&lt;</span> <span class="p">(</span><span class="nb">abs</span> <span class="nv">accumulator</span><span class="p">)</span> <span class="p">(</span><span class="nb">abs</span> <span class="nv">term</span><span class="p">)))</span>
+</span><span class="line">    <span class="p">(</span><span class="nb">rotatef</span> <span class="nv">accumulator</span> <span class="nv">term</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">rest-1</span> <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">+</span> <span class="nv">compensation</span> <span class="nv">term</span><span class="p">)))</span> <span class="c1">; safe upper bound on c + t</span>
+</span><span class="line">         <span class="p">(</span><span class="nb">rest</span> <span class="p">(</span><span class="k">if</span> <span class="p">(</span><span class="nb">&lt;=</span> <span class="nv">compensation</span> <span class="mf">0d0</span><span class="p">)</span>       <span class="c1">; tighter, still safe.</span>
+</span><span class="line">                   <span class="p">(</span><span class="nb">min</span> <span class="nv">term</span> <span class="nv">rest-1</span><span class="p">)</span>
+</span><span class="line">                   <span class="nv">rest-1</span><span class="p">))</span>
+</span><span class="line">         <span class="c1">;; Perform a Dekker sum of accumulator + rest. The result is</span>
+</span><span class="line">         <span class="c1">;; exact, so no need for next/prev here.</span>
+</span><span class="line">         <span class="c1">;;</span>
+</span><span class="line">         <span class="c1">;; Precondition: |accumulator| &gt;= |rest| (or accumulator = 0).</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">a</span> <span class="nv">accumulator</span><span class="p">)</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">b</span> <span class="nb">rest</span><span class="p">)</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">x</span> <span class="p">(</span><span class="nb">+</span> <span class="nv">a</span> <span class="nv">b</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">b-virtual</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">x</span> <span class="nv">a</span><span class="p">))</span>     <span class="c1">; b-virtual = value really added to a</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">y</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">b</span> <span class="nv">b-virtual</span><span class="p">)))</span>
+</span><span class="line">    <span class="p">(</span><span class="nb">values</span> <span class="nv">x</span> <span class="nv">y</span><span class="p">)))</span>
+</span><span class="line">
+</span><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">sum-update-finish</span> <span class="p">(</span><span class="nv">accumulator</span> <span class="nv">compensation</span><span class="p">)</span>
+</span><span class="line">  <span class="s">&quot;Return a conservative upper bound for accumulator + compensation.</span>
+</span><span class="line">
+</span><span class="line"><span class="s">   In theory, (+ accumulator compensation) is equal to accumulator.</span>
+</span><span class="line"><span class="s">   In practice, it doesn&#39;t hurt to do this right. The second return</span>
+</span><span class="line"><span class="s">   value is the new compensation term (should never be positive).&quot;</span>
+</span><span class="line">  <span class="p">(</span><span class="k">declare</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="nv">accumulator</span> <span class="nv">compensation</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">raw-sum</span> <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">+</span> <span class="nv">accumulator</span> <span class="nv">compensation</span><span class="p">)))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">sum</span> <span class="p">(</span><span class="k">if</span> <span class="p">(</span><span class="nb">&gt;</span> <span class="nv">compensation</span> <span class="mf">0d0</span><span class="p">)</span>
+</span><span class="line">                  <span class="nv">raw-sum</span>
+</span><span class="line">                  <span class="c1">;; if compensation &lt;= 0, acc is already an upper</span>
+</span><span class="line">                  <span class="c1">;; bound.</span>
+</span><span class="line">                  <span class="p">(</span><span class="nb">min</span> <span class="nv">accumulator</span> <span class="nv">raw-sum</span><span class="p">)))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">delta</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">sum</span> <span class="nv">accumulator</span><span class="p">)))</span>
+</span><span class="line">    <span class="p">(</span><span class="nb">assert</span> <span class="p">(</span><span class="nb">&gt;=</span> <span class="nv">delta</span> <span class="nv">compensation</span><span class="p">))</span>
+</span><span class="line">    <span class="p">(</span><span class="nb">values</span> <span class="nv">sum</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">compensation</span> <span class="nv">delta</span><span class="p">))))</span>
+</span><span class="line">
+</span><span class="line"><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">ftype</span> <span class="p">(</span><span class="k">function</span> <span class="p">(</span><span class="k">&amp;rest</span> <span class="kt">double-float</span><span class="p">)</span>
+</span><span class="line">                          <span class="p">(</span><span class="nb">values</span> <span class="kt">double-float</span> <span class="kt">double-float</span> <span class="k">&amp;optional</span><span class="p">))</span>
+</span><span class="line">                <span class="nv">sum-up</span><span class="p">))</span>
+</span><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">sum-up</span> <span class="p">(</span><span class="k">&amp;rest</span> <span class="nb">values</span><span class="p">)</span>
+</span><span class="line">  <span class="s">&quot;Conservative upper bound for the sum of values, with a Kahan</span>
+</span><span class="line"><span class="s">   summation loop.&quot;</span>
+</span><span class="line">  <span class="p">(</span><span class="k">let</span> <span class="p">((</span><span class="nv">acc</span> <span class="mf">0d0</span><span class="p">)</span>
+</span><span class="line">        <span class="p">(</span><span class="nv">err</span> <span class="mf">0d0</span><span class="p">))</span>
+</span><span class="line">    <span class="p">(</span><span class="nb">dolist</span> <span class="p">(</span><span class="nv">value</span> <span class="nb">values</span> <span class="p">(</span><span class="nv">sum-update-finish</span> <span class="nv">acc</span> <span class="nv">err</span><span class="p">))</span>
+</span><span class="line">      <span class="p">(</span><span class="nb">setf</span> <span class="p">(</span><span class="nb">values</span> <span class="nv">acc</span> <span class="nv">err</span><span class="p">)</span>
+</span><span class="line">            <span class="p">(</span><span class="nv">sum-update-up</span> <span class="nv">acc</span> <span class="nv">err</span> <span class="nv">value</span><span class="p">)))))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We need one last thing to implement \(\log {n \choose a}\), and then
+Robbins’s confidence sequence: a safely rounded floating-point value
+approximation of  \(-\log \sqrt{2 \pi}\). I precomputed one with 
+<a href="https://github.com/tarballs-are-good/computable-reals">computable-reals</a>:</p>
+
+<pre><code>CL-USER&gt; (computable-reals:-r
+          (computable-reals:log-r
+           (computable-reals:sqrt-r computable-reals:+2pi-r+)))
+-0.91893853320467274178...
+CL-USER&gt; (computable-reals:ceiling-r 
+          (computable-reals:*r *
+                               (ash 1 53)))
+-8277062471433908
+-0.65067431749790398594...
+CL-USER&gt; (* -8277062471433908 (expt 2d0 -53))
+-0.9189385332046727d0
+CL-USER&gt; (computable-reals:-r (rational *)
+                              ***)
++0.00000000000000007224...
+</code></pre>
+
+<p>We can safely replace \(-\log\sqrt{2\pi}\) with
+<code>-0.9189385332046727d0</code>, or, equivalently, 
+<code>(scale-float -8277062471433908.0d0 -53)</code>, for an upper bound.
+If we wanted a lower bound, we could decrement the integer significand
+by one.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>log-choose </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="c1">;;; Upper bound for log c(n, s).</span>
+</span><span class="line">
+</span><span class="line"><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="vg">*minus-log-sqrt-2pi*</span><span class="p">))</span>
+</span><span class="line"><span class="p">(</span><span class="nb">defvar</span> <span class="vg">*minus-log-sqrt-2pi*</span> <span class="mf">-0.9189385332046727d0</span>
+</span><span class="line">  <span class="s">&quot;Smallest double precision value &gt; -log sqrt(2pi).&quot;</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line"><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">ftype</span> <span class="p">(</span><span class="k">function</span> <span class="p">((</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">)</span> <span class="p">(</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">))</span>
+</span><span class="line">                          <span class="p">(</span><span class="nb">values</span> <span class="kt">double-float</span> <span class="kt">double-float</span> <span class="k">&amp;optional</span><span class="p">))</span>
+</span><span class="line">                <span class="nv">robbins-log-choose</span><span class="p">))</span>
+</span><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">robbins-log-choose</span> <span class="p">(</span><span class="nv">n</span> <span class="nv">s</span><span class="p">)</span>
+</span><span class="line">  <span class="s">&quot;Compute a conservative upper bound on log c(n, s) based on</span>
+</span><span class="line"><span class="s">   Robbins&#39;s bounds for k!.&quot;</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">check-type</span> <span class="nv">n</span> <span class="p">(</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">))</span> <span class="c1">;; ensure 53 bit arith is exact.</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">check-type</span> <span class="nv">s</span> <span class="p">(</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">assert</span> <span class="p">(</span><span class="nb">&lt;=</span> <span class="mi">0</span> <span class="nv">s</span> <span class="nv">n</span><span class="p">))</span>
+</span><span class="line">  <span class="c1">;; Handle easy cases, where c(n, s) is 1 or n.</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">when</span> <span class="p">(</span><span class="nb">or</span> <span class="p">(</span><span class="nb">=</span> <span class="nv">n</span> <span class="nv">s</span><span class="p">)</span>
+</span><span class="line">            <span class="p">(</span><span class="nb">zerop</span> <span class="nv">s</span><span class="p">))</span>
+</span><span class="line">    <span class="p">(</span><span class="k">return-from</span> <span class="nv">robbins-log-choose</span> <span class="p">(</span><span class="nb">values</span> <span class="mf">0d0</span> <span class="mf">0d0</span><span class="p">)))</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">when</span> <span class="p">(</span><span class="nb">or</span> <span class="p">(</span><span class="nb">=</span> <span class="nv">s</span> <span class="mi">1</span><span class="p">)</span>
+</span><span class="line">            <span class="p">(</span><span class="nb">=</span> <span class="nv">s</span> <span class="p">(</span><span class="nb">1-</span> <span class="nv">n</span><span class="p">)))</span>
+</span><span class="line">    <span class="p">(</span><span class="k">return-from</span> <span class="nv">robbins-log-choose</span> <span class="p">(</span><span class="nb">values</span> <span class="p">(</span><span class="nv">log-up</span> <span class="p">(</span><span class="nb">float</span> <span class="nv">n</span> <span class="mf">1d0</span><span class="p">))</span>
+</span><span class="line">                                            <span class="mf">0d0</span><span class="p">)))</span>
+</span><span class="line">  <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">n</span> <span class="p">(</span><span class="nb">float</span> <span class="nv">n</span> <span class="mf">1d0</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">s</span> <span class="p">(</span><span class="nb">float</span> <span class="nv">s</span> <span class="mf">1d0</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">n-s</span> <span class="p">(</span><span class="nb">float</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n</span> <span class="nv">s</span><span class="p">)</span> <span class="mf">1d0</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">l1</span> <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">*</span> <span class="p">(</span><span class="nb">+</span> <span class="nv">n</span> <span class="mf">.5d0</span><span class="p">)</span> <span class="p">(</span><span class="nv">log-up</span> <span class="nv">n</span><span class="p">))))</span> <span class="c1">; (+ n .5d0) is exact.</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">l2</span> <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">-</span> <span class="p">(</span><span class="nb">*</span> <span class="p">(</span><span class="nb">+</span> <span class="nv">s</span> <span class="mf">.5d0</span><span class="p">)</span> <span class="p">(</span><span class="nv">log-down</span> <span class="nv">s</span><span class="p">)))))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">l3</span> <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">-</span> <span class="p">(</span><span class="nb">*</span> <span class="p">(</span><span class="nb">+</span> <span class="nv">n-s</span> <span class="mf">.5d0</span><span class="p">)</span> <span class="p">(</span><span class="nv">log-down</span> <span class="nv">n-s</span><span class="p">)))))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">r1</span> <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">/</span> <span class="p">(</span><span class="nb">*</span> <span class="mf">12d0</span> <span class="nv">n</span><span class="p">))))</span>          <span class="c1">; (* 12d0 n) is exact.</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">r2</span> <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">-</span> <span class="p">(</span><span class="nb">/</span> <span class="p">(</span><span class="nb">1+</span> <span class="p">(</span><span class="nb">*</span> <span class="mf">12d0</span> <span class="nv">s</span><span class="p">))))))</span> <span class="c1">; also exact.</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">r3</span> <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">-</span> <span class="p">(</span><span class="nb">/</span> <span class="p">(</span><span class="nb">1+</span> <span class="p">(</span><span class="nb">*</span> <span class="mf">12d0</span> <span class="nv">n-s</span><span class="p">)))))))</span>
+</span><span class="line">    <span class="p">(</span><span class="nv">sum-up</span> <span class="vg">*minus-log-sqrt-2pi*</span>
+</span><span class="line">            <span class="nv">l1</span> <span class="nv">l2</span> <span class="nv">l3</span>
+</span><span class="line">            <span class="nv">r1</span> <span class="nv">r2</span> <span class="nv">r3</span><span class="p">)))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We can quickly check against an exact implementation with
+<code>computable-reals</code> and a brute force factorial.</p>
+
+<pre><code>CL-USER&gt; (defun cr-log-choose (n s)
+           (computable-reals:-r
+            (computable-reals:log-r (alexandria:factorial n))
+            (computable-reals:log-r (alexandria:factorial s))
+            (computable-reals:log-r (alexandria:factorial (- n s)))))
+CR-LOG-CHOOSE
+CL-USER&gt; (computable-reals:-r (rational (robbins-log-choose 10 5))
+                              (cr-log-choose 10 5))
++0.00050526703375914436...
+CL-USER&gt; (computable-reals:-r (rational (robbins-log-choose 1000 500))
+                              (cr-log-choose 1000 500))
++0.00000005551513197557...
+CL-USER&gt; (computable-reals:-r (rational (robbins-log-choose 1000 5))
+                              (cr-log-choose 1000 5))
++0.00025125559085509706...
+</code></pre>
+
+<p>That’s not obviously broken: the error is pretty small, and always positive.</p>
+
+<p>Given a function to over-approximate log-choose, the Confidence
+Sequence Method’s stopping criterion is straightforward.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>csm </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">ftype</span> <span class="p">(</span><span class="k">function</span> <span class="p">((</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">)</span>
+</span><span class="line">                           <span class="p">(</span><span class="nc">real</span> <span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="p">(</span><span class="mi">1</span><span class="p">))</span>
+</span><span class="line">                           <span class="p">(</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">)</span>
+</span><span class="line">                           <span class="nc">real</span><span class="p">)</span>
+</span><span class="line">                          <span class="p">(</span><span class="nb">values</span> <span class="kt">boolean</span> <span class="kt">double-float</span> <span class="k">&amp;optional</span><span class="p">))</span>
+</span><span class="line">                <span class="nv">csm</span><span class="p">))</span>
+</span><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">csm</span> <span class="p">(</span><span class="nv">n</span> <span class="nv">alpha</span> <span class="nv">s</span> <span class="nv">log-eps</span><span class="p">)</span>
+</span><span class="line">  <span class="s">&quot;Given n trials and s sucesses, are we reasonably sure that the</span>
+</span><span class="line"><span class="s">  success rate is *not* alpha (with a false positive rate &lt; exp(log-eps))?</span>
+</span><span class="line">
+</span><span class="line"><span class="s">  Answer that question with Ding, Gandy, and Hahn&#39;s confidence</span>
+</span><span class="line"><span class="s">  sequence method (CSM). The second return value is an estimate of the</span>
+</span><span class="line"><span class="s">  false positive target rate we would need to stop here. This value</span>
+</span><span class="line"><span class="s">  should only be used for reporting; the target rate eps should always</span>
+</span><span class="line"><span class="s">  be fixed before starting the experiment.&quot;</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">check-type</span> <span class="nv">n</span> <span class="p">(</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">check-type</span> <span class="nv">alpha</span> <span class="p">(</span><span class="nc">real</span> <span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="p">(</span><span class="mi">1</span><span class="p">)))</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">check-type</span> <span class="nv">s</span> <span class="p">(</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">check-type</span> <span class="nv">log-eps</span> <span class="nc">real</span><span class="p">)</span>
+</span><span class="line">  <span class="p">(</span><span class="nb">assert</span> <span class="p">(</span><span class="nb">&lt;=</span> <span class="mi">0</span> <span class="nv">s</span> <span class="nv">n</span><span class="p">))</span>
+</span><span class="line">  <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">log-choose</span> <span class="p">(</span><span class="nv">robbins-log-choose</span> <span class="nv">n</span> <span class="nv">s</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">n</span> <span class="p">(</span><span class="nb">float</span> <span class="nv">n</span> <span class="mf">1d0</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">alpha</span> <span class="p">(</span><span class="nb">float</span> <span class="nv">alpha</span> <span class="mf">1d0</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">s</span> <span class="p">(</span><span class="nb">float</span> <span class="nv">s</span> <span class="mf">1d0</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">log-eps</span> <span class="p">(</span><span class="nb">float</span> <span class="nv">log-eps</span> <span class="mf">1d0</span><span class="p">))</span>
+</span><span class="line">         <span class="p">(</span><span class="nv">log-level</span> <span class="p">(</span><span class="nv">sum-up</span> <span class="p">(</span><span class="nv">log-up</span> <span class="p">(</span><span class="nb">1+</span> <span class="nv">n</span><span class="p">))</span>
+</span><span class="line">                            <span class="nv">log-choose</span>
+</span><span class="line">                            <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">*</span> <span class="nv">s</span> <span class="p">(</span><span class="nv">log-up</span> <span class="nv">alpha</span><span class="p">)))</span>
+</span><span class="line">                            <span class="p">(</span><span class="nv">next</span> <span class="p">(</span><span class="nb">*</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n</span> <span class="nv">s</span><span class="p">)</span> <span class="p">(</span><span class="nv">log1p-up</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">alpha</span><span class="p">)))))))</span>
+</span><span class="line">    <span class="p">(</span><span class="nb">values</span> <span class="p">(</span><span class="nb">&lt;</span> <span class="nv">log-level</span> <span class="nv">log-eps</span><span class="p">)</span> <span class="nv">log-level</span><span class="p">)))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The other, much harder, part is computing credible (Bayesian)
+intervals for the Beta distribution. I won’t go over the code,
+but the <a href="https://github.com/pkhuong/csm/blob/47ecdd8f676a213dfb47ad0a329090a4c22b3125/csm.lisp#L465">basic strategy</a> is to invert the CDF, a monotonic function,
+by <a href="https://en.wikipedia.org/wiki/Bisection_method">bisection</a><sup id="fnref:3" role="doc-noteref"><a href="#fn:3" class="footnote">3</a></sup>, and to assume we’re looking for improbable 
+(\(\mathrm{cdf} &lt; 0.5\)) thresholds. This assumption lets us pick a
+<a href="http://dlmf.nist.gov/8.17#ii">simple hypergeometric series</a> that is
+normally useless, but
+<a href="https://github.com/pkhuong/csm/blob/47ecdd8f676a213dfb47ad0a329090a4c22b3125/csm.lisp#L381">converges well for \(x\) that correspond to such small cumulative probabilities</a>;
+when the series converges too slowly,
+<a href="https://github.com/pkhuong/csm/blob/47ecdd8f676a213dfb47ad0a329090a4c22b3125/csm.lisp#L482">it’s always conservative to assume that \(x\) is too central</a> (not
+extreme enough).</p>
+
+<p>That’s all we need to demo the code. Looking at the distribution of
+fill rates for the 1000 bins @ 30K ball/bin facet in</p>
+
+<p><a href="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/grid.png">
+<img class="center" src="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/grid-small.png" />
+</a></p>
+
+<p>it looks like we almost always hit at least 97.5% global density,
+let’s say with probability at least 98%. We can ask the CSM to tell us
+when we have enough data to confirm or disprove that hypothesis, with
+a 0.1% false positive rate.</p>
+
+<p>Instead of generating more data on demand, I’ll keep things simple and
+prepopulate a list with new independently observed fill rates.</p>
+
+<pre><code>CL-USER&gt; (defparameter *observations* '(0.978518900
+                                        0.984687300
+                                        0.983160833
+                                        [...]))
+CL-USER&gt; (defun test (n)
+           (let ((count (count-if (lambda (x) (&gt;= x 0.975))
+                                  *observations*
+                                  :end n)))
+             (csm:csm n 0.98d0 count (log 0.001d0))))
+CL-USER&gt; (test 10)
+NIL
+2.1958681996231784d0
+CL-USER&gt; (test 100)
+NIL
+2.5948497850893184d0
+CL-USER&gt; (test 1000)
+NIL
+-3.0115331544604658d0
+CL-USER&gt; (test 2000)
+NIL
+-4.190687115879456d0
+CL-USER&gt; (test 4000)
+T
+-17.238559826956475d0
+</code></pre>
+
+<p>We can also use the inverse Beta CDF to get a 99.9% credible
+interval. After 4000 trials, we found 3972 successes.</p>
+
+<pre><code>CL-USER&gt; (count-if (lambda (x) (&gt;= x 0.975))
+                   *observations*
+                   :end 4000)
+3972
+</code></pre>
+
+<p>These values give us the following lower and upper bounds on the 99.9% CI.</p>
+
+<pre><code>CL-USER&gt; (csm:beta-icdf 3972 (- 4000 3972) 0.001d0)
+0.9882119750976562d0
+1.515197753898523d-5
+CL-USER&gt; (csm:beta-icdf 3972 (- 4000 3972) 0.001d0 t)
+0.9963832682169742d0
+2.0372679238045424d-13
+</code></pre>
+
+<p>And we can even re-use and extend the Beta proportion code from
+earlier to generate this embeddable <a href="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/1k-30k-report.svg"><img src="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/1k-30k-report.svg" width="100px" style="vertical-align: middle" /></a> SVG report.</p>
+
+<p>There’s one small problem with the sample usage above: if we compute
+the stopping criterion with a false positive rate of 0.1%, and do the
+same for each end of the credible interval, our total false
+positive (error) rate might actually be 0.3%! The next section will
+address that, and the equally important problem of estimating power.</p>
+
+<h1 id="monte-carlo-power-estimation">Monte Carlo power estimation</h1>
+
+<p>It’s not always practical to generate data forever. For example, we
+might want to bound the number of iterations we’re willing to waste in
+an automated testing script. When there is a bound on the sample size,
+the CSM is still correct, just conservative.</p>
+
+<p>We would then like to know the probability that the CSM will stop
+successfully when the underlying success rate differs from the
+threshold rate \(p\) (<a href="https://github.com/pkhuong/csm/blob/47ecdd8f676a213dfb47ad0a329090a4c22b3125/csm.lisp#L291"><code>alpha</code> in the code</a>). The problem here is
+that, for any bounded number of iterations, we can come up with an
+underlying success rate so close to \(p\) (but still different) that
+the CSM can’t reliably distinguish between the two.</p>
+
+<p>If we want to be able to guarantee any termination rate, we need <em>two</em>
+thresholds: the CSM will stop whenever it’s likely that the underlying
+success rate differs from either of them. The hardest probability to
+distinguish from both thresholds is close to the midpoint between them.</p>
+
+<p>With two thresholds and the credible interval, we’re
+running three tests in parallel. I’ll apply a 
+<a href="https://en.wikipedia.org/wiki/Bonferroni_correction">Bonferroni correction</a>,
+and use \(\varepsilon / 3\) for each of the two CSM tests, and
+\(\varepsilon / 6\) for each end of the CI.</p>
+
+<p>That <a href="https://github.com/pkhuong/csm/blob/47ecdd8f676a213dfb47ad0a329090a4c22b3125/csm.lisp#L542">logic is encapsulated in <code>csm-driver</code></a>.
+We only have to pass a
+success value generator function to the driver. In our case, the
+generator is itself a call to <code>csm-driver</code>, with fixed thresholds
+(e.g., 96% and 98%), and a Bernoulli sampler (e.g., return <code>T</code> with
+probability 97%). We can see if the driver returns successfully <em>and
+correctly</em> at each invocation of the generator function, with the
+parameters we would use in production, and recursively compute
+an estimate for that procedure’s success rate with CSM. The following
+expression simulates a CSM procedure with thresholds at 96% and 98%,
+the (usually unknown) underlying success rate in the middle, at 97%, a
+false positive rate of at most 0.1%, and an iteration limit of ten thousand
+trials. We pass that simulation’s result to <code>csm-driver</code>, and ask
+whether the simulation’s success rate differs from 99%, while allowing
+one in a million false positives.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (labels ((bernoulli (i &amp;aux (p 0.97d0))
+</span><span class="line">                    (declare (ignore i))
+</span><span class="line">                    (&lt; (random 1d0) p))
+</span><span class="line">                  (generator (i &amp;aux (p 0.97d0)
+</span><span class="line">                                     (alpha 0.96d0) (alpha-hi 0.98d0)
+</span><span class="line">                                     (eps 1d-3) (max-count 10000))
+</span><span class="line">                    (declare (ignore i))
+</span><span class="line">                    (multiple-value-bind (success success-hi estimate)
+</span><span class="line">                        (csm:csm-driver #'bernoulli alpha eps
+</span><span class="line">                                        :alpha-hi alpha-hi
+</span><span class="line">                                        :max-count max-count)
+</span><span class="line">                      ;; check that the CSM succeeds, and that it does so
+</span><span class="line">                      ;; with correct estimates.
+</span><span class="line">                      (let ((correct-alpha (if (&lt; p alpha)
+</span><span class="line">                                               (&lt; estimate alpha)
+</span><span class="line">                                               (&gt; estimate alpha)))
+</span><span class="line">                            (correct-hi (if (&lt; p alpha-hi)
+</span><span class="line">                                            (&lt; estimate alpha-hi)
+</span><span class="line">                                            (&gt; estimate alpha-hi))))
+</span><span class="line">                        (cond ((and success success-hi)
+</span><span class="line">                               (and correct-alpha correct-hi))
+</span><span class="line">                              (success
+</span><span class="line">                               correct-alpha)
+</span><span class="line">                              (success-hi
+</span><span class="line">                               correct-hi)
+</span><span class="line">                              (t
+</span><span class="line">                               nil))))))
+</span><span class="line">           (csm:csm-driver #'generator 0.99d0 1d-6))
+</span><span class="line">T
+</span><span class="line">T
+</span><span class="line">1.0d0
+</span><span class="line">2210
+</span><span class="line">2210
+</span><span class="line">0.993145939238895d0
+</span><span class="line">0.9999999998869291d0</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We find that yes, we can expect the 96%/98%/0.1% false positive/10K
+iterations setup to succeed more than 99% of the time. The 
+<a href="https://github.com/pkhuong/csm/blob/47ecdd8f676a213dfb47ad0a329090a4c22b3125/csm.lisp#L690">code above is available as <code>csm-power</code></a>,
+with a tighter outer false positive rate of 1e-9. If we only allow
+1000 iterations, <code>csm-power</code> quickly tells us that, with one CSM
+success in 100 attempts, we can expect the CSM success rate to be less
+than 99%.</p>
+
+<pre><code>CL-USER&gt; (csm:csm-power 0.97d0 0.96d0 1000 :alpha-hi 0.98d0 :eps 1d-3 :stream *standard-output*)
+         1 0.000e+0 1.250e-10 10.000e-1 1.699e+0
+        10 0.000e+0 0.000e+0 8.660e-1 1.896e+1
+        20 0.000e+0 0.000e+0 6.511e-1 3.868e+1
+        30 0.000e+0 0.000e+0 5.099e-1 5.851e+1
+        40 2.500e-2 5.518e-7 4.659e-1 7.479e+1
+        50 2.000e-2 4.425e-7 3.952e-1 9.460e+1
+        60 1.667e-2 3.694e-7 3.427e-1 1.144e+2
+        70 1.429e-2 3.170e-7 3.024e-1 1.343e+2
+        80 1.250e-2 2.776e-7 2.705e-1 1.542e+2
+        90 1.111e-2 2.469e-7 2.446e-1 1.741e+2
+       100 1.000e-2 2.223e-7 2.232e-1 1.940e+2
+100 iterations, 1 successes (false positive rate &lt; 1.000000e-9)
+success rate p ~ 1.000000e-2
+confidence interval [2.223495e-7, 0.223213    ]
+p &lt; 0.990000    
+max inner iteration count: 816
+
+T
+T
+0.01d0
+100
+1
+2.2234953205868331d-7
+0.22321314110840665d0
+</code></pre>
+
+<h1 id="slo-ify-all-the-things-with-this-exact-test">SLO-ify all the things with this Exact test</h1>
+
+<p>Until now, I’ve only used the Confidence Sequence Method (CSM) for
+Monte Carlo simulation of phenomena that are naturally seen as boolean
+success / failures processes. We can apply the same CSM to implement
+an <a href="https://en.wikipedia.org/wiki/Exact_test">exact test</a> for null
+hypothesis testing, with a bit of resampling magic.</p>
+
+<p>Looking back at the balls and bins grid, the average fill rate seems
+to be slightly worse for 100 bins @ 60K ball/bin, than for 1000 bins
+@ 128K ball/bin. How can we test that with the CSM?</p>
+
+<p><a href="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/grid.png">
+<img class="center" src="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/grid-small.png" />
+</a></p>
+
+<p>First, we should get a fresh dataset for the two setups we wish to
+compare.</p>
+
+<pre><code>CL-USER&gt; (defparameter *100-60k* #(0.988110167
+                                   0.990352500
+                                   0.989940667
+                                   0.991670667
+                                   [...]))
+CL-USER&gt; (defparameter *1000-128k* #(0.991456281
+                                     0.991559578
+                                     0.990970109
+                                     0.990425805
+                                     [...]))
+CL-USER&gt; (alexandria:mean *100-60k*)
+0.9897938
+CL-USER&gt; (alexandria:mean *1000-128k*)
+0.9909645
+CL-USER&gt; (- * **)
+0.0011706948
+</code></pre>
+
+<p>The mean for 1000 bins @ 128K ball/bin is slightly higher than that
+for 100 bins @ 60k ball/bin. We will now simulate the null hypothesis
+(in our case, that the distributions for the two setups are
+identical), and determine how rarely we observe a difference of
+<code>0.00117</code> in means. I only use a null hypothesis where the
+distributions are identical for simplicity; we could use the same
+resampling procedure to simulate distributions that, e.g., have
+identical shapes, but one is shifted right of the other.</p>
+
+<p>In order to simulate our null hypothesis, we want to be as close to
+the test we performed as possible, with the only difference being that
+we generate data by reshuffling from our observations.</p>
+
+<pre><code>CL-USER&gt; (defparameter *resampling-data* (concatenate 'simple-vector *100-60k* *1000-128k*))
+*RESAMPLING-DATA*
+CL-USER&gt; (length *100-60k*)
+10000
+CL-USER&gt; (length *1000-128k*)
+10000
+</code></pre>
+
+<p>The two observation vectors have the same size, 10000 values; in
+general, that’s not always the case, and we must make sure to
+replicate the sample sizes in the simulation. We’ll generate our
+simulated observations by shuffling the <code>*resampling-data*</code> vector,
+and splitting it in two subvectors of ten thousand elements.</p>
+
+<pre><code>CL-USER&gt; (let* ((shuffled (alexandria:shuffle *resampling-data*))
+                (60k (subseq shuffled 0 10000))
+                (128k (subseq shuffled 10000)))
+           (- (alexandria:mean 128k) (alexandria:mean 60k)))
+6.2584877e-6
+</code></pre>
+
+<p>We’ll convert that to a truth value by comparing the difference of
+simulated means with the difference we observed in our real data,
+\(0.00117\ldots\), and declare success when the simulated difference
+is at least as large as the actual one. This approach gives us a
+one-sided test; a two-sided test would compare the absolute
+values of the differences.</p>
+
+<pre><code>CL-USER&gt; (csm:csm-driver 
+          (lambda (_)
+            (declare (ignore _))
+            (let* ((shuffled (alexandria:shuffle *resampling-data*))
+                   (60k (subseq shuffled 0 10000))
+                   (128k (subseq shuffled 10000)))
+              (&gt;= (- (alexandria:mean 128k) (alexandria:mean 60k))
+                  0.0011706948)))
+          0.005 1d-9 :alpha-hi 0.01 :stream *standard-output*)
+         1 0.000e+0 7.761e-11 10.000e-1 -2.967e-1
+        10 0.000e+0 0.000e+0 8.709e-1 -9.977e-1
+        20 0.000e+0 0.000e+0 6.577e-1 -1.235e+0
+        30 0.000e+0 0.000e+0 5.163e-1 -1.360e+0
+        40 0.000e+0 0.000e+0 4.226e-1 -1.438e+0
+        50 0.000e+0 0.000e+0 3.569e-1 -1.489e+0
+        60 0.000e+0 0.000e+0 3.086e-1 -1.523e+0
+        70 0.000e+0 0.000e+0 2.718e-1 -1.546e+0
+        80 0.000e+0 0.000e+0 2.427e-1 -1.559e+0
+        90 0.000e+0 0.000e+0 2.192e-1 -1.566e+0
+       100 0.000e+0 0.000e+0 1.998e-1 -1.568e+0
+       200 0.000e+0 0.000e+0 1.060e-1 -1.430e+0
+       300 0.000e+0 0.000e+0 7.207e-2 -1.169e+0
+       400 0.000e+0 0.000e+0 5.460e-2 -8.572e-1
+       500 0.000e+0 0.000e+0 4.395e-2 -5.174e-1
+       600 0.000e+0 0.000e+0 3.677e-2 -1.600e-1
+       700 0.000e+0 0.000e+0 3.161e-2 2.096e-1
+       800 0.000e+0 0.000e+0 2.772e-2 5.882e-1
+       900 0.000e+0 0.000e+0 2.468e-2 9.736e-1
+      1000 0.000e+0 0.000e+0 2.224e-2 1.364e+0
+      2000 0.000e+0 0.000e+0 1.119e-2 5.428e+0
+
+NIL
+T
+0.0d0
+2967
+0
+0.0d0
+0.007557510165262294d0
+</code></pre>
+
+<p>We tried to replicate the difference 2967 times, and did not succeed
+even once. The CSM stopped us there, and we find a CI for the
+probability of observing our difference, under the null hypothesis, of
+<code>[0, 0.007557]</code> (i.e., \(p &lt; 0.01\)). Or, for a graphical summary, <a href="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/exact-report.svg"><img src="/images/2018-07-06-testing-slo-type-properties-with-the-confidence-sequence-method/exact-report.svg" width="100px" style="vertical-align: middle" /></a>.
+We can also test for a lower \(p\)-value by changing the
+thresholds and running the simulation more times (around thirty
+thousand iterations for \(p &lt; 0.001\)).</p>
+
+<p>This experiment lets us conclude that the
+difference in mean fill rate between 100 bins @ 60K ball/bin and
+1000 @ 128K is probably not due to chance: it’s unlikely
+that we observed an expected difference between data sampled from
+the same distribution. In other words, “I’m confident that the fill rate for
+1000 bins @ 128K ball/bin is greater than for 100 bins @ 60K
+ball/bins, because it would be highly unlikely to observe a difference in means
+that extreme if they had the same distribution (\(p &lt; 0.01\))”.</p>
+
+<p>In general, we can use this exact test when we have two sets of
+observations, \(X\sb{0}\) and \(Y\sb{0}\), and a statistic
+\(f\sb{0} = f(X\sb{0}, Y\sb{0})\), where \(f\) is a pure
+function (the extension to three or more sets of observations is
+straightforward).</p>
+
+<p>The test lets us determine the likelihood of observing 
+\(f(X, Y) \geq f\sb{0}\) 
+(we could also test for \(f(X, Y) \leq f\sb{0}\)), if
+\(X\) and \(Y\) were taken from similar distributions, modulo simple
+transformations (e.g., \(X\)’s mean is shifted compared to \(Y\)’s, or
+the latter’s variance is double the former’s).</p>
+
+<p>We answer that question by repeatedly sampling without replacement
+from \(X\sb{0} \cup Y\sb{0}\) to generate \(X\sb{i}\) and
+\(Y\sb{i}\), such that \(|X\sb{i}| = |X\sb{0}|\) and
+\(|Y\sb{i}| = |Y\sb{0}|\) (e.g., by shuffling a vector and
+splitting it in two). We can apply any simple transformation here
+(e.g., increment every value in \(Y\sb{i}\) by \(\Delta\) to shift
+its mean by \(\Delta\)). Finally, we check if 
+\(f(X\sb{i}, Y\sb{i}) \geq f\sb{0} = f(X\sb{0}, Y\sb{0})\); if
+so, we return success for this iteration, otherwise failure.</p>
+
+<p>The loop above is a Bernoulli process that generates independent,
+identically distributed (assuming the random sampling is correct)
+truth values, and its success rate is equal to the probability of
+observing a value for \(f\) “as extreme” as \(f\sb{0}\) under the
+null hypothesis. We use the CSM with false positive rate
+\(\varepsilon\) to know when to stop generating more
+values and compute a credible interval for the probability under the
+null hypothesis. If that probability is low (less than some
+predetermined threshold, like \(\alpha = 0.001\)), we infer that the
+null hypothesis does not hold, and declare that the difference in our
+sample data points at a real difference in distributions. If we do
+everything correctly (<em>cough</em>), we will have implemented an Atlantic
+City procedure that fails with probability \(\alpha + \varepsilon\).</p>
+
+<p>Personally, I often just set the threshold and the false positive
+rate unreasonably low and handwave some Bayes.</p>
+
+<h1 id="thats-all">That’s all!</h1>
+
+<p>I pushed
+<a href="https://github.com/pkhuong/csm">the code above, and much more, to github</a>,
+in Common
+Lisp, C, and Python (probably Py3, although 2.7 might work). Hopefully
+anyone can run with the code and use it to test, not only 
+<a href="https://landing.google.com/sre/book/chapters/service-level-objectives.html">SLO</a>-type
+properties, but also answer more general questions, with an exact
+test. I’d love to have ideas or contributions on the usability front.
+I have some
+<a href="https://github.com/pkhuong/csm/blob/master/attic/beta-distribution.lisp">throw-away code in <code>attic/</code></a>,
+which I used to generate the SVG in this post, but it’s not great. I
+also feel like I can do something to make it easier to stick the logic
+in shell scripts and continuous testing pipelines.</p>
+
+<p>When I passed around a first draft for this post, many readers that
+could have used the CSM got stuck on the process of moving from
+mathematical expressions to computer code; not just how to do it,
+but, more fundamentally, why we can’t just transliterate Greek to
+C or CL. I hope this revised post is clearer. Also, I hope it’s clear
+that the reason I care so much about not introducing false positive
+via rounding isn’t that I believe they’re likely to make a difference,
+but simply that I want peace of mind with respect to numerical issues;
+I really don’t want to be debugging some issue in my tests and have to
+wonder if it’s all just caused by numerical errors.</p>
+
+<p>The reason I care so much about making sure users can understand what
+the CSM codes does (and why it does what it does) is that I strongly
+believe we should minimise dependencies whose inner working we’re
+unable to (legally) explore. Every abstraction leaks, and leakage is
+particularly frequent in failure situations. We may not need to
+understand magic if everything works fine, but, everything breaks
+eventually, and that’s when expertise is most useful. When shit’s on
+fire, we must be able to break the abstraction and understand how the
+magic works, and how it fails.</p>
+
+<p>This post only tests ideal SLO-type properties (and
+regular null hypothesis tests translated to SLO properties),
+properties of the form “I claim that this indicator satisfies
+$PREDICATE x% of the time, with false positive rate y%” where the
+indicator’s values are independent and identically distributed.</p>
+
+<p>The last assumption is rarely <em>truly</em> satisfied in practice. I’ve seen
+an interesting choice, where the <a href="https://landing.google.com/sre/book/chapters/service-level-objectives.html">service level objective</a> is defined in
+terms of a sample of production requests, which can replayed, shuffled,
+etc. to ensure i.i.d.-ness. If the nature of the traffic changes
+abruptly, the SLO may not be representative of behaviour in
+production; but, then again, how could the service provider have
+guessed the change was about to happen? I like this approach because
+it is amenable to predictive statistical analysis, and incentivises
+communication between service users and providers, rather than users
+assuming the service will gracefully handle radically new crap being
+thrown at it.</p>
+
+<p>Even if we have a representative sample of production, it’s not true
+that the <a href="https://landing.google.com/sre/book/chapters/service-level-objectives.html">service level indicators</a>
+for individual requests are distributed identically. There’s an easy
+fix for the CSM and our credible intervals: generate
+i.i.d. <em>sets of requests</em> by resampling (e.g., shuffle the
+requests sample) and count successes and failures for individual
+requests, but only test for CSM termination after each resampled set.</p>
+
+<p>On a more general note, I see the Binomial and Exact tests as
+instances of a general pattern that avoids intuitive functional decompositions
+that create subproblems that are harder to solve than the original
+problem. For example, instead of trying to directly determine how
+frequently the SLI satisfies some threshold, it’s natural to
+first fit a distribution on the SLI, and then compute percentiles on
+that distribution. Automatically fitting an arbitrary distribution is
+hard, especially with the weird outliers computer systems spit
+out. Reducing to a Bernoulli process before applying statistics is
+much simpler. Similarly, rather than coming up with analytical
+distributions in the Exact test, we brute-force the problem by
+resampling from the empirical data. I have more examples from online
+control systems… I guess the moral is to be wary of decompositions
+where internal subcomponents generate intermediate values that are
+richer in information than the final output.</p>
+
+<p><small>Thank you Jacob, Ruchir, Barkley, and Joonas for all the
+editing and restructuring comments.</small></p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:1" role="doc-endnote">
+      <p>Proportions are unscaled probabilities that don’t have to sum or integrate to 1. Using proportions instead of probabilities tends to make calculations simpler, and we can always get a probability back by rescaling a proportion by the inverse of its integral. <a href="#fnref:1" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:2" role="doc-endnote">
+      <p>Instead of a \(\mathrm{Beta}(a+1, b+1)\), they tend to bound with a \(\mathrm{Beta}(a, b)\). The difference is marginal for double-digit \(n\). <a href="#fnref:2" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:3" role="doc-endnote">
+      <p>I used the bisection method instead of more sophisticated ones with better convergence, like <a href="https://en.wikipedia.org/wiki/Newton%27s_method">Newton’s  method</a> or the derivative-free <a href="https://en.wikipedia.org/wiki/Secant_method">Secant method</a>, because bisection already adds one bit of precision per iteration, only needs a predicate that returns “too high” or “too low,” and is easily tweaked to be conservative when the predicate declines to return an answer. <a href="#fnref:3" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
 </div>
   
   

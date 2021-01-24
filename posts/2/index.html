@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/">UMASH: a fast and universal enough hash</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/">1.5x the PH bits for one more CLMUL</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Aug
+Oct
   
-24th, 
+31st, 
 2020
 
 
 
 
         
-         | <a href="/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/"
+         | <a href="/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/"
 	      >Comments</a>
         
         
@@ -117,740 +117,484 @@ Aug
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><small>Originally posted on the <a href="https://engineering.backtrace.io/2020-08-24-umash-fast-enough-almost-universal-fingerprinting/">Backtrace I/O tech blog</a>.</small></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><small>Turns out the part where I simply asserted a property was slightly off 😉. I had to go back to an older proof with weaker bounds, but that’s not catastrophic: we still collide way more rarely than \(2^{-70}\).</small></p>
 
-<p>We accidentally a whole hash function… but we had a good reason!
-Our
-<a href="https://github.com/backtrace-labs/umash">MIT-licensed UMASH hash function</a>
-is a decently fast non-cryptographic hash function that guarantees
-a worst-case bound on the  probability of collision
-<a href="https://en.wikipedia.org/wiki/Universal_hashing#Mathematical_guarantees">between any two inputs generated independently of the UMASH parameters</a>.</p>
+<p>The core of <a href="https://github.com/backtrace-labs/umash">UMASH</a> is a
+hybrid <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.105.9929&amp;rep=rep1&amp;type=pdf#page=3">PH</a>/<a href="https://eprint.iacr.org/2004/319.pdf#page=4">(E)NH</a>
+block compression function.
+That function is fast
+(it needs one multiplication for each 16-byte “chunk” in a block),
+but relatively weak:
+despite a 128-bit output, the worst-case probability of collision is
+\(2^{-64}\).</p>
 
-<p>On the
-<a href="https://en.wikichip.org/wiki/intel/xeon_platinum/8175m">2.5 GHz Intel 8175M</a>
-servers that power <a href="https://backtrace.io/">Backtrace</a>’s hosted
-offering, UMASH computes a 64-bit hash for short cached inputs of up
-to 64 bytes in 9-22 ns, and for longer ones at up to 22 GB/s, while
-guaranteeing that two distinct inputs of at most \(s\) bytes collide
-with probability less than \(\lceil s / 2048 \rceil \cdot 2^{-56}\).
-If that’s not good enough, we can also reuse most of the parameters to
-compute two independent UMASH values. The resulting 128-bit
-<a href="https://en.wikipedia.org/wiki/Fingerprint_(computing)">fingerprint function</a>
-offers a short-input latency of 9-26 ns, a peak throughput of 11.2
-GB/s, and a collision probability of \(\lceil s / 2048 \rceil^2 \cdot
-2^{-112}\) (better than \(2^{-70}\) for input size up to 7.5 GB).
-These collision bounds hold for all inputs constructed without any
-feedback about the randomly chosen UMASH parameters.</p>
+<p>For a <a href="https://en.wikipedia.org/wiki/Fingerprint_(computing)">fingerprinting</a>
+application, we want collision probability less than \(\approx 2^{-70},\)
+so that’s already too weak,
+before we even consider merging a variable-length string of compressed
+block values.</p>
 
-<p>The latency on short cached inputs (9-22 ns for 64 bits, 9-26 ns for
-128) is somewhat worse than the state of the art for non-cryptographic
-hashes—
-<a href="https://github.com/wangyi-fudan/wyhash">wyhash</a> achieves
-8-15 ns and <a href="http://fastcompression.blogspot.com/2019/03/presenting-xxh3.html">xxh3</a>
- 8-12 ns—but still in the same ballpark.  It also
-compares well with latency-optimised hash functions like
-<a href="https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function#FNV-1a_hash">FNV-1a</a>
-(5-86 ns) and
-<a href="https://en.wikipedia.org/wiki/MurmurHash#MurmurHash2">MurmurHash64A</a>
-(7-23 ns).</p>
+<p>The <a href="https://pvk.ca/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/">initial UMASH proposal</a>
+compresses each block with two independent compression functions.
+Krovetz showed that we could do so while reusing most of the key material
+(random parameters), with a <a href="http://krovetz.net/csus/papers/thesis.pdf#page=50">Toeplitz extension</a>,
+and I simply recycled the proof for UMASH’s hybrid compressor.</p>
 
-<p>Similarly, UMASH’s peak throughput (22 GB/s) does not match
-the current best hash throughput (37 GB/s with
-<a href="https://github.com/Cyan4973/xxHash">xxh3</a>
-and <a href="https://github.com/gamozolabs/falkhash">falkhash</a>, apparently
-10% higher with <a href="https://github.com/cmuratori/meow_hash">Meow hash</a>),
-but does comes within a factor of two; it’s actually higher than that of
-some performance-optimised hashes, like
-<a href="https://github.com/wangyi-fudan/wyhash">wyhash</a> (16 GB/s) and
-<a href="https://github.com/google/farmhash">farmhash32</a>
-(19 GB/s).  In fact, even the 128-bit fingerprint (11.2 GB/s) is
-comparable to respectable options like
-<a href="https://github.com/aappleby/smhasher/blob/master/src/MurmurHash2.cpp#L89">MurmurHash64A</a>
-(5.8 GB/s) and
-<a href="https://burtleburtle.net/bob/hash/spooky.html">SpookyHash</a> (11.6 GB/s).</p>
+<p>That’s good for the memory footprint of the random parameters, but
+doesn’t help performance: we still have to do double the work to get
+double the hash bits.</p>
 
-<p>What sets UMASH apart from these other non-cryptographic hash
-functions is its proof of a collision probability bound.  In the
-absence of an adversary that adaptively constructs pathological inputs
-as it infers more information about the randomly chosen parameters, we
-know that two distinct inputs of \(s\) or fewer bytes will have the
-same 64-bit hash with probability at most \(\lceil s / 2048 \rceil
-\cdot 2^{-56},\) where the expectation is taken over the random
-“key” parameters.</p>
+<p>Earlier this month, <a href="https://github.com/jbapple">Jim Apple</a> pointed me at
+a <a href="https://link.springer.com/chapter/10.1007/978-3-662-46706-0_25">promising alternative that doubles the hash bit with only one more multiplication</a>.
+The construction adds finite field operations that aren’t particularly
+efficient in software, on top of the additional 64x64 -&gt; 128
+(carryless) multiplication, so isn’t a slam dunk win over a
+straightforward Toeplitz extension.
+However, Jim felt like we could “spend” some of the bits we don’t need
+for fingerprinting (\(2^{-128}\) collision probability is overkill
+when we only need \(2^{-70}\)) in order to make do with faster operations.</p>
 
-<p>Only one non-cryptographic hash function in
-<a href="https://github.com/rurban/smhasher">Reini Urban’s fork of SMHasher</a>
-provides this sort of bound: <a href="https://github.com/lemire/clhash">CLHash</a>
-<a href="https://arxiv.org/abs/1503.03465">guarantees a collision probability \(\approx 2^{-63}\)</a>
-in the same
-<a href="https://en.wikipedia.org/wiki/Universal_hashing#Mathematical_guarantees">universal hashing</a>
-model as UMASH.  While CLHash’s peak throughput (22 GB/s) is
-equal to UMASH’s, its latency on short inputs is worse (23-25 ns
-instead of 9-22ns).  We will also see that its stronger collision
-bound remains too weak for many practical applications.  In order to
-compute a <a href="https://en.wikipedia.org/wiki/Fingerprint_(computing)">fingerprint</a>
-with CLHash, one would have to combine multiple hashes, exactly like
-we did for the 128-bit UMASH fingerprint.</p>
+<p>Turns out he was right! We can use carryless multiplications by sparse
+constants (concretely, xor-shift and one more shift) without any
+reducing polynomial, <em>on independent 64-bit halves</em>… and still
+collide with probability at most <s>2^{-126}</s> \(2^{-98}\).</p>
 
-<p>Actual cryptographic hash functions provide stronger bounds in a much
-more pessimistic model; however they’re also markedly slower than
-non-cryptographic hashes.  <a href="https://github.com/BLAKE3-team/BLAKE3">BLAKE3</a>
-needs at least 66 ns to hash short inputs, and achieves a peak throughput
-of 5.5 GB/s.  Even the <a href="https://github.com/rust-lang/rust/issues/29754">reduced-round SipHash-1-3</a>
-hashes short inputs in 18-40 ns and longer ones at a peak throughput
-of 2.8 GB/s.  That’s the price of their pessimistically adversarial
-security model.  Depending on the application, it can make sense to
-consider a more restricted adversary that must prepare its dirty deed
-before the hash function’s parameters are generated at random, and
-still ask for provable bounds on the probability of collisions.
-That’s the niche we’re targeting with UMASH.</p>
+<p>The proof is fairly simple, but relies on a bit of notation for clarity.
+Let’s start by re-stating UMASH’s hybrid PH/ENH block compressor in
+that notation.</p>
 
-<p>Clearly, the industry is comfortable with no bound at all.
-However, even in the absence of
-<a href="https://www.131002.net/siphash/#at">seed-independent collisions</a>,
-timing side-channels in a data structure implementation could
-theoretically leak information about colliding inputs, and iterating
-over a hash table’s entries to print its contents can divulge even more
-bits.  A sufficiently motivated adversary could use something like
-that to learn more about the key and deploy an algorithmic denial of
-service attack.  For example, the linear structure of UMASH (and of
-other polynomial hashes like CLHash) makes it easy to combine known
-collisions to create exponentially more colliding inputs.  There is no
-universal answer; UMASH is simply another point in the solution space.</p>
+<h2 id="how-does-umash-currently-work">How does UMASH currently work?</h2>
 
-<p>If reasonable performance coupled with an actual bound on collision
-probability <em>for data that does not adaptively break the hash</em> sounds
-useful to you,
-<a href="https://github.com/backtrace-labs/umash">take a look at UMASH on GitHub</a>!</p>
+<p>The current block compressor in UMASH splits a 256-byte block \(m\)
+in 16 chunks \(m_i,\, i\in [0, 15]\) of 128 bits each, and processes
+all but the last chunk with a PH loop,</p>
 
-<p>The <a href="#but-why">next section</a> will explain why we found it useful to
-design another hash function.  The rest of the post
-<a href="#umash-high-level">sketches how UMASH works</a> and
-<a href="#implementation-tricks">how it balances short-input latency and strength</a>,
-before <a href="#usage">describing a few interesting usage patterns.</a></p>
+<p>\[ \bigoplus_{i=0}^{14} \mathtt{PH}(k_i, m_i), \]</p>
 
-<p><small>The latency and throughput results above were all measured on
-the same unloaded 2.5 GHz Xeon 8175M.  While we did not disable
-frequency scaling (#cloud), the clock rate seemed stable at 3.1
-GHz during our run.</small></p>
+<p>where</p>
 
-<h2 id="how-did-we-even-get-here"><a id="but-why"></a>How did we even get here?</h2>
+<p>\[ \mathtt{PH}(k_i, m_i) = ((k_i \bmod 2^{64}) \oplus (m_i \bmod 2^{64})) \odot (\lfloor k_i / 2^{64} \rfloor \oplus \lfloor m_i / 2^{64} \rfloor) \]</p>
 
-<p>Engineering is the discipline of satisficisation: crisply defined
-problems with perfect solutions rarely exist in reality, so we must
-resign ourselves to satisfying approximate constraint sets “well
-enough.”  However, there are times when all options are not only
-imperfect, but downright sucky.  That’s when one has to put on a
-different hat, and question the problem itself: are our constraints
-irremediably at odds, or are we looking at an under-explored
-solution space?</p>
+<p>and each \(k_i\) is a randomly generated 128-bit parameter.</p>
 
-<p>In the former case, we simply have to want something else.  In the
-latter, it might make sense to spend time to really understand the
-current set of options and hand-roll a specialised approach.</p>
+<p>The compression loop in UMASH handles the last chunk, along with a
+size tag (to protect against extension attacks), with
+<a href="https://eprint.iacr.org/2004/319.pdf#page=4">ENH</a>:</p>
 
-<p>That’s the choice we faced when we started caching intermediate
-results in
-<a href="https://help.backtrace.io/en/articles/2428859-web-console-overview">Backtrace’s database</a>
-and found a dearth of acceptable hash functions.  Our in-memory
-columnar database is a core component of the backend, and, like most
-analytics databases, it tends to process streams of similar queries.
-However, a naïve query cache would be ineffective: our more heavily
-loaded servers handle a constant write load of more than 100 events
-per second with dozens of indexed attributes (populated column values)
-each.  Moreover, queries invariably select a large number of data
-points with a time windowing predicate that excludes old data… and
-the endpoints of these time windows advance with each wall-clock
-second.  The queries evolve over time, and must usually consider newly
-ingested data points.</p>
+<p>\[ \mathtt{ENH}(k, x, y) = ((k + x) \bmod 2^{64}) \cdot (\lfloor k / 2^{64}\rfloor + \lfloor x / 2^{64} \rfloor \bmod 2^{64}) + y \mod 2^{128}. \]</p>
 
-<p><a href="https://www.gsd.inesc-id.pt/~rodrigo/slider_middleware14.pdf">Bhatotia et al’s Slider</a>
-show how we can specialise the idea of
-<a href="http://adapton.org/">self-adjusting or incremental computation</a>
-for repeated MapReduce-style queries over a sliding window.
-The key idea is to split the data set at stable boundaries (e.g., on
-date change boundaries rather than 24 hours from the beginning of the
-current time window) in order to expose memoisation opportunities, and
-to do so recursively to repair around point mutations to older data.</p>
+<p>The core operation in ENH is a full (64x64 -&gt; 128) integer
+multiplication, which has lower latency than PH’s carryless
+multiplication on x86-64.  That’s why UMASH switches to ENH for the
+last chunk.  We use ENH for only one chunk because combining multiple
+NH values calls for 128-bit additions, and that’s slower than PH’s
+xors.  Once we have mixed the last chunk and the size tag with ENH,
+the result is simply xored in with the previous chunks’ PH values:</p>
 
-<p>Caching fully aggregated partial results works well for static
-queries, like scheduled reports… but the first step towards creating
-a great report is interactive data exploration, and that’s an activity
-we strive to support well, even when drilling down tens of millions of
-rich data points.  That’s why we want to also cache intermediate
-results, in order to improve response times when tweaking a saved
-report, or when crafting ad hoc queries to better understand how and
-when an application fails.</p>
+<p>\[ \left(\bigoplus_{i=0}^{14} \mathtt{PH}(k_i, m_i)\right)  \oplus \mathtt{ENH}(m_{15}, k_{15}, \mathit{tag}). \]</p>
 
-<p>We must go back to a
-<a href="http://www.umut-acar.org/self-adjusting-computation">more general incremental computation strategy</a>:
-rather than only splitting up inputs, we want to stably partition the
-data dependency graph of each query, in order to identify shared
-subcomponents whose results can be reused.  This finer grained
-strategy surfaces opportunities to “resynchronise” computations, to
-recognize when different expressions end up generating a subset of
-identical results, enabling reuse in later steps.  For example, when
-someone updates a query by adding a selection predicate that only
-rejects a small fraction of the data, we can expect to reuse some of
-the post-selection work executed for earlier incarnations of the
-query, if we remember to key on the selected data points rather than
-the predicates.</p>
+<p>This function is annoying to analyse directly, because we end up
+having to manipulate different proofs of almost-universality.  Let’s
+abstract things a bit, and reduce the ENH/PH to the bare minimum we need
+to find our collision bounds.</p>
 
-<p>The complication here is that these intermediate results tend to be
-large.  Useful analytical queries start small (a reasonable query
-coupled with cache/transaction invalidation metadata to stand in for
-the full data set), grow larger as we select data points, arrange them
-in groups, and materialise their attributes, and shrink again at the
-end, as we summarise data and throw out less interesting groups.</p>
+<p>Let’s split our message blocks in \(n\) (\(n = 16\) for
+UMASH) “chunks”, and apply an independently sampled mixing function
+to each chunk.  Let’s say we have two messages \(m\) and
+\(m^\prime\) with chunks \(m_i\) and \(m^\prime_i\), for \(i\in
+[0, n)\), and let \(h_i\) be the result of mixing chunk \(m_i,\)
+and \(h^\prime_i\) that of mixing \(m^\prime_i.\)</p>
 
-<p>When caching the latter shrinking steps, where resynchronised reuse
-opportunities abound and can save a lot of CPU time, we often
-find that storing a fully materialised representation of the cache key
-would take up more space than the cached result.</p>
+<p>We’ll assume that the first chunk is mixed with a
+\(2^{-w}\)-almost-universal (\(2^{-64}\) for UMASH) hash function:
+if \(m_0 \neq m^\prime_0,\) \(\mathrm{P}[h_0 = h^\prime_0] \leq 2^{-w},\)
+(where the probability is taken over the set of randomly chosen
+parameters for the mixer).
+Otherwise, \(m_0 = m^\prime_0 \Rightarrow h_i = h^\prime_i\).</p>
 
-<p>A classic approach in this situation is to fingerprint cache keys with
-a cryptographic hash function like
-<a href="https://en.wikipedia.org/wiki/BLAKE_(hash_function)">BLAKE</a>
-or <a href="https://en.wikipedia.org/wiki/SHA-3">SHA-3</a>, and store a
-compact (128 or 256 bits) fingerprint instead of the cache key: the
-probability of a collision is then so low that we might as well assume
-any false positive will have been caused by a bug in the code or a
-hardware failure.  For example,
-<a href="https://users.ece.cmu.edu/~omutlu/pub/memory-errors-at-facebook_dsn15.pdf#page=3">a study of memory errors at Facebook</a>
-found that uncorrectable memory errors affect 0.03% of servers each
-month.  Assuming a generous clock rate of 5 GHz, this means each
-clock cycle may be afflicted by such a memory error with probability
-\(\approx 2.2\cdot 10^{-20} &gt; 2^{-66}.\) If we can guarantee that
-distinct inputs collide with probability significantly less than
-\(2^{-66}\), e.g., \(&lt; 2^{-70},\) any collision is far
-more likely to have been caused by a bug in our code or by
-hardware failure than by the fingerprinting algorithm itself.</p>
+<p>This first chunks stands for the ENH iteration in UMASH.</p>
 
-<p>Using cryptographic hashes is certainly safe enough, but requires a lot of
-CPU time, and, more importantly, worsens latency on smaller keys (for
-which caching may not be that beneficial, such that our goal should be
-to minimise overhead).  It’s not that state-of-the-art cryptographic
-hash functions are wasteful, but that they defend against attacks like key
-recovery or collision amplification that we may not care to consider
-in our design.</p>
+<p>Every remaining chunk will instead be mixed with a
+\(2^{-w}\)-XOR-almost-universal hash function:
+if \(m_i \neq m^\prime_i\) (\(0 &lt; i &lt; n\)),
+\(\mathrm{P}[h_i \oplus h^\prime_i = y] \leq 2^{-w}\)
+for any \(y,\)
+where the probability is taken over the randomly generated
+parameter for the mixer.</p>
 
-<p>At the other extreme of the hash spectrum, there is a plethora of fast
-hash functions with no proof of collision probability.  However, most
-of them are keyed on just a 64-bit “seed” integer, and that’s already
-<a href="https://arxiv.org/pdf/1503.03465.pdf#page=4">enough for a pigeonhole argument</a>
-to show we can construct sets of strings of length \(64m\) bits
-where any two members collide with probability at least \(m/
-2^{64}\). In practice, <a href="https://131002.net/siphash/#at">security researchers seem to find key-independent collisions wherever they look</a>
-(i.e., the collision probability is on the order of 1 for some
-particularly pathological sets of inputs), so it’s safe to assume that
-lacking a proof of collision probability implies a horrible worst
-case.  I personally wouldn’t put too much faith in “security claims”
-taking the form of failed attempts at breaking a proposal.</p>
+<p>This stronger condition represents the PH iterations in UMASH.</p>
 
-<p><a href="https://arxiv.org/abs/1503.03465">Lemire and Kaser’s CLHash</a> is one
-of the few exceptions we found: it achieves a high throughput of 22
-GB/s and comes with a proof of \(2^{-63}\)-almost-universality.
-However, its finalisation step is slow (23 ns for one-byte inputs), due
-to a <a href="https://en.wikipedia.org/wiki/Barrett_reduction">Barrett reduction</a>
-followed by
-<a href="https://github.com/lemire/clhash/blob/742f81a66c8e2ae7889d1bc4c4b4d8734bdcd5af/src/clhash.c#L243">three rounds of <code>xorshift</code>/multiply mixing</a>.
-<a href="https://eprint.iacr.org/2007/338">Dai and Krovetz’s VHASH</a>,
-which inspired CLHash, offers similar guarantees, with worse
-performance.</p>
+<p>We hash a full block by xoring all the mixed chunks together:</p>
 
-<p>Unfortunately, \(2^{-63}\) is also not quite good enough for our
-purposes: we estimate that the probability of uncorrectable memory
-errors is on the order of \(2^{-66}\) per clock cycle, so we want
-the collision probability for any two distinct inputs to be
-comfortably less than that, around \(2^{-70}\) (i.e., \(10^{-21}\)) or
-less.  This also tells us that any acceptable fingerprint must consist
-of more than 64 bits, so we will have to either work in slower
-multi-word domains, or combine independent hashes.</p>
+<p>\[ H = \bigoplus_{i = 0}^{n - 1} h_i, \]</p>
 
-<p>Interestingly, we also don’t need much more than that for
-(non-adversarial) fingerprinting: at some point, the theoretical
-probability of a collision is dominated by the practical possibility of
-a hardware or networking issue making our program execute the
-fingerprinting function incorrectly, or pass the wrong data to
-that function.</p>
+<p>and</p>
 
-<p>While CLHash and VHASH aren’t quite what we want, they’re pretty
-close, so we felt it made sense to come up with a specialised solution
-for our fingerprinting use case.</p>
+<p>\[ H^\prime = \bigoplus_{i = 0}^{n - 1} h^\prime_i. \]</p>
 
-<p><a href="https://tools.ietf.org/html/rfc4418">Krovetz et al’s RFC 4418</a> brings
-an interesting idea: we can come up with a fast 64-bit hash function
-structured to make it easy to compute a second independent hash value,
-and concatenate two independent 64-bit outputs.  The hash function can
-heavily favour computational efficiency and let each 64-bit half
-collide with probability \(\varepsilon\) significantly worse than
-\(2^{-64}\), as long as the collision probability for the
-concatenated fingerprint, \(\varepsilon^2\), is small enough, i.e.,
-as long as
-\(\varepsilon^2 &lt; 2^{-70} \Longleftrightarrow \varepsilon &lt; 2^{-35}\).
-We get a more general purpose hash function out of the deal, and the
-fingerprint comparison logic is now free to only compute and look at
-half the fingerprint when it makes sense (e.g., in a prepass that
-tolerates spurious matches).</p>
+<p>We want to bound the probability that \(H = H^\prime \Leftrightarrow
+H \oplus H^\prime = 0,\) assuming that the messages differ
+(i.e., there is at least one index \(i\) such that
+\(m_i \neq m^\prime_i\)).</p>
 
-<h2 id="umash-at-a-high-level"><a id="umash-high-level"></a>UMASH, at a high level</h2>
+<p>If the two messages only differ in \(m_0 \neq n^\prime_0\) (and thus
+\(m_i = m^\prime_i,\,\forall i \in [1, n)\)),</p>
 
-<p>The design of UMASH is driven by two observations:</p>
+<p>\[ \bigoplus_{i = 1}^{n - 1} h_i = \bigoplus_{i = 1}^{n - 1} h^\prime_i, \]</p>
+
+<p>and thus \(H = H^\prime \Leftrightarrow h_0 = h^\prime_0\).</p>
+
+<p>By hypothesis, the 0th chunks are mixed with a
+\(2^{-w}\)-almost-universal hash, so this happens with probability
+at most \(2^{-w}\).</p>
+
+<p>Otherwise, assume that \(m_j \neq m^\prime_j\), for some \(j \in
+[1, n)\).
+We will rearrange the expression</p>
+
+<p>\[ H \oplus H^\prime = h_j \oplus h^\prime_j \oplus \left(\bigoplus_{i\in [0, n) \setminus \{ j \}} h_i \oplus h^\prime_i\right). \]</p>
+
+<p>Let’s conservatively replace that unwieldly sum with an adversarially
+chosen value \(y\):</p>
+
+<p>\[ H \oplus H^\prime = h_j \oplus h^\prime_j \oplus y, \]</p>
+
+<p>and thus \(H = H^\prime\) iff \(h_j \oplus h^\prime_j = y.\)
+By hypothesis, the \(j\)th chunk (every chunk but the 0th),
+is mixed with a \(2^{-w}\)-almost-XOR-universal hash, and
+this thus happens with probability at most \(2^{-w}\).</p>
+
+<p>In both cases, we find a collision probability at most \(2^{-w}\)
+with a simple analysis, despite combining mixing functions from
+different families over different rings.</p>
+
+<h2 id="wringing-more-bits-out-of-the-same-mixers">Wringing more bits out of the same mixers</h2>
+
+<p>We combined strong mixers (each is \(2^{-w}\)-almost-universal),
+and only got a \(2^{-w}\)-almost-universal output.
+It seems like we should be able to do better when two or
+more chunks differ.</p>
+
+<p>As <a href="https://link.springer.com/chapter/10.1007/978-3-662-46706-0_25">Nandi</a>
+points outs, we can apply erasure codes to derive additional
+chunks from the original messages’ contents.  We only need
+one more chunk, so we can simply xor together all the original
+chunks:</p>
+
+<p>\[m_n = \bigoplus_{i=0}^{n - 1} m_i,\]</p>
+
+<p>and similarly for \(m^\prime_n\).
+If \(m\) and \(m^\prime\) differ in only one chunk, \(m_n \neq
+m^\prime_n\).  It’s definitely possible for \(m_n = m^\prime_n\)
+when \(m \neq m^\prime\), but only if two or more chunks differ.</p>
+
+<p>We will again mix \(m_n\) and \(m^\prime_n\) with a fresh
+\(2^{-w}\)-almost-XOR-universal hash function to yield \(h_n\) and
+\(h^\prime_n\).</p>
+
+<p>We want to xor the result \(h_n\) and \(h^\prime_n\) with the second
+(still undefined) hash values \(H_2\) and \(H^\prime_2\); if
+\(m_n \neq m^\prime_n\), the final xored values are equal with
+probability at most \(2^{-w}\), regardless of \(H_2\) and
+\(H^\prime_2\ldots\) and, crucially, independently of \(H \neq
+H^\prime\).</p>
+
+<p>When the two messages \(m\) and \(m^\prime\) only differ in a
+single (initial) chunk, mixing a <a href="https://en.wikipedia.org/wiki/Longitudinal_redundancy_check">LRC checksum</a>
+gives us an independent hash function, which
+squares the collision probability to \(2^{-2w}\).</p>
+
+<p>Now to the interesting bit: we must define a second hash function
+that combines \(h_0,h_1,\ldots, h_{n - 1}\) and \(h^\prime_0, h^\prime_1, \ldots, h^\prime_{n - 1}\)
+such that the resulting hash values \(H_2\) and \(H^\prime_2\) collide
+independently enough of \(H\) and \(H^\prime\).
+That’s a tall order, but we do have one additional assumption to work
+with: we only care about collisions in this second hash function if the
+additional checksum chunks are equal, which means that the two messages
+differ in two or more chunks (or they’re identical).</p>
+
+<p>For each index \(0 &lt; i &lt; n\), we’ll fix a <em>public</em> linear (with xor
+as the addition) function \(\overline{xs}_i(x)\).  This family of
+function must have two properties:</p>
 
 <ol>
-  <li>
-    <p>CLHash achieves a high throughput, but introduces a lot of
-latency to finalise its 127-bit state into a 64 bits result.</p>
-  </li>
-  <li>
-    <p>We can get away with a significantly weaker hash, since we plan to
-combine two of them when we need a strong fingerprint.</p>
-  </li>
+  <li>\(f(x) = x \oplus \overline{xs}_i(x)\) is invertible for all \(0 &lt; i &lt; n\).</li>
+  <li>For any two distinct \(0 &lt; i &lt; j &lt; n\), xoring the two functions
+together into \(g(x) = \overline{xs}_i(x) \oplus
+\overline{xs}_j(x)\) yields a function with a small (low rank)
+null space.  In other words, while \(g\) may not be invertible,
+it must be “pretty close.”</li>
 </ol>
 
-<p>That’s why we started with the high-level structure diagrammed below,
-the same as
-<a href="https://web.cs.ucdavis.edu/~rogaway/papers/umac.html">UMAC</a>,
-<a href="https://eprint.iacr.org/2007/338">VHASH</a>, and
-<a href="https://arxiv.org/abs/1503.03465">CLHash</a>:
-a fast first-level block compression function based on
-<a href="https://dl.acm.org/doi/10.1109/TC.1968.227420">Winograd’s pseudo dot-product</a>,
-and a second-level <a href="https://link.springer.com/chapter/10.1007/3-540-55719-9_77">Carter-Wegman polynomial hash function</a>
-to accumulate the compressed outputs in a fixed-size state.</p>
+<p>For regularity, we will also define \(\overline{xs}_0(x) = x\).</p>
 
-<iframe frameborder="0" style="width:100%;height:523px;" src="https://viewer.diagrams.net/?highlight=0000ff&amp;edit=_blank&amp;layers=1&amp;nav=1&amp;title=UMASH%20overview#R7VzLcqM4FP0aL5MCIR5ZxulMuxepTpWre5ZTipGNJgJRIGJ7vn4kA7ZB6jSpsgUN2SRwAQHnHMR94ZnzEO%2B%2BZiiNnliI6QxY4W7mfJkBEHie%2BCsN%2B9Lg%2BVZp2GQkLE32ybAk%2F%2BHKWO9WkBDnjR05Y5STtGlcsSTBK96woSxj2%2BZua0abZ03RBiuG5QpR1fo3CXlU3ZZrnewLTDZRfWbbqrbEqN65MuQRCtn2zOQ8zpyHjDFeLsW7B0wldjUu5XF%2F%2FWLr8cIynPAuBxTwpxMvof9j8f0nCZ4eg%2BTVugmqYd4QLao7rq6W72sIxDACbbEyF7eQSuOKskKMOt9GhONlilbSuBX8C1vEYyrWbLFYDY0zjne%2FvGj7CIWQEGYx5tle7FId4MMKvX0ti2p9eyLDrrUSnRFxV9lQxf%2FmOPQJIrFQofQBxODvActYkYRYDmIZAckOmiBBTwXJczQgedcCyVVA%2BpakBT%2FAlJFkIxbYWvyRA73suXjA2xgKNHgTKHEke8UPjLJMWBKWSEWuCaUtE6Jkk0iRCvSwsM8ltkQ80ffVhpiEoTyNlpkmdxcgB7gtcgKVnKPtnBxwLXKC4SvYgZrHHJhU8J0CEnC9G6lVKVnKVq%2Fjlax95zbZ0MwndyYVW0%2FwQ5KsYw9Nsrb6Lp%2BOZh0wNM2C4WkWwsFp1pmwZqE7NM0O0Ll1%2FcFpVvVup6NZNxiaZr3hada3OmhWF7VeT7O%2BgtIzEjpC8kichOMXrt%2F213oXrhpiKOifw16njyQeIcqjIzjdga7zN%2FFuI5N1t2WCDJT%2F5bASG%2BvW8eSyxA2IFShXSIZXnLDkQG8m8ZonjK%2Biy%2FEDbP%2B2ObVAW2UIuipD8FoMgQ7JsQkx5MDhMdTByZ4QQ9AfHkOqgz9lhjxreAx1cPonxJDvgKEx5HTwFE7%2Bkm3ExQVNbwrq6jJGo7Ia%2FTOQliklsuZQpPLgpPZxR1xsaOV3dMrVlRquplzYwYPqWblAU48xrFzViXlezGRJO04znOcyQkNiiht9iNZS7zEc6029n77L%2BxGajiGjb0b46bu8H6H1z5CaLJ0yQ2qE1j9DHRKoE2LIs9r%2Bf%2F8MqcnbKTOkRmj9MzTEnppWFwdwVJB0CW%2F3aiCpYax9LJsdPF5W8EOX2FgdXIWSWqR91SBcNWjuXbftTo7edeuqQezEdKtQ0rtuO0Rmxptr3KHpVg2OJqZbhZLeddshGjLeYNPqve1ft2pAMjHdKpT0rtsOEYjxJht7aLpVg4CJ6VahpHfdDr9yZvuqbM3WHzw1CHhmVF5xhHJZdghqEUeIvo35W532x2aa0pDRAoT3ofKZITfXaYEEetcvUFDy4M3LofSLaMxyflMkRNx0fuh2LEU9WgnDpstra1pPjU7BXodQrcS6%2Fr4WtIhopSLXlG1XEcr4LUoSxpFMNv4DzpigeC25pOgF02eWkyobmZU3O08ZkUw9vglE88s9F3Z78tDM60a%2FwfQ61MbGCLyuFcUs8B2CvDECr%2BukMAt8hyy8oTrJv0Wcfkvuz6sltlvXSpxAnkNuW2Akz%2Bm6F3It23OQ7t3sayg5foxwcU581bn8gzhZU5IuLvfEtL9l0vKj8zCvyM%2Bf4GJ29DCvFtn773iYP57ul1OI7WHrdwyAGtob%2FRUD%2F7M5q0GP124s0fifRmvi%2Fody3b3kXjSfgJkNXX011f1EdsIg5hbZ95lhGbaSF7of8cTS5EQjW6M5F79DqnuM3rvmWTDqvAeqo7gTqgUWxcmGyzTkoYOfoly%2BdaeRTvd%2Bn8vxLvPOFaunXyI7bDv7OTfn8X8%3D"></iframe>
+<p>Concretely, let \(\overline{xs}_1(x) = x \mathtt{«} 1\), where the
+bitshift is computed for the two 64-bit halves independently, and
+\(\overline{xs}_i(x) = (x  \mathtt{«} 1) \oplus (x \mathtt{«} i)\)
+for \(i &gt; 1\), again with all the bitshifts computed independently
+over the two 64-bit halves.</p>
 
-<p>The inner loop in this two-level strategy is the block compressor,
-which divides each 256-byte block \(m\) into 32 64-bit values
-\(m_i\), combines them with randomly generated parameters \(k_i\),
-and converts the resulting sequence of machine words to a 16-byte
-output.  The performance of that component will largely determine the
-hash function’s global peak throughput.  After playing around with
-<a href="https://web.cs.ucdavis.edu/~rogaway/umac/umac_thesis.pdf#page=41">the <code>NH</code> inner loop</a>,</p>
-
-<div>
-\[ \mathtt{NH}_k(m) = \sum_{i=0}^{|m| / 2 - 1} (m_{2i} + k_{2i} \bmod 2^{64})\cdot(m_{2i + 1} + k_{2i + 1} \bmod 2^{64})\mod 2^{128},\]
-</div>
-
-<p>we came to the
-<a href="https://arxiv.org/pdf/1503.03465.pdf#page=13">same conclusion as Lemire and Kaser</a>:
-the scalar operations, the outer 128-bit ones in particular, map to too
-many µops.  We thus focused on the
-<a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.105.9929&amp;rep=rep1&amp;type=pdf#page=3">same <code>PH</code> inner loop</a>
-as CLHash,</p>
-
-<div>
-\[ \mathtt{PH}_k(m) = \bigoplus_{i=0}^{|m| / 2 - 1} (m_{2i} \oplus k_{2i})\odot (m_{2i + 1} \oplus k_{2i + 1}).\]
-</div>
-
-<p>While the similarity to <code>NH</code> is striking, analysing <code>PH</code> is actually
-much simpler: we can see the <code>xor</code> and carry-less multiplications as
-working in the same ring of polynomials over \(\mathrm{GF}(2)\), unlike
-<code>NH</code>’s mixing of \(\bmod 2^{64}\) for the innermost additions with
-\(\bmod 2^{128}\) for the outer multiplications and sum.  In
-fact, as
-<a href="http://cr.yp.to/antiforgery/pema-20071022.pdf#page=6">Bernstein points out</a>,
-<code>PH</code> is a direct application of
-<a href="https://dl.acm.org/doi/10.1109/TC.1968.227420">Winograd’s pseudo dot-product</a>
-to compute a multiplicative vector hash in half the multiplications.</p>
-
-<p>CLHash uses an aggressively throughput-optimised block size of 1024
-bytes.  We found diminishing returns after 256 bytes, and stopped
-there.</p>
-
-<p>With modular or polynomial ring arithmetic, the collision probability
-is \(2^{-64}\) for any pair of blocks.  Given this fast compression
-function, the rest of the hashing algorithm must chop the input in
-blocks, accumulate compressed outputs in a constant-size state, and
-handle the potentially shorter final block while avoiding
-<a href="https://en.wikipedia.org/wiki/Length_extension_attack">length extension issues</a>.</p>
-
-<p>Both VHASH and CLHash accumulate compressed outputs in a
-polynomial string hash over a large field
-(\(\mathbb{Z}/M_{127}\mathbb{Z}\) for VHASH, and
-\(\mathrm{GF}(2^{127})\) with irreducible polynomial \(x^{127} + x + 1\)
-for CLHash): the collision probability for polynomial string hashes is
-inversely proportional to the field size and grows with the string
-length (number of compressed blocks), so working in fields much larger
-than \(2^{64}\) lets the <code>NH</code>/<code>PH</code> term dominate.</p>
-
-<p>Arithmetic in such large fields is slow, and reducing the 127-bit
-state to 64 bits is also not fast.  CLHash and VHASH make the
-situation worse by zero-padding the final block, and CLHash defends
-against length extension attacks with
-<a href="https://arxiv.org/pdf/1503.03465.pdf#page=10">a more complex mechanism</a>
-than <a href="https://eprint.iacr.org/2007/338">the one in VHASH</a>.</p>
-
-<p>Similarly to VHASH, UMASH uses a polynomial hash over the (much
-smaller) prime field \(\mathbb{F} = \mathbb{Z}/M_{61}\mathbb{Z},\)</p>
-
-<div>
-\[ CW_f(y) = \left(\sum_{j=0}^{d - 1} y_j \cdot f^{d - j}\right) \mod 2^{61} - 1, \]
-</div>
-
-<p>where \(f\in\mathbb{F}\) is the randomly chosen point at which we
-evaluate the polynomial, and \(y\), the polynomial’s coefficients, is
-the stream of 64-bit values obtained by splitting in half the <code>PH</code>
-output for each block.  This choice saves 20-30 cycles of latency in
-the final block, compared to CLHash: modular multiplications have
-lower latency than carry-less multiplications for judiciously picked
-machine-integer-sized moduli, and integer multiplications seem to mix
-better, so we need less work in the finaliser.</p>
-
-<p>Of course, UMASH sacrifices a lot of strength by working in
-\(\mathbb{F} =\, \bmod 2^{61} - 1:\) the resulting field is much
-smaller than \(2^{127}\), and we now have to update the polynomial
-twice for the same number of blocks.  This means the collision
-probability starts worse \((\approx 2^{-61}\) instead of \(\approx
-2^{-127})\), and grows twice as fast with the number of blocks
-\(n\) \((\approx 2n\cdot 2^{-61}\) instead of \(\approx n\cdot
-2^{-61})\).  But remember, we’re only aiming for collision
-probability \(&lt; 2^{-35}\) and each block represents 256 bytes of
-input data, so this is acceptable, assuming that multi-gigabyte inputs
-are out of scope.</p>
-
-<p>We protect against <a href="https://en.wikipedia.org/wiki/Length_extension_attack">length extension collisions</a>
-by <code>xor</code>ing (adding, in the polynomial ring) the original byte size of
-the final block to its compressed <code>PH</code> output.  This <code>xor</code> is simpler
-than CLHash’s finalisation step with a carry-less multiplication, but
-still sufficient: we can adapt
-<a href="http://krovetz.net/csus/papers/vmac.pdf#page=11">Krovetz’s proof for VHASH</a>
-by replacing <code>NH</code>’s almost-\(\Delta\)-universality with <code>PH</code>’s
-almost-XOR-universality.</p>
-
-<p>Having this protection means we can extend short final blocks however
-we want.  Rather than conceptually zero-padding our inputs (which adds
-complexity and thus latency on short inputs), we allow redundant
-reads.  We bifurcate inputs shorter than 16 bytes to a completely
-different latency-optimised code path, and let the final <code>PH</code>
-iteration read the last 16 bytes of the input, regardless of how
-redundant that might be.</p>
-
-<p>The
-<a href="https://github.com/backtrace-labs/umash/blob/master/umash_reference.py">semi-literate Python reference implementation</a>
-has the full code and includes more detailed analysis and rationale
-for the design decisions.</p>
-
-<h2 id="internal-implementation-tricks"><a id="implementation-tricks"></a>Internal implementation tricks</h2>
-
-<p>The previous section already showed how we let micro-optimisation
-inform the high-level structure of UMASH.  The use of <code>PH</code> over
-<code>NH</code>, our choice of a polynomial hash in a small modular field, and
-the way we handle short blocks all aim to improve the performance of
-production implementations.  We also made sure to enable a couple more
-implementation tricks with lower level design decisions.</p>
-
-<p>The block size is set to 256 bytes because we observed diminishing
-returns for larger blocks… but also because it’s reasonable to cache
-the <code>PH</code> loop’s parameters in 8 AVX registers, if we need to shave load
-µops.</p>
-
-<p>More importantly, it’s easy to implement a
-<a href="https://en.wikipedia.org/wiki/Horner%27s_method">Horner update</a>
-with the prime modulus \(2^{61} - 1\).  Better, that’s also true for a
-“double-pumped” Horner update, \(h^\prime = H_f(h, a, b) = af + (b +
-h)f^2.\)</p>
-
-<p>The trick is to work in \(\bmod 2^{64} - 8 = \bmod 8\cdot(2^{-61} -
-1),\) which lets us implement modular multiplication of an arbitrary
-64-bit integer \(a\) by a multiplier \(0 &lt; f &lt; 2^{61} - 1\)
-without worrying too much about overflow. \(2^{64} \equiv 8 \mod
-2^{64} - 8,\) so we can reduce a value \(x\) to a smaller
-representative with</p>
-
-<div>
-\[af = x \equiv 8\lfloor x / 2^{64}\rfloor + (x\bmod 2^{64}) \mod 2^{64} - 8;\]
-</div>
-
-<p>this equivalence is particularly useful when \(x &lt; 2^{125}\): in that
-case, \(x / 2^{64} &lt; 2^{61},\) and the intermediate product
-\(8\lfloor x / 2^{64}\rfloor &lt; 2^{64}\) never overflows 64 bits.
-That’s exactly what happens when \(x = af\) is the product of
-\(0\leq a &lt; 2^{64}\) and \(0 &lt; f &lt; 2^{61} - 1\).  This also
-holds when we square the multiplier \(f\): it’s sampled from the
-field \(\mathbb{Z}/(2^{61} - 1)\mathbb{Z},\) so its square also
-satisfies \(f^2 &lt; 2^{61}\) once fully reduced.</p>
-
-<p>Integer multiplication instructions for 64-bit values will naturally
-split the product \(x = af\) in its high and low 64-bit half; we get
-\(\lfloor x / 2^{64}\rfloor\) and \(x\bmod 2^{64}\) for free.  The
-rest of the double-pumped Horner update is a pair of modular
-additions, where only the final sum must be reduced to fit in \(\bmod
-2^{64} - 8\).  The resulting instruction-parallel double Horner
-update is only a few cycles slower than a single Horner update.</p>
-
-<p>We also never fully reduce to \(\bmod 2^{61} - 1\). While the
-collision bound assumes that prime field, we simply work in its \(\bmod
-2^{64} - 8\) extension.  This does not affect the collision bound,
-and the resulting expression is still amenable to algebraic
-manipulation: modular arithmetic is a well defined ring even for
-composite moduli.</p>
-
-<h2 id="smhasher-tricks">SMHasher tricks</h2>
-
-<p>A proof of almost-universality doesn’t mean a hash passes the SMHasher
-test suite.  It should definitely guarantee collisions are (probably)
-rare enough, but SMHasher also looks at bit avalanching and bias, and
-universality is oblivious to these issues.  Even XOR- or
-\(\Delta\)-universality doesn’t suffice: the hash values for a
-given string are well distributed when parameters are chosen
-uniformly at random, but this does not imply that hashes are always (or
-usually) well distributed for fixed parameters.</p>
-
-<p>The most stringent SMHasher tests focus on short inputs: mostly up to
-128 or 256 bits, unless “Extra” torture testing is enabled.  In a way,
-this makes sense, given that arbitrary-length string hashing is
-provably harder than the bounded-length vector case.  Moreover, a
-specialised code path for these inputs is beneficial, since they’re
-relatively common and deserve strong and low-latency hashes.  That’s
-why UMASH uses a completely different code path for inputs of at
-most 8 bytes, and a specialised <code>PH</code> iteration for inputs of 9 to 16
-bytes.</p>
-
-<p>However, this means that SMHasher’s best avalanche and
-bias tests often tell us very little about the general case.  For
-UMASH, the medium length (9 to 16 bytes) code path at least
-shares the same structure and finalisation logic as the code for
-longer inputs.</p>
-
-<p>There may also be a bit of co-evolution between the test harness and
-the design of hash functions: the sort of <code>xorshift</code>/multiply mixers
-favoured by Appleby in the various versions of MurmurHash tends to do
-well on SMHasher.  These mixers are also invertible, so we can take
-any hash function with good collision properties, mix its output with
-someone else’s series of <code>xorshift</code> and multiplications (in UMASH’s
-case, the
-<a href="http://prng.di.unimi.it/splitmix64.c">SplitMix64 update function</a>
-or a subset thereof), and usually find that the result satisfies
-SMHasher’s bias and avalanche tests.</p>
-
-<p>It definitely looks like interleaving rightward bitwise operations and
-integer multiplications is a good mixing strategy.  However, I find it
-interesting that the hash evaluation harness created by the author of
-MurmurHash steers implementations towards MurmurHash-syle mixing code.</p>
-
-<h2 id="fun-things-to-do-with-umash"><a id="usage"></a>Fun things to do with UMASH</h2>
-
-<p>The structure of UMASH lets us support more sophisticated usage
-patterns than merely hashing or fingerprinting an array of bytes.</p>
-
-<p>The <code>PH</code> loop needs less than 17 bytes of state for its 16-byte
-accumulator and an iteration count, and the polynomial hash also needs
-17 bytes, for its own 8-byte accumulator, the 8-byte “seed,” and a
-counter for the final block size (up to 256 bytes).  The total comes up to
-34 bytes of state, plus a 16-byte input buffer, since the <code>PH</code> loop
-consumes 16-byte chunks at a time.  Coupled with the way we only
-consider the input size at the end of UMASH, this makes it easy to
-implement incremental hashing.</p>
-
-<p>In fact, the state is small enough that our implementation stashes some
-parameter data inline in the state struct, and uses the same
-layout for hashing and fingerprinting with a pair of hashes (and thus
-double the state): most of the work happens in <code>PH</code>, which only
-accesses the constant parameter array, the shared input buffer and iteration
-counter, and its private 16-byte accumulator.</p>
-
-<p>Incremental fingerprinting is a crucial capability for our caching
-system: cache keys may be large, so we want to avoid serialising them
-to an array of contiguous bytes just to compute a fingerprint.
-Efficient incrementality also means we can hash NUL-terminated C
-strings with a fused UMASH / <code>strlen</code> loop, a nice speed-up when the
-data is in cache.</p>
-
-<p>The outer polynomial hash in UMASH is so simple to analyse that we
-can easily process blocks out of order.  In my experience, such a
-“parallel hashing” capability is more important than peak
-throughput when checksumming large amounts of data coming over the
-wire.  We usually maximise transfer throughput by asking for several
-ranges of data in parallel.  Having to checksum these ranges in
-order introduces a serial bottleneck and the usual head-of-line
-blocking challenges; more importantly, checksumming in order adds
-complexity to code that should be as obviously correct as possible.
-The polynomial hash lets us hash an arbitrary subsequence of 256-byte
-aligned blocks and use modular exponentiation to figure out its impact
-on the final hash value, given the subsequence’s position in the
-checksummed data.  Parallel hashing can exploit multiple cores (more
-cores, more bandwidth!) with simpler code.</p>
-
-<p>The <a href="https://tools.ietf.org/html/rfc4418">UMAC RFC</a> uses a Toeplitz
-extension scheme to compute independent <code>NH</code> values while recycling
-most of the parameters.  We do the same with <code>PH</code>, by adapting
-<a href="https://web.cs.ucdavis.edu/~rogaway/umac/umac_thesis.pdf#page=51">Krovetz’s proof</a>
-to exploit <code>PH</code>’s almost-XOR-universality instead of <code>NH</code>’s
-almost-\(\Delta\)-universality.  Our fingerprinting code reuses all
-but the first 32 bytes of <code>PH</code> parameters for the second hash: that’s
-the size of an AVX register, which makes is trivial to avoid loading
-parameters twice in a fused <code>PH</code> loop.</p>
-
-<p>The same RFC also points out that concatenating the output of fast
-hashes lets validation code decide which speed-security trade-off
-makes sense for each situation: some applications may be willing to
-only compute and compare half the hashes.</p>
-
-<p>We use that freedom when reading from large hash tables keyed on
-the UMASH fingerprint of strings.  We compute a single UMASH
-hash value to probe the hash tables, and only hash the second half
-of the fingerprint when we find a probable hit.  The idea is that
-hashing the search key (now hot in cache) a second time will be faster
-than comparing it against the hash entry’s string key in cold storage.</p>
-
-<p>When we add this sort of trickery to our code base, it’s important to
-make sure the interfaces are hard to misuse.  For example, it would be
-unfortunate if only one half of the 128-bit fingerprint were well
-distributed and protected against collisions: this would make it far
-too easy to implement the two-step lookup-by-fingerprint above
-<em>correctly but inefficiently</em>.  That’s why we maximise the symmetry in
-the fingerprint: the two 64-bit halves are computed with the same
-algorithm to guarantee the same worst-case collision probability and
-distribution quality.  This choice leaves fingerprinting throughput on
-the table when a weaker secondary hash would suffice.  However, I
-prefer a safer if slightly slower interface to one ripe for silent
-performance bugs.</p>
-
-<h2 id="caveat-programmator">Caveat programmator</h2>
-
-<p>While we intend for UMASH to become our default hash and fingerprint
-function, it can’t be the right choice for every application.</p>
-
-<p>First, it shouldn’t be used for authentication or similar
-cryptographic purposes: the implementation is probably riddled with
-side-channels, the function has no protection against parameter
-extraction or adaptive attacks, and collisions are too frequent
-anyway.</p>
-
-<p>Obviously, this rules out using UMASH in a
-<a href="https://en.wikipedia.org/wiki/Message_authentication_code">MAC</a>, but
-might also be an issue for, e.g., hash tables where attackers control
-the keys and can extrapolate the hash values.  A timing side-channel
-may let attackers determine when keys collide; once a set of colliding
-keys is known, the linear structure of UMASH makes it trivial to
-create more collisions by combining keys from that set.  Worse,
-iterating over the hash table’s entries can leak the hash values,
-which would let an attacker slowly extract the parameters.  We
-conservatively avoid non-cryptographic hashes and even hashed data
-structures for sections of the <a href="https://backtrace.io">Backtrace</a> code
-base where such attacks are in scope.</p>
-
-<p>Second, the performance numbers reported by
-<a href="https://github.com/rurban/smhasher">SMHasher</a> (up to 22 ns when
-hashing 64 bytes or less, and 22 GB/s peak throughput) are probably a
-lie for real applications, even when running on the exact same 2.5 GHz
-Xeon 8175M hardware.  These are best-case values, when the code and
-the parameters are all hot in cache… and that’s a fair amount of
-bytes for UMASH.  The instruction footprint for a 64-bit hash is 1435
-bytes (comparable to heavier high-throughput hashes, like the
-1600-byte <a href="https://github.com/Cyan4973/xxHash">xxh3_64</a> or 1350-byte
-<a href="https://github.com/google/farmhash">farmhash64</a>), and the parameters
-span 288 bytes (320 for a fingerprint).</p>
-
-<p>There is a saving grace for UMASH and other complex hash functions:
-the amount of bytes executed is proportional to the input size (e.g.,
-the code for 8 or fewer byte only needs 141 bytes, and would inline to
-around 100 bytes), and the number of parameters read is bounded by the
-input length.  Although UMASH can need a lot of instruction and
-parameter bytes, the worst case only happens for larger inputs, where
-the cache misses can hopefully be absorbed by the work of loading and
-hashing the data.</p>
-
-<p>The numbers are also only representative of powerful CPUs with
-carry-less multiplication in hardware.  The <code>PH</code> inner loop has 50%
-higher throughput than <code>NH</code> (22 vs 14 GB/s) on contemporary Intel
-servers.  The carry-less approach still has an edge over 128-bit
-modular arithmetic on <a href="https://en.wikichip.org/wiki/amd/cores/naples">AMD’s Naples</a>,
-but less so, around 20-30%. We did not test on ARM (the
-<a href="https://help.backtrace.io/en/articles/2428859-web-console-overview">Backtrace database</a>
-only runs on x86-64), but I would assume the situation there is closer
-to AMD’s than Intel’s.</p>
-
-<p>However, I also believe we’re more likely to observe improved
-performance for <code>PH</code> than <code>NH</code> in future micro-architectures: the core
-of <code>NH</code>, full-width integer multiplication, has been aggressively
-optimised by now, while the gap between Intel and AMD shows there
-may still be low-hanging fruits for the carry-less multiplications
-at the heart of <code>PH</code>.  So, <code>NH</code> is probably already as good as
-it’s going to be, but we can hope that <code>PH</code> will continue to benefit from
-hardware optimisations, as chip designers improve the performance of
-cryptographic algorithms like
-<a href="https://en.wikipedia.org/wiki/Galois/Counter_Mode">AES-GCM</a>.</p>
-
-<p>Third and last, UMASH isn’t fully stabilised yet.  We do not plan to
-modify the high level structure of UMASH, a <code>PH</code> block compressor
-that feeds into a polynomial string hash.  However, we are looking for
-suggestions to improve its latency on short inputs, and to simplify
-the finaliser while satisfying SMHasher’s distribution tests.</p>
-
-<h2 id="help-us-improve-umash">Help us improve UMASH</h2>
-
-<p>We believe UMASH is ready for non-persistent usage: we’re confident in
-its quality, but the algorithm isn’t set in stone yet, so hash or
-fingerprint values should not reach long-term storage.  We do not
-plan to change anything that will affect the proof of collision
-bound, but improvements to the rest of the code are more than
-welcome.</p>
-
-<p>In particular:</p>
+<p>To see that these satisfy our requirements, we can represent the
+functions as carryless multiplication by distinct “even” constants
+(the least significant bit is 0) on each 64-bit half:</p>
 
 <ol>
-  <li>The short (8 or fewer bytes) input code can hopefully be simpler.</li>
-  <li>The medium-length (9-15 bytes) input code path is a micro-optimised
-version of the general case, but does not actually share any machine
-code; can we improve the latency and maintain the collision bound
-by replacing it with something completely different?</li>
-  <li>It’s already nice that we can get away with a single round of
-<code>xorshift</code> / multiply in the finaliser, but can we shave even
-more latency there?</li>
-  <li>We only looked at straightforward x86-64 implementations; we will
-consider tweaks that improve performance on x86-64, or on
-other platforms without penalising x86-64.</li>
-  <li>We currently only use incremental and one-shot hashing interfaces.
-If someone needs parallel hashing, we can collaborate to find out
-what that interface could look like.</li>
+  <li>Once we xor in \(x\), we get a multiplication by an odd constant,
+and that’s invertible.</li>
+  <li>Combining \(\overline{xs}_i\) and \(\overline{xs}_j\) with xor
+yields either \(x \mathtt{«} j\) or \((x \mathtt{«} i) \oplus (x \mathtt{«} j)\).  In the worst case, we lose \(j\) bits in each 64-bit half,
+and there are thus \(2^{2j}\) values in \(g^{-1}(0)\).</li>
 </ol>
 
-<p>A hash function is a perfect target for automated correctness and
-performance testing.  I hope to use UMASH as a test bed for the
-automatic evaluation (and approval?!) of pull requests.</p>
+<p>To recapitulate, we defined the first hash function as</p>
 
-<p>Of course, you’re also welcome to just use
-<a href="https://github.com/backtrace-labs/umash/blob/master/umash.c">UMASH as a single-file C library</a>
-or re-implement it to fit your requirements.
-<a href="https://github.com/backtrace-labs/umash">The MIT-licensed C code is on GitHub</a>,
-and we can definitely discuss validation strategies for alternative
-implementations.</p>
+<p>\[ H = \bigoplus_{i = 0}^{n - 1} h_i, \]</p>
 
-<p>Finally, our fingerprinting use case shows collision rates are
-probably not something to minimise, but closer to soft constraints.
-We estimate that, once the probability reaches \(2^{-70}\),
-collisions are rare enough to only compare fingerprints instead of the
-fingerprinted values.  However, going lower than \(2^{-70}\)
-doesn’t do anything for us.</p>
+<p>the (xor) sum of the mixed value \(h_i\) for each chunk \(m_i\) in
+the message block \(m\), and similarly for \(H^\prime\) and
+\(h^\prime_i\).</p>
 
-<p>It would be useful to document other back-of-the-envelope requirements
-for a hash function’s output size or collision rate.  Now that most
-developers work on powerful 64-bit machines, it seems far too easy to
-add complexity and waste resources for improved collision bounds that
-may not unlock any additional application.</p>
+<p>We’ll let the second hash function be</p>
 
-<h2 id="acknowledgements">Acknowledgements</h2>
+<p>\[ H_2 \oplus h_n = \left(\bigoplus_{i = 0}^{n - 1} \overline{xs}_i(h_i)\right) \oplus h_n, \]</p>
 
-<p>Any error in the analysis or the code is mine, but a few people
-helped improve UMASH and its presentation.</p>
+<p>and</p>
 
-<p><a href="https://www.daemonology.net/blog/">Colin Percival</a> scanned an earlier
-version of the reference implementation for obvious issues, encouraged
-me to simplify the parameter generation process, and prodded us to
-think about side channels, even in data structures.</p>
+<p>\[ H^\prime_2 \oplus h^\prime_n = \left(\bigoplus_{i = 0}^{n - 1} \overline{xs}_i(h^\prime_i)\right) \oplus h^\prime_n. \]</p>
 
-<p>Joonas Pihlaja helped streamline my initial attempt while making the
-reference implementation easier to understand.</p>
+<p>We can finally get down to business and find some collision bounds.
+We’ve already shown that both \(H = H^\prime\) <em>and</em> \(H_2 \oplus h_n =
+H^\prime_2 \oplus h^\prime_n\) collide simultaneously with probability at most \(2^{-2w}\)
+when the checksum chunks differ, i.e., when \(m_n \neq m^\prime_n\).</p>
 
-<p><a href="https://github.com/jshufro">Jacob Shufro</a> independently confirmed
-that he too found the reference implementation understandable, and
-tightened the natural language.</p>
+<p>Let’s now focus on the case when \(m \neq m^\prime\), but \(m_n =
+m^\prime_n\).
+In that case, we know that at least two chunks \(0 \leq i &lt; j &lt; n\)
+differ: \(m_i \neq m^\prime_i\) and \(m_j \neq m^\prime_j\).</p>
 
-<p>Phil Vachon helped me gain more confidence in the implementation
-tricks borrowed from VHASH after replacing the <code>NH</code> compression
-function with <code>PH</code>.</p>
+<p>If only two chunks \(i\) and \(j\) differ, and one of them is the
+\(i = 0\)th chunk, we want to bound the probability that</p>
+
+<p>\[ h_0 \oplus h_j = h^\prime_0 \oplus h^\prime_j \]</p>
+
+<p>and</p>
+
+<p>\[ h_0 \oplus \overline{xs}_j(h_j) = h^\prime_0 \oplus \overline{xs}_j(h^\prime_j), \]</p>
+
+<p>both at the same time.</p>
+
+<p>Letting \(\Delta_i = h_i \oplus h^\prime_i\), we can reformulate the
+two conditions as</p>
+
+<p>\[ \Delta_0 = \Delta_j \]
+and
+\[ \Delta_0 = \overline{xs}_j(\Delta_j). \]</p>
+
+<p>Taking the xor of the two conditions yields</p>
+
+<p>\[ \Delta_j \oplus \overline{xs}_j(\Delta_j) = 0, \]</p>
+
+<p>which is only satisfied for \(\Delta_j = 0\), since \(f(x) = x
+\oplus \overline{xs}_j(x)\) is an invertible linear function.
+This also forces \(\Delta_0 = 0\).</p>
+
+<p>By hypothesis, \(\mathrm{P}[\Delta_j = 0] \leq 2^{-w}\), and
+\(\mathrm{P}[\Delta_0 = 0] \leq 2^{-w}\) as well.  These two
+probabilities are independent, so we get a probability that both
+hash collide less than or equal to \(2^{-2w}\) (\(2^{-128}\)).</p>
+
+<p>In the other case, we have messages that differ in at least two chunks
+\(0 &lt; i &lt; j &lt; n\): \(m_i \neq m^\prime_i\) and \(m_j \neq
+m^\prime_j\).</p>
+
+<p>We can simplify the collision conditions to</p>
+
+<p>\[ h_i \oplus h_j = h^\prime_i \oplus h^\prime_j \oplus y \]</p>
+
+<p>and</p>
+
+<p>\[ \overline{xs}_i(h_i) \oplus \overline{xs}_j(h_j) = \overline{xs}_i(h^\prime_i) \oplus \overline{xs}_j(h^\prime_j) \oplus z, \]</p>
+
+<p>for \(y\) and \(z\) generated arbitrarily (adversarially), but
+without knowledge of the parameters that generated \(h_i, h_j, h^\prime_i,
+h^\prime_j\).</p>
+
+<p>Again, let \(\Delta_i = h_i \oplus h^\prime_i\) and \(\Delta_j = h_j \oplus h^\prime_j\), and reformulate the conditions into</p>
+
+<p>\[ \Delta_i \oplus \Delta_j = y \]
+and
+\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z. \]</p>
+
+<p>Let’s apply the linear function \(\overline{xs}_i\) to the first
+condition</p>
+
+<p>\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_i(\Delta_j) = \overline{xs}_i(y); \]</p>
+
+<p>since \(\overline{xs}_i\) isn’t invertible, the result
+isn’t equivalent, but is a weaker (necessary, not sufficient)
+version of the initial condiion.</p>
+
+<p>After xoring that with the second condition</p>
+
+<p>\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z, \]</p>
+
+<p>we find</p>
+
+<p>\[ \overline{xs}_i(\Delta_j) \oplus \overline{xs}_j(\Delta_j) = \overline{xs}_i(y) \oplus z. \]</p>
+
+<p>By hypothesis, the null space of
+\(g(x) = \overline{xs}_i(x) \oplus \overline{xs}_j(x)\)
+is “small.”
+For our concrete definition of \(\overline{xs}\), there
+are \(2^{2j}\) values in that null space, which means that \(\Delta_j\)
+can only satisfy the combined xored condition by taking one of at most
+\(2^{2j}\) values; otherwise, the two hashes definitely can’t both
+collide.</p>
+
+<p>Since \(j &lt; n\), this happens with probability at most \(2^{2(n -
+1) - w} \leq 2^{-34}\) for UMASH with \(w = 64\) and \(n =
+16\).</p>
+
+<p>Finally, for any given \(\Delta_j\), there is at most one
+\(\Delta_i\) that satisfies</p>
+
+<p>\[ \Delta_i \oplus \Delta_j = y,\]</p>
+
+<p>and so <em>both</em> hashes collide with probability at most \(2^{-98}\),
+for \(w = 64\) and \(n = 16\).</p>
+
+<p>Astute readers will notice that we could let
+\(\overline{xs}_i(x) = x \mathtt{«} i\),
+and find the same combined collision probability.
+However, this results in a much weaker secondary hash, since a chunk
+could lose up to \(2n - 2\) bits (\(n - 1\) in each 64-bit half)
+of hash information to a plain shift.
+The shifted xor-shifts might be a bit slower to compute, but
+guarantees that we only lose at most 2 bits<sup id="fnref:one-bit-with-ph" role="doc-noteref"><a href="#fn:one-bit-with-ph" class="footnote">1</a></sup> of
+information per chunk.  This feels like an interface that’s harder to
+misuse.</p>
+
+<p>If one were to change the \(\overline{xs}_i\) family of functions, I
+think it would make more sense to look at a more diverse form of
+(still sparse) multipliers, which would likely let us preserve a
+couple more bits of independence.  Jim has constructed such a family
+of multipliers, in arithmetic modulo \(2^{64}\); I’m sure we could
+find something similar in carryless multiplication.  The hard part is
+implementing these multipliers: in order to exploit the multipliers’
+sparsity, we’d probably have to fully unroll the block hashing loop,
+and that’s not something I like to force on implementations.</p>
+
+<h2 id="what-does-this-look-like-in-code">What does this look like in code?</h2>
+
+<p>The base <a href="https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L336">UMASH block compressor</a>
+mixes all but the last of the message block’s 16-byte chunks with
+PH: xor the chunk with the corresponding bytes in the parameter
+array, computes a carryless multiplication of the xored chunks’ half
+with the other half.  The last chunk goes through a variant of
+<a href="https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L358">ENH</a>
+with an invertible finaliser (safe because we only rely on
+\(\varepsilon\)-almost-universality),
+and everything is xored in the accumulator.</p>
+
+<p>The collision proofs above preserved the same structure for the first hash.</p>
+
+<p>The second hash reuses so much work from the first that it mostly
+makes sense to consider a combined loop that computes both (regular
+UMASH and this new xor-shifted variant) block compression functions at
+the same time.</p>
+
+<p>The first change for this combined loop is that we need to xor
+together all 16-bytes chunk in the message, and mix the resulting
+checksum with a fresh PH function.  That’s equivalent to xoring
+everything in a new accumulator (or two accumulators when working with
+256-bit vectors) initialised with the PH parameters, and <code>CLMUL</code>ing
+together the accumulator’s two 64-bit halves at the end.</p>
+
+<p>We also have to apply the \(\overline{xs}_i\) quasi-xor-shift
+functions to each \(h_i\).  The trick is to accumulate the shifted
+values in two variables: one is the regular UMASH accumulator without
+\(h_0\) (i.e., \(h_1 \oplus h_2 \ldots\)), and the other shifts
+the current accumulator before xoring in a new value, i.e.,
+\(\mathtt{acc}^\prime = (\mathtt{acc} \mathtt{«} 1) \oplus h_i\),
+where the left shift on parallel 64-bit halves simply adds <code>acc</code>
+to itself.</p>
+
+<p>This additional shifted accumulator includes another special case to
+skip \(\overline{xs}_1(x) = x \mathtt{«} 1\); that’s not a
+big deal for the code, since we already have to special case the last
+iteration for the ENH mixer.</p>
+
+<p>Armed with \(\mathtt{UMASH} = \bigoplus_{i=1}^{n - 1} h_i\) and
+\(\mathtt{acc} = \bigoplus_{i=2}^{n - 1} h_i \mathtt{«} (i - 1),\)
+we have
+\[\bigoplus_{i=1}^{n - 1} \overline{xs}_i(h_i) = (\mathtt{UMASH} \oplus \mathtt{acc}) \mathtt{«} 1.\]</p>
+
+<p>We just have to xor in the <code>PH</code>-mixed checksum \(h_n\), and finally
+\(h_0\) (which naturally goes in GPRs, so can be computed while we
+extract values out of vector registers).</p>
+
+<p>We added two vector xors and one addition for each chunk in a block,
+and, at the end, one <code>CLMUL</code> plus a couple more xors and adds again.</p>
+
+<p>This should most definitely be faster than computing two UMASH at the
+same time, which incurred two vector xors and a <code>CLMUL</code> (or full
+integer multiplication) for each chunk: even when <code>CLMUL</code> can pipeline
+one instruction per cycle, vector additions can dispatch to more
+execution units, so the combined throughput is still higher.</p>
+
+<h2 id="one-last-thing-what-if-we-have-blocks-of-different-length">One last thing: what if we have blocks of different length?</h2>
+
+<p>It’s easy to show that UMASH is relatively safe when one block is
+shorter than the other, and we simply xor together fewer mixed chunks.
+Without loss of generality, we can assume the longer block has \(n\)
+chunks; that block’s final ENH is independent of the shorter block’s
+UMASH, and any specific value occurs with probability at most
+\(2^{-63}\) (the probability of a multiplication by zero).</p>
+
+<p>A similar argument seems more complex to defend for the shifted UMASH.</p>
+
+<p>Luckily, we can tweak the <a href="https://en.wikipedia.org/wiki/Longitudinal_redundancy_check">LRC checksum</a>
+we use to generate an additional chunk in the block: rather than xoring
+together the raw message chunks, we’ll xor them <em>after</em> xoring them
+with the PH key, i.e.,</p>
+
+<p>\[m_n = \bigoplus_{i=0}^{n - 1} m_i \oplus k_i, \]</p>
+
+<p>where \(k_i\) are the PH parameters for each chunk.</p>
+
+<p>When checksumming blocks of the same size, this is a no-op with respect
+to collision probabilities.  Implementations might however benefit
+from the ability to use a fused <code>xor</code> with load from memory<sup id="fnref:latency" role="doc-noteref"><a href="#fn:latency" class="footnote">2</a></sup>
+to compute \(m_i \oplus k_i\), and feed that both into the checksum
+and into <code>CLMUL</code> for PH.</p>
+
+<p>Unless we’re extremely unlucky (\(m_{n - 1} = k_{n - 1}\), with
+probability \(2^{-2w}\)), the long block’s LRC will differ from the
+shorter block’s.  As long as we always xor in the same PH parameters
+when mixing the artificial LRC, the secondary hashes collide with
+probability at most \(2^{-64}\).</p>
+
+<p>With a small tweak to the checksum function, we can easily guarantee
+that blocks with a different number of chunks collide with probability
+less than \(2^{-126}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" class="footnote">3</a></sup></p>
+
+<p><small>Thank you Joonas for helping me rubber duck the presentation, and Jim for pointing me in the right direction, and for the fruitful discussion!</small></p>
+
+<p><hr style="width: 50%" /></p>
+
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:one-bit-with-ph" role="doc-endnote">
+      <p>It’s even better for UMASH, since we obtained these shifted chunks by mixing with PH.  The result of PH is the carryless product of two 64-bit values, so the most significant bit is always 0.  The shifted-xorshift doesn’t erase any information in the high 64-bit half! <a href="#fnref:one-bit-with-ph" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:latency" role="doc-endnote">
+      <p>This might also come with a small latency hit, which is unfortunate since PH-ing \(m_n\) is likely to be on the critical path… but one cycle doesn’t seem that bad. <a href="#fnref:latency" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:tag" role="doc-endnote">
+      <p>The algorithm to expand any input message to a sequence of full 16-byte chunks is fixed.  That’s why we incorporate a size tag in ENH; that makes it impossible for two messages of different lengths to collide when they are otherwise identical after expansion. <a href="#fnref:tag" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
 </div>
   
   

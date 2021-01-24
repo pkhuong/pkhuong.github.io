@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2015/11/29/retrospective-on-binary-search-and-on-compression-slash-compilation/">Retrospective on binary search and comp{ress,ilat}ion</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2017/04/02/three-universal-hashing-in-four-instructions/">Three-universal hashing in four instructions</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Nov
+April
   
-29th, 
-2015
+2nd, 
+2017
 
 
 
 
         
-         | <a href="/Blog/2015/11/29/retrospective-on-binary-search-and-on-compression-slash-compilation/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2015/11/29/retrospective-on-binary-search-and-on-compression-slash-compilation/"
+         | <a href="/Blog/2017/04/02/three-universal-hashing-in-four-instructions/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2017/04/02/three-universal-hashing-in-four-instructions/"
 	      >Comments</a>
         
         
@@ -117,26 +117,72 @@ Nov
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I never know whether to prefer closure or fresh questions, in
-research.  I got a little of both lately.  First, closure on searching
-in permutations of sorted arrays, and second, more avenues on the
-compilation as compression angle.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>… with one caveat: the hash functions only generate one bit.</p>
 
-<h2 id="array-layouts-for-comparison-based-searching">Array Layouts for Comparison-Based Searching</h2>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"hash.c" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
+</span><span class="line"><span class="nf">bit_hash</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">table</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">bit</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">    <span class="cm">/* table is a random uniform uint64_t, bit is a random bit. */</span>
+</span><span class="line">	<span class="k">return</span> <span class="n">__builtin_parityll</span><span class="p">((</span><span class="n">x</span> <span class="o">&amp;</span> <span class="n">table</span><span class="p">)</span> <span class="o">^</span> <span class="n">bit</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>In July 2012, I started really looking into searching in static sorted
-sets, and found the literature disturbingly useless.  I reviewed a lot
-of code, and it turned out that most binary searches out there are not
-only unsafe for overflow, but also happen to be badly
-micro-optimised for small arrays with simple comparators.  That lead
-to <a href="http://pvk.ca/Blog/2012/07/03/binary-search-star-eliminates-star-branch-mispredictions/">Binary Search <em>eliminates</em> Branch Mispredictions</a>,
-a reaction to popular assertions that binary search has bad constant
-factors (compared to linear search or a breadth first layout) on modern
-microarchitecture, mostly due to branch mispredictions.  That post has code
-for really riced up searches on fixed array sizes,
-so here’s the size generic inner loop I currently use.</p>
+<p>With hardware popcount, this compiles to something like the following.</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"hash.s" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+</pre></td><td class="code"><pre><code class="s"><span class="line">        andq    <span class="o">%rsi, %</span>rdi <span class="c1"># x &amp; table</span>
+</span><span class="line">        xorl    <span class="o">%eax, %</span>eax <span class="c1"># work around a hardware perf bug in popcnt</span>
+</span><span class="line">        xorq    <span class="o">%rdi, %</span>rdx <span class="c1"># () ^ bit</span>
+</span><span class="line">        popcntq <span class="o">%rdx, %</span>rax <span class="c1"># get the popcount</span>
+</span><span class="line">        andl    <span class="o">$</span><span class="m">1</span><span class="p">,</span> %eax   <span class="c1"># isolate parity</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>This should raise a few questions:</p>
+
+<ol>
+  <li>Why?</li>
+  <li>Why does it work?</li>
+  <li>Is it useful?</li>
+</ol>
+
+<p>Someone with a passing familiarity with x86 would also ask why we use
+<code>popcnt</code> instead of checking the parity flag after <code>xor</code>.
+Unfortunately, the parity flag only considers the least significant
+byte of the result (:</p>
+
+<h2 id="one-bit-hash-functions-but-why">One-bit hash functions: but why?</h2>
+
+<p>When implementing something like the
+<a href="https://arxiv.org/abs/0902.2206">hashing trick</a> or
+<a href="https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf">count sketches (PDF)</a>,
+you need two sets of provably strong hash functions: one to pick the
+destination bucket, and another to decide whether to increment or
+decrement by the sketched value.</p>
+
+<p>One-bit hash functions are ideal for the latter use case.</p>
+
+<h2 id="how-does-that-even-work">How does that even work?</h2>
+
+<p>The bitwise operations in <code>bit_hash</code> implement a degenerate form of
+<a href="https://arxiv.org/abs/1011.5200">tabulation hashing</a>.  It considers
+the 64 bit input value <code>x</code> as a vector of 64 bits, and associates a
+two intermediate output values with each index.  The naïve
+implementation would be something like the following.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"hash_slow.c" </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
 <span class="line-number">3</span>
 <span class="line-number">4</span>
@@ -146,175 +192,54 @@ so here’s the size generic inner loop I currently use.</p>
 <span class="line-number">8</span>
 <span class="line-number">9</span>
 <span class="line-number">10</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">const</span> <span class="kt">uint32_t</span> <span class="n">x</span> <span class="o">=</span> <span class="p">...;</span>
-</span><span class="line"><span class="k">const</span> <span class="kt">uint32_t</span> <span class="o">*</span><span class="n">base</span> <span class="o">=</span> <span class="p">...;</span>
-</span><span class="line"><span class="kt">size_t</span> <span class="n">n</span> <span class="o">=</span> <span class="p">...;</span>
-</span><span class="line"><span class="kt">size_t</span> <span class="n">half</span><span class="p">;</span>
+<span class="line-number">11</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
+</span><span class="line"><span class="nf">bit_hash_slow</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="kt">bool</span> <span class="n">random_table</span><span class="p">[</span><span class="mi">64</span><span class="p">][</span><span class="mi">2</span><span class="p">])</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">    <span class="kt">int</span> <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span>
 </span><span class="line">
-</span><span class="line"><span class="k">while</span> <span class="p">((</span><span class="n">half</span> <span class="o">=</span> <span class="n">n</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
-</span><span class="line">    <span class="k">const</span> <span class="kt">uint32_t</span> <span class="o">*</span><span class="n">mid</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">base</span><span class="p">[</span><span class="n">half</span><span class="p">];</span>
-</span><span class="line">    <span class="n">base</span> <span class="o">=</span> <span class="p">(</span><span class="o">*</span><span class="n">mid</span> <span class="o">&lt;</span> <span class="n">x</span><span class="p">)</span> <span class="o">?</span> <span class="nl">mid</span> <span class="p">:</span> <span class="n">base</span><span class="p">;</span>
-</span><span class="line">    <span class="n">n</span> <span class="o">-=</span> <span class="n">half</span><span class="p">;</span>
+</span><span class="line">    <span class="k">for</span> <span class="p">(</span><span class="kt">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">64</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">,</span> <span class="n">x</span> <span class="o">&gt;&gt;=</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">random_table</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">x</span> <span class="o">&amp;</span> <span class="mi">1</span><span class="p">];</span>
+</span><span class="line">    <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
 </span><span class="line"><span class="p">}</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>The snippet above implements a binary search, instead of <a href="http://pvk.ca/Blog/2012/07/30/binary-search-is-a-pathological-case-for-caches/">dividing by three to avoid aliasing issues</a>.  That issue only shows up with array sizes that are
-(near) powers of two.  I know of two situations where that happens a lot:</p>
+<p>Of course, the representation of <code>random_table</code> is inefficient, and we
+should hand-roll a bitmap.  However, the loop itself is a problem.</p>
 
-<ol>
-  <li>bad benchmarks;</li>
-  <li>data structures built around powers of two (e.g., <a href="http://repository.cmu.edu/cgi/viewcontent.cgi?article=3453&amp;context=compsci">Saxe &amp; Bentley dynamisation</a>).</li>
-</ol>
+<p>The trick is to notice that we can normalise the table so that the
+value for <code>random_table[i][0]</code> is always 0: in order to do so, we have
+to fix the initial value for <code>acc</code> to a random bit.  That initial
+value is the hash value for <code>0</code>, and the values in
+<code>random_table[i][1]</code> now encode whether a non-zero bit <code>i</code> in <code>x</code>
+flips the hash value or leaves it as is.</p>
 
-<p>The fix for the first case is to do proper benchmarking on a wide
-range of input sizes.  Ternary or offset binary search are only really
-useful in the second case.  There’s actually a third case: when I’m
-about to repeatedly search in the same array, I dispatch to unrolled
-ternary searches, with one routine for each power of two.  I can
-reduce any size to a power of two with one initial iteration on an
-off-center “midpoint.”  Ternary search has a high overhead for small
-arrays, unless we can precompute offsets by unrolling the whole thing.</p>
+<p>The <code>table</code> argument for <code>bit_hash</code> is simply the 64 bits in
+<code>random_table[i][1]</code>, and <code>bit</code> is the hash value for <code>0</code>.  If bit <code>i</code>
+in <code>table</code> is 0, bit <code>i</code> is irrelevant to the hash.  If bit <code>i</code> in
+<code>table</code> is 1, the hash flips when bit <code>i</code> in <code>x</code> is 1.  Finally, the
+parity counts how many times the hash was flipped.</p>
 
-<p>My work on binary search taught me how to implement binary search not
-stupidly–unlike real implementations–and that most experiments on
-searching in array permutations seem broken in their very design (they
-focus on full binary trees).</p>
+<h2 id="is-it-even-useful">Is it even useful?</h2>
 
-<p>I don’t think I ever make that explicit, but the reason I even started
-looking into binary search is that I wanted to have a fast
-implementation of searching in a van Emde Boas layout!  However,
-none of the benchmarks (or analyses) I found were convincing, and
-I kind of lost steam as I improved sorted arrays: sortedness tends
-to be useful for operations other than predecessor/successor search.</p>
+<p>I don’t think so.  Whenever we need a hash bit, we also want a hash
+bucket; we might as well steal one bit from the latter wider hash.
+Worse, we usually want a few such bucket/bit pairs, so we could also
+compute a wider hash and carve out individual bits.</p>
 
-<p>Some time in May this year, I found <a href="http://cglab.ca/~morin/misc/arraylayout-v2/">Pat Morin’s fresh effort</a> on the
-exact question I had abandoned over the years: how do popular
-permutations work in terms of raw CPU time?  The code was open,
-and even good by research standards!  Pat had written the annoying
-part (building the permutations), generated a bunch of tests I could
-use to check correctness, and avoided obvious microbenchmarking
-pitfalls.  He also found a <a href="https://github.com/patmorin/arraylayout/blob/master/src/eytzinger_array.h#L137">really nice way to find the return value for BFS searches</a> from the location where the search ends with fast
-bit operations (<code>j = (i + 1) &gt;&gt; __builtin_ffs(~(i + 1));</code>, which he
-explains in the paper).</p>
+<p>I only thought about this trick because I’ve been reading a few
+empirical evaluation of sketching techniques, and a few authors find
+it normal that computing a hash bit doubles the CPU time spent on
+hashing.  It seems to me the right way to do this is to map
+columns/features to not-too-small integers (e.g., universal hashing to
+<code>[0, n^2)</code> if we have <code>n</code> features), and apply strong hashing to
+these integers.  Hashing machine integers is <em>fast</em>, and we can always
+split strong hashes in multiple values.</p>
 
-<p>I took that opportunity to improve constant factors for all the
-implementations, and to really try and explain in detail the
-performance of each layout with respect to each other, as well as how they
-respond to the size of the array.  That sparked a very interesting
-back and forth with Pat from May until September (!).  Pat eventually took
-the time to turn our informal exchange into a <a href="http://arxiv.org/abs/1509.05053">coherent paper</a>.  More than 3 years after I
-started spending time on the question of array layouts for implicit
-search trees, I found the research I was looking for… all it took was
-a bit of collaboration (:</p>
-
-<p>Bonus: the results were unexpected! Neither usual suspects (B-tree or
-van Emde Boas) came out on top, even for very large arrays.  I was
-also surprised to see the breadth-first layout perform much better
-than straight binary search: none of the usual explanations made sense
-to me.  It turns out that the improved performance (when people weren’t
-testing on round, power of two, array sizes) was probably an
-unintended consequence of bad code!  Breadth-first is fast,
-faster than layouts with better cache efficiency, because it prefetches well
-enough to hide latency even when it extracts only one bit of
-information from each cache line; its performance has nothing to do with
-cachability.  Our code prefetches explicitly, but slower branchy
-implementations in the wild get implicit prefetching, thanks to
-speculative execution.</p>
-
-<p>Conclusion: if you need to do a lot of comparison-based searches in &gt;
-L2-sized arrays, use a breadth-first order and prefetch.  If you need
-sorted arrays, consider sticking some prefetches in a decent binary
-search loop.  If only I’d known that in 2012!</p>
-
-<h2 id="compressilation">Comp{ress,ilat}ion</h2>
-
-<p>A couple months ago, I found <a href="http://www.dcc.uchile.cl/~gnavarro/ps/dcc10.1.pdf">LZ77-like Compression with Fast Random Access</a> by Kreft and Navarro.  They
-describe a Lempel-Ziv approach that is similar to LZ77, but
-better suited to decompressing arbitrary substrings.  The hard part about
-<a href="http://pvk.ca/Blog/2014/03/30/refactoring-with-lz77-compilation-is-compression/">applying LZ77 compression to (byte)code</a>
-is that parses may reuse any substring that happens to appear
-earlier in the original text.  That’s why I had to use Jez’s algorithm
-to convert the LZ77 parse into a (one word) grammar.</p>
-
-<p>LZ-End fixes that.</p>
-
-<p>Kreft and Navarro improve random access decompression by restricting
-the format of “backreferences” in the LZ parse.  The parse decomposes
-the original string into a sequence of phrases; concatenating the
-phrases yields the string back, and phrases have a compact
-representation.  In LZ77, phrases are compressed because they refer
-back to substrings in prior phrases.  LZ-End adds another constraint:
-the backreferences cannot end in the middle of phrases.</p>
-
-<p>For example, LZ77 might have a backreference like</p>
-
-<pre><code>[abc][def][ghi]
-   ---------
-</code></pre>
-
-<p>to represent “cdefg.”  LZ-End would be forced to end the new phrase at “f”</p>
-
-<pre><code>[abc][def][ghi]
-   -------
-</code></pre>
-
-<p>and only represent “cdef.”  The paper shows that this additional
-restriction has a marginal impact on compression rate, and uses the
-structure to speed up operations on compressed data.  (The formal
-definition also forbids the cute/annoying self-reference-as-loop idiom
-of LZ77, without losing too much compression power!)</p>
-
-<p>We can apply the same idea to compress code.  Each phrase is now a
-subroutine with a <code>return</code> at the end.  A backreference is a series
-of calls to subroutines; the first call might begin in the middle, but
-matches always end on <code>return</code>, exactly like normal code does!  A
-phrase might begin in the middle of a phrase that itself consists of
-calls.  That’s still implementable: the referrer can see through the
-indirection and call in the middle of the callee’s callee (etc.), and
-then go back to the callee for a suitably aligned submatch.</p>
-
-<p>That last step looks like it causes a space blowup, and I can’t bound it (yet).</p>
-
-<p>But that’s OK, because I was only looking into compressing traces as a
-last resort.  I’m much more interested in expression trees, but
-couldn’t find a way to canonicalize sets (e.g., arguments to integer
-<code>+</code>) and sequences (e.g., floating point <code>*</code>) so that similar
-collections have similar subtrees… until I read Hammer et al’s work
-on <a href="http://arxiv.org/abs/1503.07792">Nominal Adapton</a>, which solves a
-similar problem in a different context.</p>
-
-<p>They want a tree representation for lists and tries (sets/maps) such
-that a small change in the list/trie causes a small change in the
-tree that mostly preserves identical subtrees.  They also want the
-representation to be a deterministic function of the list/trie.  That
-way, they can efficiently reuse computations after incremental changes
-to inputs.</p>
-
-<p>That’s exactly my sequence/set problem!  I want a tree-based
-representation for sequences (lists) and sets (tries) such that
-similar sequences and sets have mostly identical subtrees for which I
-can reuse pre-generated code.</p>
-
-<p>Nominal Adapton uses a hash-based construction described by Pugh and
-Teitelbaum in 1989 (Incremental computation via function caching) to
-represent lists, and extends the idea for tries.  I can “just” use the
-same trick to canonicalise lists and sets into binary trees, and
-(probabilistically) get common subexpressions for free, even across
-expressions trees!  It’s not perfect, but it should scale pretty well.</p>
-
-<p>That’s what I’m currently exploring when it comes to using compression
-to reduce cache footprint while doing aggressive specialisation.
-Instead of finding redundancy in linearised bytecode after the fact,
-induce identical subtrees for similar expressions, and directly reuse
-code fragments for subexpressions.</p>
-
-<h2 id="more-to-come">More to come</h2>
-
-<p>I thought I’d post a snippet on the effect of alignment and virtual
-memory tricks on TLBs, but couldn’t find time for that.  Perhaps later
-this week.  In the meantime, I have to prepare a short talk on the
-software transactional memory system we built at AppNexus.  Swing by
-<a href="http://meetup.com/TechTalks-AppNexus-NYC/">23rd Street on December 15</a> if you’re in New York!</p>
+<p>In the end, this family of one-bit hash functions seems like a good
+solution to a problem no one should ever have.  But it’s still a cute trick!</p>
 </div>
   
   

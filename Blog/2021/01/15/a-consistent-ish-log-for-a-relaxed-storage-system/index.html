@@ -204,12 +204,14 @@ should hopefully not collide given our scale, while the monotonic id
 is guaranteed unique and monotonically increasing for an OS process
 (and a domain id is tied to its process).</p>
 
-<p>Our monotonic ids are based on POSIX <code>CLOCK_MONOTONIC</code> timestamps,
-except we compute an offset from <code>CLOCK_REALTIME</code> to <code>CLOCK_MONOTONIC</code>
-when the program starts up, and use the same offset for all ids
-generated in the program.  This offset lets us work with timestamps
-that roughly match reality (seconds since the Unix epoch), while also
-guaranteeing monotonically increasing values.</p>
+<p>Our monotonic ids are based on POSIX <code>CLOCK_MONOTONIC</code> (well, really
+Linux <code>CLOCK_BOOTTIME</code>) timestamps, except we compute an offset to
+convert <code>CLOCK_MONOTONIC</code> (<code>CLOCK_BOOTTIME</code>) to <code>CLOCK_REALTIME</code> (we’d
+really want <code>CLOCK_TAI</code>, but that’s broken on Linux) when the program
+starts up, and use the same offset for all ids generated in the
+program.  This offset lets us work with timestamps that roughly match
+reality (seconds since the Unix epoch), while also guaranteeing
+monotonically increasing values.</p>
 
 <p>However, there is no guarantee that <code>CLOCK_MONOTONIC</code> timestamps
 differ between two calls, only that they never go backwards.  That’s
@@ -241,7 +243,7 @@ modular comparisons, and assume 68-year delays are out of scope.</p>
 
 <h2 id="track-changes-by-epochs">Track changes by epochs</h2>
 
-<p>If we had strong enough isolation guarantees (e.g., sqlite’s write
+<p>If we had strong enough isolation guarantees (e.g., sqlite’s big write
 lock), the work would stop here: tag transactions with monotonic ids
 in order, report change events as they enter the WAL, and finish with
 the number of event in each transaction.</p>
@@ -390,7 +392,7 @@ Jan
       
       
       
-        <a class="basic-alignment left" href="/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/" title="Previous Post: 1.5x the PH bits for one more CLMUL">&laquo; 1.5x the PH bits for one more CLMUL</a>
+        <a class="basic-alignment left" href="/Blog/2021/01/11/stuff-your-logs/" title="Previous Post: Stuff your logs!">&laquo; Stuff your logs!</a>
       
       
       

@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2020/02/01/too-much-locality-for-store-forwarding/">Too much locality... for stores to forward</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2020/03/11/how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/">How hard is it to guide test case generators with branch coverage feedback?</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Feb
+Mar
   
-1st, 
+11th, 
 2020
 
 
 
 
         
-         | <a href="/Blog/2020/02/01/too-much-locality-for-store-forwarding/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2020/02/01/too-much-locality-for-store-forwarding/"
+         | <a href="/Blog/2020/03/11/how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2020/03/11/how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/"
 	      >Comments</a>
         
         
@@ -117,181 +117,988 @@ Feb
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><small>Apologies for the failed <a href="https://www.youtube.com/watch?v=K3DRkVjuqmc">Cake reference</a>.<br />
-2020-02-02: Refer to Travis Downs’s investigation into this pathological case for forwarding.</small></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>To make a long story short, it’s almost easy,
+now that <a href="https://github.com/torvalds/linux/blob/master/tools/perf/Documentation/intel-bts.txt">tracing</a> is available on commodity hardware,
+especially with a <a href="https://gist.github.com/pkhuong/1ce34e33c6df4b9be3bc9beb22415a47">small library to handle platform-specific setup</a>.</p>
 
-<p>I’ve been responsible for <a href="https://backtrace.io/">Backtrace.io</a>’s crash analytic database<sup id="fnref:started-work" role="doc-noteref"><a href="#fn:started-work" class="footnote">1</a></sup> for a couple months now.
-I have focused my recent efforts on improving query times for in-memory grouped aggregations, i.e.,
-the archetypal MapReduce use-case where we generate key-value pairs, and <a href="https://en.wikipedia.org/wiki/Fold_(higher-order_function)">fold</a> over the values
-for each key in some <a href="https://en.wikipedia.org/wiki/Semigroup">(semi)</a><a href="https://en.wikipedia.org/wiki/Group_(mathematics)">group</a>.
-We have a cute cache-efficient data structure for this type of workload;
-the inner loop simply inserts in a small hash table with <a href="/Blog/more_numerical_experiments_in_hashing.html">Robin Hood linear probing</a>,
-in order to guarantee entries in the table are ordered by hash value.  This
-ordering lets us easily dump the entries in sorted order, and <a href="https://www2.eecs.berkeley.edu/Pubs/TechRpts/1993/6309.html">block</a> the merge loop for an arbitrary number of sorted arrays
-into a unified, larger, ordered hash table (which we can, again, dump to a sorted array).<sup id="fnref:more-later" role="doc-noteref"><a href="#fn:more-later" class="footnote">2</a></sup></p>
+<p>Here’s a graph of the empirical distribution functions
+for the number of calls into <a href="https://github.com/google/fuzzer-test-suite/tree/7e08b745d1e264eedb9a91b1fd0a931f1bec3b83/openssl-1.0.1f">OpenSSL 1.0.1f</a>
+it takes for <a href="https://hypothesis.works/">Hypothesis</a>
+to find <a href="https://en.wikipedia.org/wiki/Heartbleed">Heartbleed</a>,
+given a description of the <a href="https://tools.ietf.org/html/rfc6520">format for Heartbeat requests</a> (“grammar”),
+and the same with additional branch coverage feedback (“bts”, for Intel Branch Trace Store).</p>
 
-<h1 id="observation">Observation</h1>
+<!-- ggplot(data, aes(x=Calls, colour=Impl)) + stat_ecdf() + scale_color_discrete(name="Implementation") + scale_x_log10() + ylab("Cumulative fraction") + xlab("Calls to OpenSSL until crash") -->
+<p><img class="center" src="/images/2020-03-11-how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/ecdf.png" /></p>
 
-<p>As I updated more operators to use this data structure, I noticed that we were spending a lot of time in its inner loop.
-In fact, <a href="http://www.brendangregg.com/linuxperf.html">perf</a> showed that the query server as a whole was spending 4% of its CPU time on one instruction in that loop:</p>
+<p>On average, knowing the grammar for Heartbeat requests lets Hypothesis find
+the vulnerability after 535 calls to OpenSSL;
+when we add branch coverage feedback, the average goes down to 473<sup id="fnref:realtime" role="doc-noteref"><a href="#fn:realtime" class="footnote">1</a></sup> calls, 11.5% faster.
+The plot shows that,
+as long as we have time for more than 100 calls to OpenSSL,
+branch coverage information makes it more likely that Hypothesis will find Heartbleed
+for every attempt budget.
+I’ll describe this experiment in more details later in the post;
+first, why did I ask that question?</p>
 
-<pre><code> 2.17 |       movdqu     (%rbx),%xmm0
-39.63 |       lea        0x1(%r8),%r14  # that's 40% of the annotated function
-      |       mov        0x20(%rbx),%rax
- 0.15 |       movaps     %xmm0,0xa0(%rsp)
+<h2 id="enumerating-test-cases-by-hand-is-a-waste-of-peoples-time">Enumerating test cases by hand is a waste of people’s time</h2>
+
+<p>I care about efficiently generating test cases because
+I believe that most of the time people spend writing, reviewing, and maintaining
+classic <a href="https://testing.googleblog.com/2010/12/test-sizes.html">small or medium tests</a>
+is misallocated.
+There’s a place for them, same as there is for manual QA testing… but their returns curve is strongly concave.</p>
+
+<p>Here are the sort of things I want to know when I look at typical unit test code:</p>
+<ol>
+  <li>Why do we make this exact assertion; what makes a result acceptable?<sup id="fnref:matchers" role="doc-noteref"><a href="#fn:matchers" class="footnote">2</a></sup></li>
+  <li>Why do we feed this or that input; what makes input data useful or interesting?</li>
+  <li>What is expected to change when I tweak the external behaviour of the system under test;<sup id="fnref:change-detector" role="doc-noteref"><a href="#fn:change-detector" class="footnote">3</a></sup> how are answers to the previous two questions encoded?</li>
+</ol>
+
+<p>As programmers, I think it’s natural to say that,
+if we need to formalize how we come up with assertions, or how we decide what inputs to use during testing,
+we should express that in code.
+But once we have that code, why would we enumerate test cases manually?
+That’s a job for a computer!</p>
+
+<h2 id="property-based-testing-at-backtrace"><a href="https://increment.com/testing/in-praise-of-property-based-testing/">Property-based testing</a> at Backtrace</h2>
+
+<p>I have such conviction in this thesis that,
+as soon as I took over the query processing component (a library written in C with a dash of intrinsics and inline assembly) at <a href="https://backtrace.io">Backtrace</a>,
+I introduced a new testing approach based on <a href="https://hypothesis.readthedocs.io/en/latest/index.html">Hypothesis</a>.
+The query engine was always designed and built as a discrete library,
+so it didn’t take too much work to disentangle it from other pieces of business logic.
+That let us quickly add coverage for the external interface (partial coverage, this is still work
+in progress), as well as for key internal components that we chose to expose for testing.</p>
+
+<p>Along the way, I had to answer a few reasonable questions:</p>
+
+<ol>
+  <li>What is Hypothesis?</li>
+  <li>Why Hypothesis?</li>
+  <li>Wait, there are multiple language backends for Hypothesis, but none for C or C++; how does that work?</li>
+</ol>
+
+<h3 id="what-is-hypothesis">What is Hypothesis?</h3>
+<p><a href="https://hypothesis.works/">Hypothesis</a> is a Python library that helps programmers generate test cases programmatically,
+and handles a lot of the annoying work involved in making such generators practical to use.
+Here’s an excerpt from real test code for our vectorised operations on arrays of 64-bit integers.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_u64_block.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="kn">from</span> <span class="nn">hypothesis</span> <span class="kn">import</span> <span class="n">given</span>
+</span><span class="line"><span class="kn">import</span> <span class="nn">hypothesis.strategies</span> <span class="kn">as</span> <span class="nn">st</span>
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">check_u64_bitmask</span><span class="p">(</span><span class="n">booleans</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Given a list of 8 booleans, generates the corresponding array of</span>
+</span><span class="line"><span class="sd">    u64 masks, and checks that they are correctly compressed to a u8</span>
+</span><span class="line"><span class="sd">    bitmask.</span>
+</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
+</span><span class="line">    <span class="n">expected</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">booleans</span><span class="p">):</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">value</span><span class="p">:</span>
+</span><span class="line">            <span class="n">expected</span> <span class="o">|=</span> <span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="n">i</span>
+</span><span class="line">    <span class="n">masks</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s2">&quot;8Q&quot;</span><span class="p">,</span> <span class="o">*</span><span class="p">[</span><span class="mi">2</span> <span class="o">**</span> <span class="mi">64</span> <span class="o">-</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">boolean</span> <span class="k">else</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">boolean</span> <span class="ow">in</span> <span class="n">booleans</span><span class="p">])</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">expected</span> <span class="o">==</span> <span class="n">C</span><span class="o">.</span><span class="n">u64_block_bitmask</span><span class="p">(</span><span class="n">FFI</span><span class="o">.</span><span class="n">from_buffer</span><span class="p">(</span><span class="s2">&quot;uint64_t[]&quot;</span><span class="p">,</span> <span class="n">masks</span><span class="p">))</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">class</span> <span class="nc">TestU64BlockOp</span><span class="p">(</span><span class="n">TestCase</span><span class="p">):</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@given</span><span class="p">(</span><span class="n">bits</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">lists</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">booleans</span><span class="p">(),</span> <span class="n">min_size</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">max_size</span><span class="o">=</span><span class="mi">8</span><span class="p">))</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">test_u64_block_bitmask</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bits</span><span class="p">):</span>
+</span><span class="line">        <span class="n">check_u64_bitmask</span><span class="p">(</span><span class="n">bits</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>A key component of these operations is a C (SSE intrinsics, really) function that accepts eight 64-bit masks as four 128-bit SSE registers (one pair of masks per register),
+and returns a byte, with one bit per mask.
+In order to test that logic, we expose <code>u64_block_bitmask</code>, a wrapper that accepts an array of eight masks
+and forwards its contents to the mask-to-bit function.</p>
+
+<p><img class="center" src="/images/2020-03-11-how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/reduction.jpg" /></p>
+
+<p><code>check_u64_bitmask</code> calls that wrapper function from Python, and asserts that its return value is as expected: 1 for each mask that’s all 1s, and 0 for each mask that’s all 0s.
+We turn <code>check_u64_bitmask</code> into a test cases generator
+by annotating the test method <code>test_u64_block_bitmask</code> with a <a href="https://hypothesis.readthedocs.io/en/latest/details.html#hypothesis.given"><code>@given</code> decorator</a>
+that asks Hypothesis to generate arbitrary lists of eight booleans.</p>
+
+<p>Of course, there are only 256 lists of eight booleans; we should test that exhaustively.
+Hypothesis has the <a href="https://hypothesis.readthedocs.io/en/latest/reproducing.html#hypothesis.example"><code>@example</code> decorator</a>,
+so it’s really easy to implement our own Python decorator to apply
+<code>hypothesis.example</code> once for each element in an iterable.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_u64_block.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">all_examples</span><span class="p">(</span><span class="n">examples</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Applies a list of hypothesis.examples.&quot;&quot;&quot;</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">apply_examples</span><span class="p">(</span><span class="n">fn</span><span class="p">):</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">ex</span> <span class="ow">in</span> <span class="nb">reversed</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">examples</span><span class="p">)):</span>
+</span><span class="line">            <span class="n">fn</span> <span class="o">=</span> <span class="n">example</span><span class="p">(</span><span class="n">ex</span><span class="p">)(</span><span class="n">fn</span><span class="p">)</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">apply_examples</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">extract_bits</span><span class="p">(</span><span class="n">number</span><span class="p">,</span> <span class="n">num_bits</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Converts the num_bits bit number to a list of booleans.&quot;&quot;&quot;</span>
+</span><span class="line">    <span class="k">return</span> <span class="p">[(</span><span class="n">number</span> <span class="o">&amp;</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="n">shift</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">shift</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_bits</span><span class="p">)]</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="k">class</span> <span class="nc">TestU64BlockOp</span><span class="p">(</span><span class="n">TestCase</span><span class="p">):</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@all_examples</span><span class="p">(</span><span class="n">extract_bits</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="mi">8</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">256</span><span class="p">))</span>
+</span><span class="line">    <span class="nd">@given</span><span class="p">(</span><span class="n">bits</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">lists</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">booleans</span><span class="p">(),</span> <span class="n">min_size</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">max_size</span><span class="o">=</span><span class="mi">8</span><span class="p">))</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">test_u64_block_bitmask</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bits</span><span class="p">):</span>
+</span><span class="line">        <span class="n">check_u64_bitmask</span><span class="p">(</span><span class="n">bits</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>That’s pretty cool, but we could enumerate that more efficiently in C.
+Where Hypothesis shines is in reporting easily actionable failures.
+We’re wasting computer time in order to save developer time, and that’s usually a reasonable trade-off.
+For example, here’s what Hypothesis spits back via pytest when I introduce a bug to ignore the
+last pair of masks, masks 6 and 7, and instead reuse the register that holds masks 4 and 5 (a mistake that’s
+surprisingly easy to make when writing intrinsics by hand).</p>
+
+<p><img class="center" src="/images/2020-03-11-how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/bad-reduction.jpg" /></p>
+
+<pre><code>booleans = [False, False, False, False, False, False, ...]
+
+    def check_u64_bitmask(booleans):
+        """Given a list of 8 booleans, generates the corresponding array of
+        u64 masks, and checks that they are correctly compressed to a u8
+        bitmask.
+        """
+        expected = 0
+        for i, value in enumerate(booleans):
+            if value:
+                expected |= 1 &lt;&lt; i
+        masks = struct.pack("8Q", *[2 ** 64 - 1 if boolean else 0 for boolean in booleans])
+&gt;       assert expected == C.u64_block_bitmask(FFI.from_buffer("uint64_t[]", masks))
+E       AssertionError: assert 128 == 0
+E         -128
+E         +0
+
+test_u64_block.py:40: AssertionError
+-------------------------------------- Hypothesis ----------------------------------------------
+Falsifying example: test_u64_block_bitmask(
+    self=&lt;test_u64_block.TestU64BlockOp testMethod=test_u64_block_bitmask&gt;,
+    bits=[False, False, False, False, False, False, False, True],
+)
 </code></pre>
 
-<p>The first thing to note is that instruction-level profiling tends to put the blame on the instruction <em>following</em> the one that triggered a sampling interrupt.
-It’s not the <code>lea</code> (which computes <code>r14 &lt;- r8 + 1</code>) that’s slow, but the <code>movdqu</code> just before.
-So, what is that <code>movdqu</code> loading into <code>xmm0</code>?  Maybe it’s just a normal cache miss, something inherent to the workload.</p>
+<p>Hypothesis finds the bug in a fraction of a second,
+but, more importantly, it then works harder to report a minimal counter-example.<sup id="fnref:unless-examples" role="doc-noteref"><a href="#fn:unless-examples" class="footnote">4</a></sup>
+With all but the last mask set to 0,
+it’s easy to guess that we’re probably ignoring the value of
+the last mask (and maybe more), which would be why we found a bitmask of
+0 rather than 128.</p>
 
-<p>I turned on source locations <a href="http://man7.org/linux/man-pages/man1/perf-report.1.html">(hit <code>s</code> in <code>perf report</code>)</a>, and observed that this instruction was simply copying to the stack an argument that was passed by address.
-The source clearly showed that the argument should be hot in cache: the inner loop was essentially</p>
+<h3 id="why-hypothesis">Why Hypothesis?</h3>
+<p>So far this is all regular property-based testing,
+with a hint of more production-readiness than we’ve come to expect from clever software correctness tools.
+What really sold me was <a href="https://hypothesis.readthedocs.io/en/latest/stateful.html">Hypothesis’s stateful testing</a>
+capability, which makes it easy to test not only individual functions, but also methods on stateful objects.</p>
 
-<pre><code>A1. Generate a new key-value pair
-B1. Mangle that kv pair just a bit to turn it into a hash element
-C1. Insert the new hash element
-A2.
-B2.
-C2.
+<p>For example, here is the test code for our specialised representation of lists of row ids (of 64-bit integers),
+which reuses internal bits as inline storage in the common case when the list is small (the type is called <code>entry</code> because it’s
+a pair of a key and a list of values).</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_inlined_list.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">PregrouperEntryList</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Populate a pregrouper entry in LIST mode; it should have all row</span>
+</span><span class="line"><span class="sd">    ids in insertion order.</span>
+</span><span class="line"><span class="sd">    &quot;&quot;&quot;</span>
+</span><span class="line">
+</span><span class="line">    <span class="n">MODE</span> <span class="o">=</span> <span class="n">C</span><span class="o">.</span><span class="n">PREGROUP_MODE_LIST</span>
+</span><span class="line">    <span class="n">U64S</span> <span class="o">=</span> <span class="n">st</span><span class="o">.</span><span class="n">one_of</span><span class="p">(</span>
+</span><span class="line">        <span class="c1"># Either one of the sentinel values</span>
+</span><span class="line">        <span class="n">st</span><span class="o">.</span><span class="n">sampled_from</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">2</span> <span class="o">**</span> <span class="mi">64</span> <span class="o">-</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span> <span class="o">**</span> <span class="mi">64</span><span class="p">))),</span>
+</span><span class="line">        <span class="c1"># or any row id.</span>
+</span><span class="line">        <span class="n">st</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mi">2</span> <span class="o">**</span> <span class="mi">64</span> <span class="o">-</span> <span class="mi">1</span><span class="p">),</span>
+</span><span class="line">    <span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">error</span> <span class="o">=</span> <span class="n">FFI</span><span class="o">.</span><span class="n">new</span><span class="p">(</span><span class="s2">&quot;crdb_error_t *&quot;</span><span class="p">)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">entry</span> <span class="o">=</span> <span class="bp">None</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">teardown</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+</span><span class="line">            <span class="n">C</span><span class="o">.</span><span class="n">pregrouper_entry_deinit</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">MODE</span><span class="p">)</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">entry</span> <span class="o">=</span> <span class="bp">None</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">perror</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+</span><span class="line">        <span class="k">return</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">: </span><span class="si">%s</span><span class="s2"> </span><span class="si">%i</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">FFI</span><span class="o">.</span><span class="n">string</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">error</span><span class="o">.</span><span class="n">message</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">error</span><span class="o">.</span><span class="n">error</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">row</span><span class="o">=</span><span class="n">U64S</span><span class="p">)</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">create_entry</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">row</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">entry</span> <span class="o">=</span> <span class="n">FFI</span><span class="o">.</span><span class="n">new</span><span class="p">(</span><span class="s2">&quot;struct crdb_pregrouper_entry *&quot;</span><span class="p">)</span>
+</span><span class="line">        <span class="n">C</span><span class="o">.</span><span class="n">pregrouper_entry_init</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">,</span> <span class="p">[</span><span class="n">row</span><span class="p">])</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">rows</span> <span class="o">=</span> <span class="p">[</span><span class="n">row</span><span class="p">]</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">row</span><span class="o">=</span><span class="n">U64S</span><span class="p">)</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">add_row</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">row</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">pregrouper_entry_add_row</span><span class="p">(</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">MODE</span><span class="p">,</span> <span class="p">[</span><span class="n">row</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">error</span>
+</span><span class="line">        <span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">perror</span><span class="p">(</span><span class="s2">&quot;add_row&quot;</span><span class="p">)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">row</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">finalize</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">pregrouper_entry_finalize</span><span class="p">(</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">MODE</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">error</span>
+</span><span class="line">        <span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">perror</span><span class="p">(</span><span class="s2">&quot;finalize&quot;</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">check</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">finalize</span><span class="p">()</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">rows</span> <span class="o">==</span> <span class="p">[</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="o">.</span><span class="n">payload</span><span class="o">.</span><span class="n">list</span><span class="o">.</span><span class="n">values</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+</span><span class="line">            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">entry</span><span class="o">.</span><span class="n">payload</span><span class="o">.</span><span class="n">list</span><span class="o">.</span><span class="n">n_entries</span><span class="p">)</span>
+</span><span class="line">        <span class="p">]</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"><span class="n">TestPregrouperEntryList</span> <span class="o">=</span> <span class="n">PregrouperEntryList</span><span class="o">.</span><span class="n">TestCase</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Most <a href="https://hypothesis.readthedocs.io/en/latest/stateful.html#hypothesis.stateful.rule"><code>@rule</code>-decorated</a> methods call a C function
+before updating a Python-side model of the values we expect to find in the list.
+The <a href="https://hypothesis.readthedocs.io/en/latest/stateful.html#hypothesis.stateful.rule"><code>@rule</code> decorator</a> mark methods that Hypothesis may call to generate examples;
+the decorator’s arguments declare how each method should be invoked.
+Some methods also have a <a href="https://hypothesis.readthedocs.io/en/latest/stateful.html#preconditions"><code>@precondition</code> decorator</a> to specify when they can be invoked
+(a <code>@rule</code> without any <code>@precondition</code> is always safe to call).
+There is one method (<code>create_entry</code>) to create a new list populated with an initial row id,
+another (<code>add_row</code>) to add a row id to the list,
+one to <code>finalize</code> the list, something which should always be safe to call and <em>must</em> be done before reading the list’s contents
+(finalizing converts away from the inline representation),
+and a <code>check</code> to compare the list of row ids in C to the one we maintained in Python.</p>
+
+<p>Row ids are arbitrary 64-bit integers, so we could simply
+ask Hypothesis to generate integers in \([0, 2^{64} - 1]\).
+However, we also know that the implementation uses high row id values around
+<code>UINT64_MAX</code> as sentinels in its implementation of inline storage, as shown below.</p>
+
+<pre><code>struct inlined_list {
+    union {
+        uint64_t data[2];
+        struct {
+            uint64_t *arr;
+            unsigned int capacity;
+            unsigned int length;
+        };
+    };
+    uint64_t control;
+};
+
+          Out of line list      Inline list of 2      Inline list of 3
+          ----------------      ----------------      ----------------
+data[0]:    arr                   elt #0                elt #0
+data[1]:    capacity &amp; length     elt #1                elt #1
+control:    UINT64_MAX            UINT64_MAX - 2        elt #2 &lt; UINT64_MAX - 2
 </code></pre>
 
-<p>and the <code>movdqu</code> happens in step C, to copy the element that step B just constructed.<sup id="fnref:dont-copy" role="doc-noteref"><a href="#fn:dont-copy" class="footnote">3</a></sup></p>
+<p>That’s why we
+bias the data generation towards row ids that could also be mistaken for sentinel values:
+we generate each row id by either sampling from a set of sentinel-like values, 
+or by sampling from all 64-bit integers.
+This approach to defining the input data is decidedly non-magical,
+compared to the way I work with fuzzers.
+However, fuzzers also tend to be slow and somewhat fickle.
+I think it makes sense to ask programmers to think about how their own code should be tested,
+instead of hoping a computer program will eventually intuit what edge cases look like.<sup id="fnref:no-preconception" role="doc-noteref"><a href="#fn:no-preconception" class="footnote">5</a></sup></p>
 
-<p>At this point, an important question suggests itself: does it matter?
-We could simply increase the size of the base case and speed up the rest of the bottom-up recursion… eventually, the latency for the random accesses in the initial hash table will dominate the inner loop.</p>
+<p>It’s pretty cool that Hypothesis will now generate a bunch of API calls for me, but,
+again, what makes Hypothesis really valuable is the way it
+minimises long sequences of random calls into
+understandable counter-examples.
+Here’s what Hypothesis/pytest reports when I remove a guard that saves us from writing a row id
+to a control word when that id would look like a sentinel value.</p>
 
-<p>When I look into the performance of these deep inner loop, my goal isn’t only to do the same thing better.
-The big wins, in my experience, come from the additional design freedom that we get from being able to find new uses for the same code.
-Improved latency, throughput, or memory footprint really shine when the increased optionality from multiple such improvements compounds and lets us consider a much larger design space for the project as a whole.
-That’s why I wanted to make sure this hash table insertion loop worked on as wide a set of parameter as possible: because that will give future me the ability to combine versatile tools.</p>
+<pre><code>self = PregrouperEntryList({})
 
-<h1 id="hypothesis">Hypothesis</h1>
+    @precondition(lambda self: self.entry)
+    @rule()
+    def check(self):
+        self.finalize()
+&gt;       assert self.rows == [
+            self.entry.payload.list.values[i]
+            for i in range(self.entry.payload.list.n_entries)
+        ]
+E       AssertionError: assert [184467440737...4073709551613] == [184467440737...4073709551613]
+E         Left contains one more item: 18446744073709551613
+E         Full diff:
+E         - [18446744073709551613, 18446744073709551613, 18446744073709551613]
+E         ?                        ----------------------
+E         + [18446744073709551613, 18446744073709551613]
 
-<p>Back to the original question. Why do we spend so many cycles loading data we just wrote to cache?</p>
-
-<p>The answer is in the question and in the title of this post: too little time elapses between the instructions that write data to the cache and the ones that read the same data.<sup id="fnref:but-forwarding" role="doc-noteref"><a href="#fn:but-forwarding" class="footnote">4</a></sup>
-A modern out-of-order machine (e.g., most amd64 chips) can execute multiple instructions at the same time, and will start executing instructions as soon as their operands are ready, even when earlier instructions in program order are still waiting for theirs.
-Machine code is essentially a messy way to encode a <a href="https://fgiesen.wordpress.com/2018/03/05/a-whirlwind-introduction-to-dataflow-graphs/">dataflow graph</a>, 
-which means our job as micro-optimisers is, at a high level, to avoid long dependency chains and make the dataflow graph as wide as possible.
-When that’s too hard, we should distribute as much scheduling slack as possible between nodes in a chain, in order to absorb the knock-on effects of cache misses and other latency spikes.
-If we fail, the chip will often find itself with no instruction ready to execute; stalling the pipeline like that is like slowing down by a factor of 10.</p>
-
-<p>The initial inner loop simply executes steps A, B, and C in order, where step C depends on the result of step B, and step B on that of step A.
-In theory, a chip with a wide enough instruction reordering window could pipeline multiple loop iterations.
-In practice, real hardware can only <a href="http://blog.stuffedcow.net/2013/05/measuring-rob-capacity/">plan on the order of 100-200 instructions ahead</a>, and that mechanism depends on branches being predicted correctly.
-We have to explicitly insert slack in our dataflow schedule, and we must distribute it well enough for instruction reordering to see the gaps.</p>
-
-<p>This specific instance is a particularly bad case for contemporary machines:
-step B populates the entry with regular (64-bit) register writes,
-while step C copies the same bytes with vector reads and writes.
-<a href="https://gist.github.com/travisdowns/bc9af3a0aaca5399824cf182f85b9e9c">Travis Downs looked into this forwarding scenario</a> and found that no other read-after-write setup behaves this badly, on Intel or AMD.
-That’s probably why the <code>movdqu</code> vector load instruction was such an issue.
-If the compiler had emitted the copy with GPR reads and writes,
-that <em>might</em> have been enough for the hardware to hide the latency.
-However, as <a href="https://twitter.com/trav_downs/status/1223766684932222976">Travis points out on Twitter</a>, it’s hard for a compiler to get that right across compilation units.
-In any case, our most reliable (more so than passing this large struct by value and hoping the compiler will avoid mismatched instructions) and powerful tool to fix this at the source level is to schedule operations manually.</p>
-
-<p>The dataflow graph for each loop iteration is currently a pure chain:</p>
-
-<pre><code>         A1
-         |
-         v
-         B1
-         |
-         v
-         C1
-                A2
-                |
-                v
-                B2
-                |
-                v
-                C2
+test_pregroup_merge.py:81: AssertionError
+------------------------------------------ Hypothesis ------------------------------------------
+Falsifying example:
+state = PregrouperEntryList()
+state.create_entry(row=18446744073709551613)
+state.add_row(row=18446744073709551613)
+state.add_row(row=18446744073709551613)
+state.check()
+state.teardown()
 </code></pre>
 
-<p>How does one add slack to these chains? With bounded queues!</p>
+<p>We can see that we populated a list
+thrice with the same row id, <code>18446744073709551613</code>,
+but only found it twice in the final C-side list.
+That row id is \(2^{64} - 3,\) the value we use to denote inline lists of two values.
+This drawing shows how the last write ended up going to a control word where it was treated as a sentinel, making the inline representation look
+like a list of two values, instead of three values.</p>
 
-<h1 id="experiment">Experiment</h1>
+<pre><code>           Bad list of 3                Identical list of 2
+          ----------------             ---------------------
+data[0]:    UINT64_MAX - 2              UINT64_MAX - 2
+data[1]:    UINT64_MAX - 2              UINT64_MAX - 2
+control:    UINT64_MAX - 2 (payload)    UINT64_MAX - 2 (sentinel)
 
-<p>My first fix was to add a one-element buffer between steps B and C.  The inner loop became</p>
-
-<pre><code>A1. Generate a new key-value pair
-C0. Insert the hash element from the previous iteration
-B1. Mangle the kv pair and stash that in the buffer
-A2.
-C1.
-B2
-etc.
 </code></pre>
 
-<p>which yields a dataflow graph like</p>
+<p>I restored the logic to prematurely stop using the inline representation
+and convert to a heap-allocated vector whenever the row value would be interpreted as a sentinel,
+and now Hypothesis doesn’t find anything wrong.
+We also know that this specific failure is fixed,
+because Hypothesis retries examples from its <a href="https://hypothesis.readthedocs.io/en/latest/database.html">failure database</a><sup id="fnref:failure-in-ci" role="doc-noteref"><a href="#fn:failure-in-ci" class="footnote">6</a></sup> on every rerun.</p>
 
-<pre><code>        |     A1
-        v     |
-        C0    |
-              |
-              v
-              B1
-              |
-              |     A2
-              v     |
-              C1    |
-                    |
-                    v
-                    B2
-                    |
+<h3 id="but-hypothesis-is-a-python-library">But Hypothesis is a Python library?!</h3>
+<p>There are multiple language-specific libraries under the <a href="https://github.com/HypothesisWorks/hypothesis">Hypothesis project</a>;
+none of them is in C, and only the Python implementation is actively maintained.
+One might think that makes Hypothesis inappropriate for testing C.
+However, the big ideas in Hypothesis are language-independent.
+There is a practical reason for the multiple implementations:
+for a tool to be really usable, it has to integrate well with the programming language’s surrounding ecosystem.
+In most languages, we also expect to write test code in the same language as the system under test.</p>
+
+<p>C (and C++, I would argue) is an exception.
+When I tell an experienced C developer they should write test code in Python,
+I expect a sigh of relief.
+The fact that Hypothesis is written in Python,
+as opposed to another managed language like Ruby or C# also helps:
+embedding and calling C libraries is Python’s bread and butter.
+The weak state of C tooling is another factor:
+no one has a strong opinion regarding how to invoke C test code,
+or how the results should be reported.
+I’ll work with anything standard enough (e.g., pytest’s JUnit dump) to be ingested by Jenkins.</p>
+
+<p>The last thing that sealed the deal for me is <a href="https://cffi.readthedocs.io/en/latest/">Python’s CFFI</a>.
+With that library, I simply had to make sure my public header files were clean enough to be parsed without a full-blown compiler;
+I could then write some simple Python code to <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-crdb-py-L58">strip away preprocessor directive</a>,
+<a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-crdb-py-L70">read headers in dependency order</a>,
+and <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-crdb-py-L77">load the production shared object</a>,
+without any test-specific build step.
+The snippets of test code above don’t look that different from tests for a regular Python module,
+but there’s also a clear mapping from each Python call to a C call.
+The level of magic is just right.</p>
+
+<p>There is one testing concern that’s almost specific to C and C++ programs:
+we must be on the lookout for memory management bugs.
+For that, we use our <a href="https://github.com/google/sanitizers/wiki/AddressSanitizer">ASan</a>
+build and bubble up <em>some</em> issues (e.g., read overflows or leaks) back to Python;
+everything else results in an <code>abort()</code>, which, while suboptimal for minimisation, is still useful.
+I simplified our test harness for the Heartbleed experiment;
+see below for <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb">gists that anyone can use as starting points</a>.</p>
+
+<h2 id="why-not-fuzzing">Why not fuzzing?</h2>
+
+<p>I abused fuzzers a lot at Google,
+mostly because the tooling was there
+and it was trivial to burn hundreds of CPU-hours.
+Technical workarounds seemed much easier than trying to add support for actual property-based testers,
+so I would add domain specific assertions in order to detect more than crash conditions,
+and translate bytes into more structured inputs or even convert them to series of method calls.
+Now that I don’t have access to prebuilt infrastructure for fuzzers,
+that approach doesn’t make as much sense.
+That’s particularly true when byte arrays don’t naturally fit the entry point:
+I spent a lot of time making sure the fuzzer was exercising branches in the system under test, not the test harness,
+and designing input formats such that common fuzzer mutations, e.g., removing a byte, had a local effect and not, e.g., cause a frameshift mutation for the rest of the input…
+and that’s before considering the time I wasted manually converting bytes to their structured interpretation on failures.</p>
+
+<p>Hypothesis natively supports structured inputs and function calls,
+and reports buggy inputs in terms of these high level concepts.
+It is admittedly slower than fuzzers,
+especially when compared to fuzzers that (like Hypothesis) don’t fork/exec for each evaluation.
+I’m comfortable with that: my experience with NP-Hard problems tells me it’s better
+to start by trying to do smart things with the structure of the problem, and later speed that up,
+rather than putting all our hopes in making bad decisions really really fast.
+Brute force can only do so much to an exponential-time cliff.</p>
+
+<p>I had one niggling concern when leaving the magical world of fuzzers for staid property-based testing.
+In some cases, I had seen coverage information steer fuzzers towards really subtle bugs;
+could I benefit from the same smartness in Hypothesis?
+That’s how I came up with the idea of simulating a reasonable testing process that ought to find <a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0160">CVE-2014-0160</a>,
+<a href="https://heartbleed.com/">Heartbleed</a>.</p>
+
+<h2 id="role-playing-cve-2014-0160">Role-playing CVE-2014-0160</h2>
+
+<p><a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0160">CVE-2014-0160</a> a.k.a. <a href="https://heartbleed.com/">Heartbleed</a>
+is a read heap overflow in OpenSSL 1.0.1 (\(\leq\) 1.0.1f) that leaks potentially private data over the wire.
+It’s a straightforward logic bug in the implementation of <a href="https://tools.ietf.org/html/rfc6520">RFC 6520, a small optional (D)TLS extension</a>
+that lets clients or servers ask for a ping.
+<a href="https://www.theregister.co.uk/2014/04/09/heartbleed_explained/">The Register</a> has a concise visualisation of a bad packet.  We must send correctly sized packets that happen to ask for more pingback data than was sent to OpenSSL.</p>
+
+<p><a href="https://www.theregister.co.uk/2014/04/09/heartbleed_explained/">
+<img class="center" src="/images/2020-03-11-how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/the_register_heartbleed_diagram.png" />
+</a></p>
+
+<p>State of the art fuzzers like <a href="http://lcamtuf.coredump.cx/afl/">AFL</a> or <a href="https://github.com/google/honggfuzz">Honggfuzz</a> find that bug in seconds when given an entry point that passes bytes to the connection handler,
+like data that had just come over the wire.
+When provided with a corpus of valid messages, they’re even faster.</p>
+
+<p>It’s a really impressive showing of brute force that these programs to come up with almost valid packets so quickly,
+and traditional property-based testing frameworks are really not up to that level of magic.
+However, I don’t find the black box setting that interesting.
+It’s probably different for security testing,
+since not leaking invalid data is apparently seen as a feature one can slap on after the fact:
+there are so many things to test that it’s probably best to focus on what fuzzing can easily find, and, in any case,
+it doesn’t seem practical to manually boil that ocean one functionality at a time.</p>
+
+<p>From a software testing point of view however, 
+I would expect the people who send in a patch to implement something like the Heartbeat extension
+to also have a decent idea how to send bytes that exercise their new code.
+Of course, a sufficiently diligent coder would have found the heap overflow during testing,
+or simply not have introduced that bug.
+That’s not a useful scenario to explore; 
+I’m interested in something that does find Heartbleed, and also looks like a repeatable process.
+The question becomes “Within this repeatable process, can branch coverage feedback help Hypothesis find Heartbeat?”</p>
+
+<p>Here’s what I settled on: let’s only assume the new feature code also comes
+with a packet generator to exercise that code.  In Hypothesis, it might look like the following.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_with_grammar.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">GrammarTester</span><span class="p">(</span><span class="n">sanitizers</span><span class="o">.</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</span><span class="line">        <span class="c1"># Avoid reporting initialisers as leaks.</span>
+</span><span class="line">        <span class="k">with</span> <span class="n">sanitizers</span><span class="o">.</span><span class="n">leaky_region</span><span class="p">():</span>
+</span><span class="line">            <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">LLVMFuzzerTestOneInput</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;&quot;</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">teardown</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">LLVMFuzzerTestOneInput</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">))</span> <span class="o">==</span> <span class="mi">0</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@initialize</span><span class="p">(</span>
+</span><span class="line">        <span class="n">tls_ver</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">sampled_from</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]),</span>
+</span><span class="line">        <span class="n">payload</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">binary</span><span class="p">(),</span>
+</span><span class="line">        <span class="n">padding</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">binary</span><span class="p">(</span><span class="n">min_size</span><span class="o">=</span><span class="mi">16</span><span class="p">),</span>
+</span><span class="line">    <span class="p">)</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">add_heartbeat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tls_ver</span><span class="p">,</span> <span class="n">payload</span><span class="p">,</span> <span class="n">padding</span><span class="p">):</span>
+</span><span class="line">        <span class="n">hb_payload</span> <span class="o">=</span> <span class="nb">bytes</span><span class="p">([</span><span class="mh">0x01</span><span class="p">])</span> <span class="o">+</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s2">&quot;&gt;H&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">payload</span><span class="p">))</span> <span class="o">+</span> <span class="n">payload</span> <span class="o">+</span> <span class="n">padding</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">+=</span> <span class="nb">bytes</span><span class="p">([</span><span class="mh">0x18</span><span class="p">,</span> <span class="mh">0x03</span><span class="p">,</span> <span class="n">tls_ver</span><span class="p">])</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">+=</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s2">&quot;&gt;H&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">hb_payload</span><span class="p">))</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">+=</span> <span class="n">hb_payload</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We have a single rule to initialize the test buffer with a valid heartbeat packet, 
+and we send the whole buffer to a standard fuzzer entry point at the end.
+In practice, I would also ask for some actual assertions that the system under test handles the packets correctly,
+but that’s not important when it comes to Heartbleed:
+we just need to run with ASan and look for heap overflows, which are essentially never OK.</p>
+
+<p>Being able to provide a happy-path-only “test” like the above should be less than table stakes in a healthy project.
+Let’s simulate a bug-finding process that 
+looks for crashes after adding three generic buffer mutating primitives:
+one that replaces a single byte in the message buffer,
+another one that removes some bytes from the end of the buffer,
+and a last one that appends some bytes to the buffer.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_with_grammar.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">GrammarTester</span><span class="p">(</span><span class="n">sanitizers</span><span class="o">.</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="o">...</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">value</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="mi">255</span><span class="p">))</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">replace_byte</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+</span><span class="line">        <span class="n">index</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">))</span>
+</span><span class="line">        <span class="n">prefix</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="n">index</span><span class="p">]</span>
+</span><span class="line">        <span class="n">suffix</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">[</span><span class="n">index</span> <span class="o">+</span> <span class="mi">1</span> <span class="p">:]</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">=</span> <span class="n">prefix</span> <span class="o">+</span> <span class="nb">bytes</span><span class="p">([</span><span class="n">value</span><span class="p">])</span> <span class="o">+</span> <span class="n">suffix</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">)</span>
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">data</span><span class="p">())</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">strip_suffix</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+</span><span class="line">        <span class="n">count</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">st</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">)))</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="o">-</span><span class="n">count</span><span class="p">]</span>
+</span><span class="line">
+</span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">suffix</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">binary</span><span class="p">(</span><span class="n">min_size</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
+</span><span class="line">    <span class="k">def</span> <span class="nf">add_suffix</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">suffix</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">+=</span> <span class="n">suffix</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Given the initial generator rules and these three mutators,
+Hypothesis will assemble sequences of calls to create and mutate buffers before sending them to OpenSSL at the end of the “test.”</p>
+
+<p>The first time I ran this, Hypothesis found the bug in a second or two</p>
+
+<pre><code>==12810==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x62900012b748 at pc 0x7fb70d372f4e bp 0x7ffe55e56a30 sp 0x7ffe55e561e0
+READ of size 30728 at 0x62900012b748 thread T0
+
+0x62900012b748 is located 0 bytes to the right of 17736-byte region [0x629000127200,0x62900012b748)
+allocated by thread T0 here:
+    #0 0x7fb70d3e3628 in malloc (/usr/lib/x86_64-linux-gnu/libasan.so.5+0x107628)
+    #1 0x7fb7058ee939  (fuzzer-test-suite/openssl-1.0.1f-fsanitize.so+0x19a939)
+    #2 0x7fb7058caa08  (fuzzer-test-suite/openssl-1.0.1f-fsanitize.so+0x176a08)
+    #3 0x7fb7058caf41  (fuzzer-test-suite/openssl-1.0.1f-fsanitize.so+0x176f41)
+    #4 0x7fb7058a658d  (fuzzer-test-suite/openssl-1.0.1f-fsanitize.so+0x15258d)
+    #5 0x7fb705865a12  (fuzzer-test-suite/openssl-1.0.1f-fsanitize.so+0x111a12)
+    #6 0x7fb708326deb in ffi_call_unix64 (/home/pkhuong/follicle/follicle/lib/Python3.7/site-packages/.libs_cffi_backend/libffi-806b1a9d.so.6.0.4+0x6deb)
+    #7 0x7fb7081b4f0f  (&lt;unknown module&gt;)
 </code></pre>
 
-<p>We’ve introduced slack between steps A and B (there’s now step C from the previous iteration between them), and between steps B and C (we shifted step A from the next iteration between them).
-There isn’t such a long delay between the definition of a value and its use that the data is likely to be evicted from L1.
-However, there is more than enough work available between them to keep the pipeline busy with useful work while C waits for B’s result, or B for A’s.
-That was a nice single-digit improvement in query latency for my internal benchmark, just by permuting a loop.</p>
+<p>and then spent the 30 seconds trying to minimise the failure.
+Unfortunately, it seems that ASan tries to be smart and avoids reporting duplicate errors, so minimisation does not work for memory errors.
+It also doesn’t matter that much if we find a minimal test case: a core dump and a reproducer is usually good enough.</p>
 
-<p>If a one-element buffer helps, we should clearly experiment with the buffer size, and that’s where I found a more impactful speed-up.
-Once we have an array of elements to insert in a hash table, we can focus on a bulk insert of maybe 8 or 10 elements: instead of trying to improve the latency for
-individual writes, we can focus on the throughput for multiple inserts at once.
-That’s good because <a href="http://www.stuartcheshire.org/rants/Latency.html">throughput is an easier problem than latency</a>.
-In the current case, passing the whole buffer to the hash table code made it easier to <a href="https://www2.eecs.berkeley.edu/Pubs/TechRpts/1993/6309.html">pipeline the insert loop in software</a>:
-we can compute hashes ahead of time, and accelerate random accesses to the hash table with <a href="https://software.intel.com/sites/landingpage/IntrinsicsGuide/#text=_mm_prefetch&amp;expand=4391">software prefetching</a>.
-The profile for the new inner loop is flatter, and the hottest part is as follows</p>
+<p>You can find the complete code for <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-test_with_grammar-py">GrammarTester</a>,
+along with the <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-sanitizers-py">ASan wrapper</a>,
+and <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-llvm_one_input-py">CFFI glue</a> in <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb">this gist</a>.</p>
 
-<pre><code>      |       mov        0x8(%rsp),%rdx
- 9.91 |       lea        (%r12,%r12,4),%rax
- 0.64 |       prefetcht0 (%rdx,%rax,8)
-17.04 |       cmp        %rcx,0x28(%rsp)
+<p>For the rest of this post, we’ll make ASan crash on the first error, and count the number of test cases generated (i.e., the number of calls into the OpenSSL fuzzing entry point)
+until ASan made OpenSSL crash.</p>
+
+<h2 id="how-can-we-do-better-with-hardware-tracing">How can we do better with hardware tracing?</h2>
+
+<p>Intel chips have offered <a href="https://github.com/torvalds/linux/blob/master/tools/perf/Documentation/intel-bts.txt">BTS, a branch trace store</a>, since Nehalem (2008-9), if not earlier.
+BTS is slower than <a href="https://software.intel.com/en-us/blogs/2013/09/18/processor-tracing">PT, its full blown hardware tracing successor</a>,
+and only traces branches, but it does so in a dead simple format.
+I wrapped Linux perf’s interface for BTS in a <a href="https://gist.github.com/pkhuong/1ce34e33c6df4b9be3bc9beb22415a47">small library</a>;
+let’s see if we can somehow feed that trace to Hypothesis and consistently find Heartbeat faster.</p>
+
+<p>But first, how do fuzzers use coverage information?</p>
+
+<p>A lot of the impressive stuff that fuzzers find stems from their ability to infer the constants that were compared with the fuzzing input by the system under test.
+That’s not really that important when we assume a more white box testing setting,
+where the same person or group responsible for writing the code is also tasked with testing it, or at least specifying how to do so.</p>
+
+<p>Apart from guessing what valid inputs look like,
+fuzzers also use branch coverage information to diversify their inputs.
+In the initial search phase, none of the inputs cause a crash, and fuzzers can only mutate existing, equally non-crashy, inputs or create new ones from scratch.
+The goal is to maintain a small population that can trigger all the behaviours (branches) we’ve observed so far,
+and search locally around each member of that population.
+Pruning to keep the population small is beneficial for two reasons: first, it’s faster to iterate over a smaller population, and second,
+it avoids redundantly exploring the neighbourhood of nearly identical inputs.</p>
+
+<p>Of course, this isn’t ideal.
+We’d prefer to keep one input per program state,
+but we don’t know what the distinct program states are.
+Instead, we only know what branches we took on the way to wherever we ended up.
+It’s as if we were trying to generate directions to every landmark in a city,
+but the only feedback we received was the set of streets we walked on while following the directions.
+That’s far from perfect, but, with enough brute force, it might just be good enough.</p>
+
+<p>We can emulate this diversification and local exploration logic with multi-dimensional <a href="http://proper.softlab.ntua.gr/Publications.html">Targeted example generation</a>,
+for which <a href="https://hypothesis.readthedocs.io/en/latest/details.html#targeted-example-generation">Hypothesis has experimental support</a>.</p>
+
+<p>We’ll assign an arbitrary unique label to each origin/destination pair we observe via BTS,
+and assign a score of 1.0 to every such label (regardless of how many times we observed each pair).
+Whenever Hypothesis compares two score vectors, a missing value is treated as \(-\infty\), so, everything else being equal, covering a branch is better than not covering it.
+After that, we’ll rely on the fact that multidimensional discrete optimisation is
+also all about maintaining a small but diverse population:
+Hypothesis regularly prunes redundant examples (examples that exercises a subset of
+the branches triggered by another example),
+and generates new examples by mutating members of the population.
+With our scoring scheme, the multidimensional search will split its efforts between families of examples that trigger different sets of branches,
+and will also stop looking around examples that trigger a strict subset of another example’s branches.</p>
+
+<p>Here’s the plan to give BTS feedback to Hypothesis and diversify its initial search for failing examples.
+I’ll use my <a href="https://gist.github.com/pkhuong/1ce34e33c6df4b9be3bc9beb22415a47">libbts</a> to wrap perf syscalls into something usable,
+and wrap that in Python to more easily <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-bts-py">gather origin/destination pairs</a>.
+Even though I enable BTS tracing only around FFI calls,
+there will be some noise from libffi, as well as dummy transitions for interrupts or context switches; <code>bts.py</code> attempts to only consider interesting branches
+by <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-bts-py-L105">remembering the set of executable mappings present at startup</a>,
+before loading the library under test,
+and dropping jumps to or from addresses that were mapped at startup
+(presumably, that’s from the test harness), or invalid zero or negative addresses
+(which I’m pretty sure denote interrupts and syscalls).</p>
+
+<p>We’ll then wrap the Python functions that call into OpenSSL to record the set of branches executed during that call,
+and convert that set to a multidimensional score at the end of the test, in the <code>teardown</code> method.</p>
+
+<p>The only difference is in the <code>__init__</code> method, which must also reset BTS state,
+and in the <code>teardown</code> method, where we score the example if it failed to crash.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>test_with_grammar_bts.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">GrammarBtsTester</span><span class="p">(</span><span class="n">sanitizers</span><span class="o">.</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</span><span class="line">        <span class="n">bts</span><span class="o">.</span><span class="n">reset</span><span class="p">()</span>
+</span><span class="line">        <span class="k">with</span> <span class="n">sanitizers</span><span class="o">.</span><span class="n">leaky_region</span><span class="p">():</span>
+</span><span class="line">            <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">LLVMFuzzerTestOneInput</span><span class="p">(</span><span class="sa">b</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span>
+</span><span class="line">        <span class="n">bts</span><span class="o">.</span><span class="n">update_useless_edges</span><span class="p">()</span>
+</span><span class="line">        <span class="n">bts</span><span class="o">.</span><span class="n">reset</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">buf</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;&quot;</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">teardown</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">LLVMFuzzerTestOneInput</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buf</span><span class="p">))</span> <span class="o">==</span> <span class="mi">0</span>
+</span><span class="line">        <span class="c1"># bts.report() returns a set of control flow edge ids.</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">bts</span><span class="o">.</span><span class="n">report</span><span class="p">():</span>
+</span><span class="line">            <span class="n">target</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">))</span>
+</span><span class="line">        <span class="n">bts</span><span class="o">.</span><span class="n">teardown</span><span class="p">()</span>
+</span><span class="line">
+</span><span class="line">    <span class="o">...</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Let’s instrument the <code>teardown</code> methods to print “CHECK” and flush before every call to the fuzzing entry point,
+and make sure <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-run-tests-sh">ASan crashes when it finds an issue</a>.
+We’ll run the test files, grep for “CHECK”, and, assuming we don’t trigger into any runtime limit,
+find out how many examples Hypothesis had to generate before causing a crash.</p>
+
+<p>I ran this 12000 times for both <code>test_with_grammar.py</code> and <code>test_with_grammar_bts.py</code>.
+Let’s take a look at the empirical distribution functions for the number of calls until a crash, for <code>test_with_grammar.py</code> (<code>grammar</code>)
+and <code>test_with_grammar_bts.py</code> (<code>bts</code>).</p>
+
+<!-- ggplot(data, aes(x=Calls, colour=Impl)) + stat_ecdf() + scale_color_discrete(name="Implementation") + scale_x_log10() + ylab("Cumulative fraction") + xlab("Calls to OpenSSL until crash") -->
+<p><img class="center" src="/images/2020-03-11-how-hard-is-it-to-guide-test-case-generators-with-branch-coverage-feedback/ecdf.png" /></p>
+
+<p>There’s a cross-over around 100 calls:
+as long as we have enough time for least 100 calls to OpenSSL,
+we’re more likely to find Heartbleed with coverage feedback than by rapidly searching blindly.
+With fewer than 100 calls, it seems likely that branch coverage only guides the search
+towards clearly invalid inputs that trigger early exit conditions.
+Crucially, the curves are smooth and tap out before our limit of 10000 examples per execution,
+so we’re probably not measuring a side-effect of the experimental setup.</p>
+
+<p>In theory, the distribution function for the uninstrumented <code>grammar</code> search should look a lot like a geometric distribution,
+but I don’t want to assume too much of the <code>bts</code> implementation.  Let’s confirm our gut feeling in <code>R</code> with a simple non-parametric test,
+the <a href="https://en.wikipedia.org/wiki/Mann%E2%80%93Whitney_U_test">Wilcoxon rank sum test</a>, an unpaired analogue to the sign test:</p>
+
+<pre><code>&gt; wilcox.test(data$Calls[data$Impl == 'bts'], data$Calls[data$Impl == 'grammar'], 'less')
+
+        Wilcoxon rank sum test with continuity correction
+
+data:  data$Calls[data$Impl == "bts"] and data$Calls[data$Impl == "grammar"]
+W = 68514000, p-value = 4.156e-11
+alternative hypothesis: true location shift is less than 0
 </code></pre>
 
-<p>Again, the blame for a “slow” instruction hits the following instruction, so it’s not <code>lea</code> (multiplying by 5) or <code>cmp</code> that are slow; it’s the load from the stack and the prefetch.
-The good news is that these instructions do not have any dependent.  It’s all prefetching, and that’s only used for its side effects.
-Moreover, they come from a block of code that was pipelined in software and executes one full iteration ahead of where its side effects might be useful.
-It doesn’t really matter if these instructions are slow: they’re still far from being on the critical path!  This last restructuring yielded a 20% speed-up on a few slow queries.</p>
+<p>We’re reasonably certain that the number of calls for a random run of <code>bts</code> is more
+frequently less than the number of calls for an independently chosen random run of <code>grammar</code>
+than the opposite.  Since the tracing overhead is negligible,
+this means branch feedback saves us time more often than not.
+For the 24 000 separate runs we observed,
+<code>bts</code> is only faster 52% of the time, 
+but that’s mostly because both distributions of calls to the system under test go pretty high.
+On average, vanilla Hypothesis, without coverage feedback, found the vulnerability after 535 calls to OpenSSL;
+with feedback, Hypothesis is 11.5% faster on average, and only needs 473 calls.</p>
 
-<p>I described two tools that I use regularly when optimising code for contemporary hardware.
-Finding ways to scatter around scheduling slack is always useful, both in software and in real life planning.<sup id="fnref:unless-people" role="doc-noteref"><a href="#fn:unless-people" class="footnote">5</a></sup>
-One simple way to do so is to add bounded buffers, and to flush buffers as soon as they fill up (or refill when they become empty), instead of waiting until the next write to the buffer.
-However, I think the more powerful transformation is using buffering to expose bulk operations, which tends to open up more opportunities than just doing the same thing in a loop.
-In the case above, we found a 20% speed-up; for someone who visit their <a href="https://help.backtrace.io/en/articles/2765535-triage">Backtrace dashboard</a> a couple times a day, that can add up to an hour or two at the end of the year.</p>
+<h2 id="time-to-use-this-in-anger">Time to use this in anger</h2>
 
-<p>TL;DR: When a function is hot enough to look into, it’s worth asking why it’s called so often, in order to focus on higher level bulk operations.</p>
+<p>We have been using this testing approach (without branch coverage) at Backtrace for a couple months now,
+and it’s working well as a developer tool that offers rapid feedback, enough that we’re considering running these tests in a commit hook.
+Most of the work involved in making the approach useful was just plumbing, e.g., dealing with the way ASan reports errors,
+or making sure we don’t report leaks that happen in Python, outside the system under test.
+Once the commit hook is proven solid, we’ll probably want to look into running tests in the background for a long time.
+That’s a very different setting from pre-commit or commit -time runs, where every bug is sacred.
+If I let something run over the weekend, I must be able to rely on deduplication (i.e., minimisation is even more useful),
+and I will probably want to silence or otherwise triage some issues.
+That’s the sort of thing Backtrace already handles, so we are looking into sending Hypothesis reports directly to Backtrace,
+the same way we do for clang-analyzer reports and for crashes or leaks found by ASan in our end-to-end tests.</p>
+
+<p>The challenges are more research-y for coverage feedback. There’s no doubt a lot of mundane plumbing issues involved in making this feedback robust
+(see, e.g., the <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-bts-py-L172">logic in bts.py</a> to filter out interrupts and branches from the kernel, or branches from code that’s probably not in the system under test).
+However, there’s also a fundamental question that we unfortunately can’t answer by copying fuzzers.</p>
+
+<p>How should we score coverage over multiple calls?
+After all, the ability to test a stateful interface via a sequence of method calls and expections is what really sold me on Hypothesis.
+Fuzzers have it easy: they assume each call is atomic and independent of any other call to the system under test, even when they don’t fork for each execution.
+This seems like a key reason why simple coverage metrics work well in fuzzers,
+and I don’t know that we can trivially port ideas from fuzzing to stateful testing.</p>
+
+<p>For example, my first stab at this experiment found no statistically significant improvement from BTS feedback.  The only difference is that the assertion lived in a <code>check</code> rule,
+and not in the <code>teardown</code> method, which let Hypothesis trigger a call to OpenSSL at various points in the buffer mutation sequence… usually a good thing for test coverage.
+I’m pretty sure the problem is that a single example could collect “points” for covering branches in multiple unrelated calls to OpenSSL,
+while we would rather cover many branches in a single call.
+What does it mean for stateful testing, where we want to invoke different functions multiple times in a test?</p>
+
+<p>I have no idea; maybe we should come up with some synthetic stateful testing benchmarks that are expected to benefit from coverage information. However, the experiment in this post gives me hope that there exists some way to exploit coverage information in stateful testing.
+<a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb">The MIT-licensed support code in this gist</a>
+(along <a href="https://gist.github.com/pkhuong/1ce34e33c6df4b9be3bc9beb22415a47">with libbts</a>)
+should give you all a headstart to try more stuff and report your experiences.</p>
+
+<p><small>Thank you David, Ruchir, Samy, and Travis for your comments on an early draft.</small></p>
+
+<p><hr style="width: 50%" /></p>
+
+<h2 id="appendix-how-to-get-started-with-your-own-project">Appendix: How to get started with your own project</h2>
+
+<p>In a performance-oriented C library,
+the main obstable to testing with Hypothesis and CFFI will probably be
+that the headers are too complex for <a href="https://github.com/eliben/pycparser"><code>pycparser</code></a>.  I had to use a few tricks
+to make ours parse.</p>
+
+<p>First, I retro-actively imposed more discipline on what was really public and what
+implementation details should live in private headers:
+we want <a href="https://cffi.readthedocs.io/en/latest/">CFFI</a> to handle every public header, and only some private headers for more targeted testing.
+This separation is a good thing to maintain in general, and, if anything,
+having <a href="https://github.com/eliben/pycparser">pycparser</a> yell at us when we make our public interface depend on internals is a net benefit.</p>
+
+<p>I then had to reduce our reliance on the C preprocessor.  In some cases,
+that meant making types opaque and adding getters.
+In many more cases, I simply converted small <code>#define</code>d integer constants to
+anonymous enums <code>enum { CONSTANT_FOO = ... }</code>.</p>
+
+<p>Finally, especially when testing internal functionality, I had to remove
+<code>static inline</code> functions.
+That’s another case where pycparser forces us to maintain cleaner headers,
+and the fix is usually simple:
+declare <code>inline</code> (not static) functions in the header,
+<code>#include</code> a <code>.inl</code> file with the <code>inline</code> definition (we can easily drop directives in Python),
+and re-declare the function as <code>extern</code> in the main source file for that header.
+With this approach, the header can focus on documenting the interface,
+the compiler still has access to an inline definition,
+and we don’t waste instruction bytes on duplicate out-of-line definitions.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>u64_block.h </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cm">/**</span>
+</span><span class="line"><span class="cm"> * This file documents the external interface.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="kr">inline</span> <span class="kt">uint8_t</span> <span class="nf">crdb_u64_block_lt</span><span class="p">(</span><span class="k">const</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">k</span><span class="p">);</span>
+</span><span class="line">
+</span><span class="line"><span class="cp">#include</span> <span class="cpf">&quot;u64_block.inl&quot;  /* Stripped in Python. */</span><span class="cp"></span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>u64_block.inl </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cm">/**</span>
+</span><span class="line"><span class="cm"> * Describe implementation details here.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="kr">inline</span> <span class="kt">uint8_t</span>
+</span><span class="line"><span class="nf">crdb_u64_block_lt</span><span class="p">(</span><span class="k">const</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">block</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">k</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">    <span class="p">....</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>u64_block.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cp">#include</span> <span class="cpf">&quot;u64_block.h&quot;</span><span class="cp"></span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/* Provide the unique out-of-line definition. */</span>
+</span><span class="line"><span class="kt">uint8_t</span> <span class="nf">crdb_u64_block_lt</span><span class="p">(</span><span class="k">const</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">block</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">k</span><span class="p">);</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>That doesn’t always work, mostly because regular <code>inline</code> functions aren’t
+supposed to call <code>static inline</code> functions.  When I ran into that issue,
+I either tried to factor the more complex slow path out to an out-of-line definition,
+or, more rarely, resorted to CPP tricks (also hidden in a <code>.inl</code> file) to rewrite calls to
+<code>extern int foo(...)</code>
+with macros like <code>#define foo(...) static_inline_foo(__VA_ARGS__)</code>.</p>
+
+<p>All that work isn’t really testing overhead; they’re mostly things
+that library maintainers <em>should</em> do, but are easy to forget when
+when we only hear from C programmers.</p>
+
+<p>Once the headers were close enough to being accepted by CFFI,
+I closed the gap with string munging in Python.
+All the tests depend on the <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-crdb-py">same file that parses all the headers we care about in the correct order and loads the shared object</a>.
+Loading everything in the same order also enforces a reasonable dependency
+graph, another unintended benefit.
+Once everything is loaded, that file also <a href="https://gist.github.com/pkhuong/fe81822fd6adab723f91601f39dce4fb#file-crdb-py-L83">post-processes the CFFI functions</a> to hook
+in ASan (and branch tracing), and strip away any namespacing
+prefix.</p>
+
+<p>The end result is a library that’s more easily used from managed
+languages like Python, and which we can now test it like any other
+Python module.</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:started-work" role="doc-endnote">
-      <p>And by that, I mean I started working there a couple months ago (: <a href="#fnref:started-work" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:realtime" role="doc-endnote">
+      <p>The graph shows time in terms of calls to the SUT, not real time. However, the additional overhead of gathering and considering coverage information is small enough that the feedback also improves wallclock and CPU time. <a href="#fnref:realtime" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:more-later" role="doc-endnote">
-      <p>I think that’s a meaty idea, and am planning a longer post on that data structure and where it fits in the hash/sort join continuum. <a href="#fnref:more-later" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:matchers" role="doc-endnote">
+      <p>High level <a href="https://github.com/google/googletest">matchers like GMock’s</a> help, but they don’t always explain why a given matcher makes sense. <a href="#fnref:matchers" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:dont-copy" role="doc-endnote">
-      <p>Would I have avoided this issue if I had directly passed by value? The resulting code might have been friendlier to store-to-load forwarding than loading a whole 128 bit SSE register, but see the next footnote. <a href="#fnref:dont-copy" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:change-detector" role="doc-endnote">
+      <p>There’s also a place for <a href="https://github.com/approvals/ApprovalTests.cpp/blob/master/doc/Overview.md">smart change detectors, especially when refactoring ill understood code</a>. <a href="#fnref:change-detector" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:but-forwarding" role="doc-endnote">
-      <p>Store-to-load forwarding can help improve the performance of this pattern, when we use forwarding patterns that the hardware supports. However, this mechanism can only decrease the penalty of serial dependencies, e.g., by shaving away some or all of the time it takes to store a result to cache and load it back; even when results can feed directly into dependencies, we still have to wait for inputs to be computed. This is fundamentally a scheduling issue. <a href="#fnref:but-forwarding" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:unless-examples" role="doc-endnote">
+      <p>I had to disable the exhaustive list of examples to benefit from minimisation. Maybe one day I’ll figure out how to make Hypothesis treat explicit examples more like an initial test corpus. <a href="#fnref:unless-examples" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:unless-people" role="doc-endnote">
-      <p>Unless you’re writing schedule optimising software and people will look at the result. A final hill climbing pass to make things look artificially tight often makes for an easier sale in that situation. <a href="#fnref:unless-people" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:no-preconception" role="doc-endnote">
+      <p>That reminds me of an AI Lab Koan. «In the days when Sussman was a novice, Minsky once came to him as he sat hacking at the PDP-6. “What are you doing?” asked Minsky. “I am training a randomly wired neural net to play Tic-tac-toe,” Sussman replied. “Why is the net wired randomly?” asked Minsky. Sussman replied, “I do not want it to have any preconceptions of how to play.” Minsky then shut his eyes. “Why do you close your eyes?” Sussman asked his teacher. “So that the room will be empty,” replied Minsky. At that moment, Sussman was enlightened.» <a href="#fnref:no-preconception" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:failure-in-ci" role="doc-endnote">
+      <p>The database is a directory of files full of binary data.  The specific meaning of these bytes depends on the Hypothesis version and on the test code, so the database should probably not be checked in.  Important examples (e.g., for regression testing) should instead be made persistent with <code>@example</code> decorators.  Hypothesis does guarantee that tese files are always valid (i.e., any sequence of bytes in the database will result in an example that can be generated by the version of Hypothesis and of the test code that reads it), so we don’t have to invalidate the cache when we update the test harness. <a href="#fnref:failure-in-ci" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
