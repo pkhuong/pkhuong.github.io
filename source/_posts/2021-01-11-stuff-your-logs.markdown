@@ -1,7 +1,6 @@
 ---
 layout: post
 title: "Stuff your logs!"
-author: Paul Khuong
 date: 2021-01-11 15:11:23 -0500
 comments: true
 categories:
