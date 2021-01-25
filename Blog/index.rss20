@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2021-01-24T20:56:13-05:00</updated>
+  <updated>2021-01-25T09:07:11-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -19,7 +19,9 @@
     <link href="https://www.pvk.ca/Blog/2021/01/11/stuff-your-logs/"/>
     <updated>2021-01-11T15:11:23-05:00</updated>
     <id>https://www.pvk.ca/Blog/2021/01/11/stuff-your-logs</id>
-    <content type="html"><![CDATA[<p>Nine months ago, we embarked on a format migration for the persistent
+    <content type="html"><![CDATA[<p><small>Originally cross-posted on the <a href="https://engineering.backtrace.io/2021-01-11-stuff-your-logs/">Backtrace.io engineering blog</a>.</small></p>
+
+<p>Nine months ago, we embarked on a format migration for the persistent
 (on-disk) representation of variable-length strings like symbolicated
 call stacks in the <a href="https://www.backtrace.io">Backtrace</a> server.  We
 chose a variant of

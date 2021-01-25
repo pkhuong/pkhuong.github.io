@@ -1,0 +1,556 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Optimal overhead byte stuffing - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2018/08/04/optimal-overhead-byte-stuffing/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Optimal overhead byte stuffing</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Aug
+  
+4th, 
+2018
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2018/08/04/optimal-overhead-byte-stuffing/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>Earlier this year, I started looking into 
+<a href="https://arxiv.org/abs/1311.2540">Duda’s Asymmetric numeral systems</a>
+(<a href="https://fgiesen.wordpress.com/2014/02/02/rans-notes/">rANS</a>, in
+particular) to compress short blocks with domain-specific probability
+models. The
+<a href="https://twitter.com/rygorous/status/974353149518475264">consensus on (r)ANS for short blocks is that it’s a bad idea</a>.
+Short blocks don’t work well with rANS because rANS’s space usage only
+correlates well with entropy once its internal state is large
+enough. The classic solution is to initialise the internal state to
+always be in that regime, but that’s also more bits for the encoder
+to output. Charles Bloom suggests we
+<a href="http://cbloomrants.blogspot.com/2015/05/05-11-15-ans-minimal-flush.html">set the initial state to 1</a>,
+and adapt the decoder to handle the end of the stream specially.
+However, as Fabian points out in the comments, when the internal state
+is below the normalised range, encoding a new symbol grows the state
+proportionally to the precision of the probability estimate, rather
+than to the entropy (\(-\log p\sb{\mathrm{symbol}}\)).</p>
+
+<p>Intuitively, there’s one situation where this downside does not apply:
+when we <em>know</em> that we have incompressible symbols at the beginning of
+compression, we can minimise the precision, and the state growth is
+then proportional to the number of incompressible bits. We could also
+stash that incompressible data in the initial compressor state.
+Letting the initial state be denormalised is more flexible: the
+approach naturally handles there being too many or too few
+incompressible bits (at the expense of suboptimal coding in the latter
+case), and we avoid implementing another codec for data in the
+internal state.</p>
+
+<p>I like to solidify my intuition by experimenting with toy problems.</p>
+
+<p>My first attempt was to encode a stream of bytes (all with equal
+probability \(256\sp{-1}\)) to another stream of bytes. That proved to
+be a bit <em>too</em> simple: everything falls neatly in the right place
+and the problem gives us no insight.</p>
+
+<p>What I found more interesting was to encode the same stream of
+equiprobable bytes to a longer stream of bytes in \([0, 254]\), i.e.,
+re-encode an arbitrary bytestream while avoiding the reserved value 255.
+The state of the art for this “byte stuffing” problem is 
+<a href="http://www.stuartcheshire.org/papers/cobsforton.pdf">Consistent overhead byte stuffing (COBS)</a>,
+which adds a fixed overhead of one byte, plus at most one encoded byte
+for every 254 byte of initial data (i.e., \(&lt; 0.394\%\)).<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote">1</a></sup></p>
+
+<p>The entropy bound is \(\log\sb{255}256 - 1 &lt; 0.0707\%\), less than
+one fifth as much. Using rANS (and paying attention to the constant
+factors) to implement this encoding gets us very close to the
+theoretical bound:
+\[\left\lceil \frac{1 + (\log\sb{255} 256 + \varepsilon)n}{8}\right\rceil\]
+bytes in total to “stuff” \(n\) arbitrary bytes, with 
+\(\varepsilon \leq 2\sp{-24}\) for a reasonable implementation.</p>
+
+<p>Better: while COBS is fundamentally byte-oriented, and the main way to
+accelerate it is to “stuff” longer words, rANS can be tuned to
+performs well on contemporary micro-architectures, regardless of
+whether we stuff bytes, longs, etc.  For example, decoding can reach
+XXX of the speed of memcpy (XXX faster than COBS) on my computer.</p>
+
+<h1 id="what-is-byte-stuffing-good-for">What is byte stuffing good for?</h1>
+
+<p>The canonical use case for byte stuffing is communications over a
+low-level medium that does not provide its own framing, e.g., a serial
+port, or a phone line.  Once a special byte is picked as a packet
+delimiter, it becomes possible to find where packets begin even if bytes are
+lost, either because the sender was temporarily disconnected, or the
+receiver attached in the middle of a packet.  In fact, having this
+special byte even makes it possible to handle bit-level frame shift
+errors: if there is never any zero byte in a packet, and we use a pair
+of zeros to delimit packets, we will never observe a train of 16
+consecutive zero <em>bits</em> in a valid packet.  Of course, we might
+observe anything in a corrupt packet.  Once byte stuffing tells us
+where a packet might begin or end, we must still apply some
+error detection scheme to determine if the packet is valid.</p>
+
+<p>I also find byte stuffing useful when logging records to persistent
+storage. When corruption hits data at rest, it is often local, and we
+can hope to detect a couple bad bytes with a per-record checksum…
+unless the bad bytes overwrote the size field in a packet’s header!
+That’s more probable than we might expect: too many filesystems bubble
+up any read error as a corrupt (zero-filled) <em>page</em>.  More commonly,
+software is buggy, crashes, and leaves a partially written record at
+the end of a file, which induces a frame shift error.  I’ve seen too
+many hacks where a special “highly unlikely” string is inserted at
+regular intervals in log files.  It seems more elegant and reliable to
+use a self-synchronising encoding which (like
+<a href="https://research.swtch.com/utf8">UTF-8</a>) guarantees that any
+corruption—point or frameshift—only affects records surrounding
+the corruption, and that readers can always recover from that
+corruption.</p>
+
+<p>Byte stuffing gives us such self-synchronisation guarantees. We can
+always scan for the magic byte to determine where to start reading
+again after a bad record (and when any valid record ends). This
+suffices to recover not only from corruption after a successful write,
+but also from short writes: Unix’s <a href="">write(2)</a> guarantees that
+writes are always in full byte increments, even if the syscall
+ultimately fails. Again, this assumes that badly framed or otherwise
+corrupt records can be detected. Saltzer’s, Reed’s, and Clark’s
+<a href="http://web.mit.edu/Saltzer/www/publications/endtoend/endtoend.pdf">classic end-to-end arguments paper</a><sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote">2</a></sup>
+reminds us that instrumenting records to detect data corruption is a
+good idea, even when building on top of “reliable” abstractions like
+TCP or file storage.</p>
+
+<p>Consistent overhead byte stuffing is also attractive because of its
+low memory requirements for the sender (a buffer of 254 bytes) and for
+the receiver (no buffer at all), which makes it well suited to the
+small systems that are likely to use dumb media like a serial
+port. Optimal byte stuffing with rANS does not have similarly
+attractive buffering requirements: decoding and encoding are in
+reverse order, so at least one of decoding or encoding must hold the
+full data in memory… but then again, that’s also a requirement for
+detecting checksum mismatches before passing bad data to readers.</p>
+
+<h1 id="the-building-blocks-of-range-ans">The building blocks of range ANS</h1>
+
+<p>All ANS variants share the same structure: an integer accumulator
+serves as a stack where input data is pushed with reversible
+operations, and the accumulator spills or reloads from the encoded
+stream as needed.</p>
+
+<p>For range ANS, the reversible encoding operation must accept a
+denominator (e.g., 256 if symbol probabilities sum to 256), a base value
+(e.g., 4), and a scaled probability (e.g., 17). Given the same
+denominator argument as was used during encoding, the decoding operation
+will yield a value in the half-open interval between the base and the
+sum of the base and its probability (e.g., in \([4, 4 + 17)\)), and
+return the integer accumulator to its value before the encoding.</p>
+
+<p>The encoding function for the range 
+\([\mathtt{base}, \mathtt{base} + \mathtt{frequency})\) follows.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>encode_symbol.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">def</span> <span class="nf">encode</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">):</span>
+</span><span class="line">    <span class="k">return</span> <span class="p">(</span><span class="n">denominator</span> <span class="o">*</span> <span class="p">(</span><span class="n">accumulator</span> <span class="o">//</span> <span class="n">frequency</span><span class="p">)</span>
+</span><span class="line">            <span class="o">+</span> <span class="n">base</span>
+</span><span class="line">            <span class="o">+</span> <span class="p">(</span><span class="n">accumulator</span> <span class="o">%</span> <span class="n">frequency</span><span class="p">))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The inverse-ish function for that is composed of two steps: the first
+finds the symbol encoded at the top of the accumulator, by returning a
+value in \([\mathtt{base}, \mathtt{base} + \mathtt{frequency})\),
+and the second actually undoes the effect of <code>encode</code>, given the same
+total frequency denominator, base, and frequency.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>decode_symbol.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">def</span> <span class="nf">extract_symbol</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">):</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">accumulator</span> <span class="o">%</span> <span class="n">denominator</span>
+</span><span class="line">
+</span><span class="line"><span class="k">def</span> <span class="nf">decode</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">):</span>
+</span><span class="line">    <span class="k">return</span> <span class="p">(</span><span class="n">frequency</span> <span class="o">*</span> <span class="p">(</span><span class="n">accumulator</span> <span class="o">//</span> <span class="n">denominator</span><span class="p">)</span>
+</span><span class="line">            <span class="o">-</span> <span class="n">base</span>
+</span><span class="line">            <span class="o">+</span> <span class="p">(</span><span class="n">accumulator</span> <span class="o">%</span> <span class="n">denominator</span><span class="p">))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>I think it’s pretty clear that <code>encode() % denominator</code> yields back
+<code>base + (accumulator % frequency)</code>, which is indeed in the range
+\([\mathtt{base}, \mathtt{base} + \mathtt{frequency})\), but it
+can’t hurt to double-check:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>check_roundtrip.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="kn">from</span> <span class="nn">hypothesis</span> <span class="kn">import</span> <span class="n">given</span>
+</span><span class="line"><span class="kn">from</span> <span class="nn">hypothesis.strategies</span> <span class="kn">import</span> <span class="n">data</span><span class="p">,</span> <span class="n">integers</span>
+</span><span class="line">
+</span><span class="line"><span class="nd">@given</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span> <span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">data</span><span class="p">())</span>
+</span><span class="line"><span class="k">def</span> <span class="nf">encode_extract_symbol_roundtrip</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+</span><span class="line">    <span class="c"># Hypothesis provides accumulator and denominator directly. </span>
+</span><span class="line">    <span class="c"># Generate the rest while taking constraints into account.</span>
+</span><span class="line">    <span class="n">base</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="n">denominator</span> <span class="o">-</span> <span class="mi">1</span><span class="p">),</span>
+</span><span class="line">                     <span class="n">label</span><span class="o">=</span><span class="s">&quot;base&quot;</span><span class="p">)</span>
+</span><span class="line">    <span class="n">frequency</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+</span><span class="line">                                   <span class="n">max_value</span><span class="o">=</span><span class="n">denominator</span> <span class="o">-</span> <span class="n">base</span><span class="p">),</span>
+</span><span class="line">                          <span class="n">label</span><span class="o">=</span><span class="s">&quot;frequency&quot;</span><span class="p">)</span>
+</span><span class="line">    <span class="c"># The accumulator is always non-negative.</span>
+</span><span class="line">    <span class="n">encoded</span> <span class="o">=</span> <span class="n">encode</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">)</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">encoded</span> <span class="o">&gt;=</span> <span class="mi">0</span>
+</span><span class="line">    <span class="n">extracted</span> <span class="o">=</span> <span class="n">extract_symbol</span><span class="p">(</span><span class="n">encoded</span><span class="p">,</span> <span class="n">denominator</span><span class="p">)</span>
+</span><span class="line">    <span class="c"># extract_symbol gives us something in [base, base + frequency).</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">base</span> <span class="o">&lt;=</span> <span class="n">extracted</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">extracted</span> <span class="o">&lt;</span> <span class="n">base</span> <span class="o">+</span> <span class="n">frequency</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Calling <code>encode_extract_symbol_roundtrip()</code> in IPython doesn’t hit any
+counter-example. What if that’s because our property, or even the test
+harness, is broken? XXX Who tests the testers?</p>
+
+<p>One answer to this question is mutation testing. First, let’s check
+that we can find bugs when we purposefully insert some. Good news!
+<a href="https://hypothesis.works/">Hypothesis</a> quickly hits an assertion
+failure if I swap <code>+ base</code> and <code>- base</code> in <code>encode</code> or
+<code>extract_symbol</code>, or if I exchange <code>frequency</code> and <code>denominator</code>.  We
+can also apply mutation testing to the assertions or the
+preconditions.  Hypothesis also finds trivial counter-examples if I
+strengthen either side of the asserted inequality, but does less well
+when I widen the data generation interval <sup id="fnref:3" role="doc-noteref"><a href="#fn:3" class="footnote">3</a></sup> for <code>frequency</code>.
+Adding a property for <code>decode</code> should detect this erroneous precondition.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>check_roundtrip_2.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="nd">@given</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span> <span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">data</span><span class="p">())</span>
+</span><span class="line"><span class="k">def</span> <span class="nf">encode_decode_roundtrip</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+</span><span class="line">    <span class="n">base</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="n">denominator</span> <span class="o">-</span> <span class="mi">1</span><span class="p">),</span>
+</span><span class="line">                     <span class="n">label</span><span class="o">=</span><span class="s">&quot;base&quot;</span><span class="p">)</span>
+</span><span class="line">    <span class="n">frequency</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+</span><span class="line">                                   <span class="n">max_value</span><span class="o">=</span><span class="n">denominator</span> <span class="o">-</span> <span class="n">base</span><span class="p">),</span>
+</span><span class="line">                          <span class="n">label</span><span class="o">=</span><span class="s">&quot;frequency&quot;</span><span class="p">)</span>
+</span><span class="line">    <span class="n">encoded</span> <span class="o">=</span> <span class="n">encode</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">)</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">encoded</span> <span class="o">&gt;=</span> <span class="mi">0</span>
+</span><span class="line">    <span class="n">extracted</span> <span class="o">=</span> <span class="n">extract_symbol</span><span class="p">(</span><span class="n">encoded</span><span class="p">,</span> <span class="n">denominator</span><span class="p">)</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">base</span> <span class="o">&lt;=</span> <span class="n">extracted</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">extracted</span> <span class="o">&lt;</span> <span class="n">base</span> <span class="o">+</span> <span class="n">frequency</span>
+</span><span class="line">    <span class="c"># Also check that we can recover the initial accumulator.</span>
+</span><span class="line">    <span class="n">decoded</span> <span class="o">=</span> <span class="n">decode</span><span class="p">(</span><span class="n">encoded</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">)</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">decoded</span> <span class="o">==</span> <span class="n">accumulator</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The additional property at the end detects that something is off when
+we let <code>frequency</code> take values that exceed <code>denominator -
+base</code>. That’s not too surprising: making either <code>extract_symbol</code> or
+<code>decode</code> round-trip correctly isn’t that hard. The magic lies in
+making both work simultaneously.</p>
+
+<p>The approximate inverse relationship between <code>encode</code> and
+<code>extract_symbol</code> / <code>decode</code> lets us treat the non-negative integer
+<code>accumulator</code> like a stack of encoded symbols.  That’s not as
+convenient as a <code>FIFO</code> queue, but seems to be the fundamental
+downside we must accept to benefit from ANS’s simplicity.</p>
+
+<p>We still have to show that the encoding takes space proportional to
+the first-order entropy of the symbols stored in <code>accumulator</code>, i.e.,
+that \(\log\sb{2}\ \mathtt{accumulator} \approx \sum\sb{s\in\mathrm{symbols}} -\log\sb{2} P(s)\), and to bound the gap between the two.</p>
+
+<p>Encode is</p>
+
+<pre><code>def encode(accumulator, denominator, base, frequency):
+    return (denominator * (accumulator // frequency)
+            + base
+            + (accumulator % frequency))
+</code></pre>
+
+<p>Given that \(\mathtt{denominator} \geq \mathtt{frequency}\), that’s
+never more than</p>
+
+<pre><code>def encode_ub(accumulator, denominator, base, frequency):
+    return (denominator * (accumulator // frequency)
+            + base
+            + denominator * (accumulator % frequency) / frequency)
+</code></pre>
+
+<p>which is equivalent to</p>
+
+<pre><code>def encode_ub(accumulator, denominator, base, frequency):
+    return (denominator / frequency * accumulator
+            + base)
+</code></pre>
+
+<p>The first part, <code>denominator / frequency * accumulator</code>, is exactly
+what we expect in order to track entropy: we multiply the accumulator
+by \(\mathtt{denominator} / \mathtt{frequency} = P\sp{-1}\). Or, in
+the log domain, we increment the \(\log\)-accumulator by \(-\log P\).</p>
+
+<p>Since <code>encode_ub</code> is <em>an upper bound</em> on <code>encode</code>, it’s clear that the
+encoding can be super-optimal when <code>base</code> is small, e.g., when
+\(\mathtt{base} = 0\). Nothing can be super-optimal everywhere, so
+that’s a good hint that the encoding is suboptimal for high values of
+<code>base</code>.</p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:1" role="doc-endnote">
+      <p>Assuming bytes are uniform i.i.d., the expected variable overhead is a much better \((1 - 1/256)\sp{254} \cdot 0.394\% \approx 0.146\%\). <a href="#fnref:1" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:2" role="doc-endnote">
+      <p>See <a href="https://www.csd.uoc.gr/~hy435/material/moors.pdf">Moors’s critical review</a> for a somewhat dissenting retrospective… although I feel like the wheel is currently turning against smartness embedded in the network. <a href="#fnref:2" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:3" role="doc-endnote">
+      <p>Generating test data just outside the specified interval is a trivial mutation. I don’t know why that’s not available out of the box, to help us test our tests. <a href="#fnref:3" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Aug
+  
+4th, 
+2018
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2018/07/06/testing-slo-type-properties-with-the-confidence-sequence-method/" title="Previous Post: The Confidence Sequence Method: a computer-age test for statistical SLOs">&laquo; The Confidence Sequence Method: a computer-age test for statistical SLOs</a>
+      
+      
+      
+      
+        <a class="basic-alignment right" href="/Blog/2018/08/25/restartable-sequences-with-the-polysemic-null-segment-selector/" title="Next Post: Restartable sequences with the polysemic null segment selector">Restartable sequences with the polysemic null segment selector &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2021 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2018/08/04/optimal-overhead-byte-stuffing/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2018/08/04/optimal-overhead-byte-stuffing/';
+      this.page.title = 'Optimal overhead byte stuffing';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>
