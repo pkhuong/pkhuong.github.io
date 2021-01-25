@@ -1,0 +1,28 @@
+1. That branch misprediction paper.
+
+a. Meausre what you care about, the rest are hints to understand what's what. But the map isn't the territory.
+b. Predicted branches are still branches; better not to branch at all.
+c. Not all correctly predicted branches are equal.
+
+** codegen in 1G page **
+
+b: impact of function size (latency) w/ call-ret or jmp-jmp. try to control for stack manip w/ push-jmp-pop-jmp.
+  -> pack functions or align to 64.  Order shuffled, but always the same.
+c: talk about hierarchical prediction, show delta in latency for small functions w/ conditional branch,
+   call/ret, indirect jmp, indirect call, and as more branch sites alias.
+   (also, might as well do cheney on the MTA with matching call/ret).
+
+2. Integer range reduction.
+
+What are the exact reqs?
+
+1. Fixed point mult by size (duh)
+2. Fixed point div for a -> b mapping (still monotonic, use interpolation table as example!)
+3. Really want a division.
+a) ceiling method
+b) floor method (with saturating add trick)
+4. Modulo. Refer ^
+-> can use ceiling method, and fixup when off by one.
+
+-> is compiled code actually faster (in its best case)?
+  -> can use IACA for throughput, I guess.
