@@ -136,6 +136,20 @@ https://github.com/glommer and https://github.com/axboe.</p>
 really fast, ask someone else.  I can only help you avoid a couple
 mistakes with <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h">a bit of simple code</a>.</p>
 
+<p>Here’s an overview of the baseline I’ll present:</p>
+
+<ol>
+  <li>Let the kernel order writes with <code>O_APPEND</code>, and handle any (rare)
+issue on the read side, by making sure the data is self-synchronising.</li>
+  <li>Use <code>fdatasync</code> to keep a tight leash on the kernel’s write buffering,
+while making sure to align write-out requests to avoid partial blocks.</li>
+  <li>Erase old data by punching holes, again, with alignment to avoid
+zero-ing out partial blocks</li>
+  <li>Treat each log file like a ring buffer modulo 1 TB, and shrink
+large files in 1 TB increments to avoid running into file system
+limits with sparse files.</li>
+</ol>
+
 <h2 id="yes-o_append-is-atomic">Yes, <code>O_APPEND</code> is atomic</h2>
 
 <p>Let’s start by assuming 
@@ -477,6 +491,10 @@ even consumer-triggered rotation.</p>
 need to add a buffering layer on top.  However, I’ve done pretty well
 with raw <code>write(2)</code> per record, e.g., for a write-ahead log of large
 and business-critical POST requests.</p>
+
+<p>If you really want peak write performance, you read the wrong
+document.  This is more about seeing how much we can wrench out of
+standard-ish POSIX interfaces, without trying to replace the kernel.</p>
 
 <p>This <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h"><code>log_file_append.h</code> gist</a>
 is my first time combining all the tricks presener earlier in a
