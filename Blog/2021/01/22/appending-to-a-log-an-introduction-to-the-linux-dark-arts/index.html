@@ -144,10 +144,11 @@ issue on the read side, by making sure the data is self-synchronising.</li>
   <li>Use <code>fdatasync</code> to keep a tight leash on the kernel’s write buffering,
 while making sure to align write-out requests to avoid partial blocks.</li>
   <li>Erase old data by punching holes, again, with alignment to avoid
-zero-ing out partial blocks</li>
+zero-ing out partial blocks… and without ever going much more than 1 TB
+behind EOF.</li>
   <li>Treat each log file like a ring buffer modulo 1 TB, and shrink
-large files in 1 TB increments to avoid running into file system
-limits with sparse files.</li>
+large files in muttliple 1 TB increments to avoid running into file
+system limits with sparse files.</li>
 </ol>
 
 <h2 id="yes-o_append-is-atomic">Yes, <code>O_APPEND</code> is atomic</h2>
@@ -493,8 +494,15 @@ with raw <code>write(2)</code> per record, e.g., for a write-ahead log of large
 and business-critical POST requests.</p>
 
 <p>If you really want peak write performance, you read the wrong
-document.  This is more about seeing how much we can wrench out of
+document.  This is more about seeing how much we can wring out of
 standard-ish POSIX interfaces, without trying to replace the kernel.</p>
+
+<p>I find this is a recurring theme in my work: in order to achieve peak
+$whatever, we have to relinquish all of our tools and rebuild a
+kernel, compiler, etc. from scratch.  In many cases, it’s more
+interesting to ask how far we can go without doing so, than to figure
+out what we need to give up in order to close the last couple
+percentage points.  There’s a reason Lent is only 40 days.</p>
 
 <p>This <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h"><code>log_file_append.h</code> gist</a>
 is my first time combining all the tricks presener earlier in a
