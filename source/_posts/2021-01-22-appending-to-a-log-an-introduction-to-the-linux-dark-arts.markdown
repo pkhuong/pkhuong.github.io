@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Appending to a log: an introduction to the Linux dark arts"
-date: 2021-01-22 22:47:33 -0500
+date: 2021-01-22 22:48:33 -0500
 draft: true
 hidden: true
 comments: true
@@ -25,6 +25,19 @@ https://github.com/glommer and https://github.com/axboe.
 TL;DR: If you want to know the best way to write to a ton of data
 really fast, ask someone else.  I can only help you avoid a couple
 mistakes with [a bit of simple code](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h).
+
+Here's an overview of the baseline I'll present:
+
+1. Let the kernel order writes with `O_APPEND`, and handle any (rare)
+   issue on the read side, by making sure the data is self-synchronising.
+2. Use `fdatasync` to keep a tight leash on the kernel's write buffering,
+   while making sure to align write-out requests to avoid partial blocks.
+3. Erase old data by punching holes, again, with alignment to avoid
+   zero-ing out partial blocks... and without ever going much more than 1 TB
+   behind EOF.
+4. Treat each log file like a ring buffer modulo 1 TB, and shrink
+   large files in muttliple 1 TB increments to avoid running into file
+   system limits with sparse files.
 
 Yes, `O_APPEND` is atomic
 -------------------------
@@ -376,6 +389,17 @@ If you need high throughput with a lot of small writes, you definitely
 need to add a buffering layer on top.  However, I've done pretty well
 with raw `write(2)` per record, e.g., for a write-ahead log of large
 and business-critical POST requests.
+
+If you really want peak write performance, you read the wrong
+document.  This is more about seeing how much we can wring out of
+standard-ish POSIX interfaces, without trying to replace the kernel.
+
+I find this is a recurring theme in my work: in order to achieve peak
+$whatever, we have to relinquish all of our tools and rebuild a
+kernel, compiler, etc. from scratch.  In many cases, it's more
+interesting to ask how far we can go without doing so, than to figure
+out what we need to give up in order to close the last couple
+percentage points.  There's a reason Lent is only 40 days.
 
 This [`log_file_append.h` gist](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h)
 is my first time combining all the tricks presener earlier in a
