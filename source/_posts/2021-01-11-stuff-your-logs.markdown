@@ -6,6 +6,8 @@ comments: true
 categories:
 ---
 
+<small>Originally cross-posted on the [Backtrace.io engineering blog](https://engineering.backtrace.io/2021-01-11-stuff-your-logs/).</small>
+
 Nine months ago, we embarked on a format migration for the persistent
 (on-disk) representation of variable-length strings like symbolicated
 call stacks in the [Backtrace](https://www.backtrace.io) server.  We
