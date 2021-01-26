@@ -143,6 +143,8 @@ mistakes with <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f
 issue on the read side, by making sure the data is self-synchronising.</li>
   <li>Use <code>fdatasync</code> to keep a tight leash on the kernel’s write buffering,
 while making sure to align write-out requests to avoid partial blocks.</li>
+  <li>Trigger periodic maintenance, including <code>fdatasync</code>, with
+memoryless probabilistic counting.</li>
   <li>Erase old data by punching holes, again, with alignment to avoid
 zero-ing out partial blocks… and without ever going much more than 1 TB
 behind EOF.</li>
@@ -279,7 +281,10 @@ it again when we append more data and trigger another flush.</p>
 
 <p>This didn’t used to be so bad on spinning rust, but contemporary
 storage media (SSDs, NVMes, SMR drives… anything but persistent
-memory) really don’t like partial overwrites.<sup id="fnref:bad-ssd" role="doc-noteref"><a href="#fn:bad-ssd" class="footnote">2</a></sup></p>
+memory) really don’t like partial overwrites.<sup id="fnref:bad-ssd" role="doc-noteref"><a href="#fn:bad-ssd" class="footnote">2</a></sup> Arguably, CoW
+filesystems don’t have that problem: they instead copy partially
+overwritten blocks in software.  TL;DR: no one likes to flush partial
+blocks.</p>
 
 <p>We’ll want to make sure we round the end of the flush range <em>down</em> to
 some generous alignment, e.g., 2 MB.</p>
@@ -407,6 +412,14 @@ From a filesystem’s point of view, these devices constantly write to
 log files, and sometimes want to shrink logs.  That seems similar to
 our problem.</p>
 
+<p>That’s a niche operation: as of January 2021, only ext4 and XFS
+support <code>FL_COLLAPSE_RANGE</code>.  However, of all the mainstream
+filesystems on Linux (btrfs, ext4, xfs, and arguably zfs), ext4 is the
+only one that needs shrinking: all other filesystems handle logical
+file sizes in the exabytes (\(2^{60}\) bytes).  So it’s really not a
+problem that these filesystems can’t shrink files, because they never
+<em>need</em> to shrink either.</p>
+
 <p>It’s sad that we have to shrink because, until now, all our
 maintenance operations were idempotent on a range of file bytes: once
 we punch a hole over a given range, we can punch the resulting empty
@@ -423,10 +436,10 @@ rather than converted to <code>ftruncate(fd, 0)</code>.</p>
 
 <p>We do not rely on file collapse to control our logs’ physical
 footprint: that’s what hole punching is for.  We instead only need to
-collapse ranges to avoid running into ext4’s 16 TB limit on the file
-size.  That gives us a lot of freedom.</p>
+collapse ranges to avoid running into ext4’s 16 TB limit on the
+logical file size.  That gives us a lot of freedom.</p>
 
-<p>Let’s collapse at coarse 1 TB granularity, and essentially treat that
+<p>Let’s collapse at a coarse 1 TB granularity, and essentially treat that
 terabyte range like a 40 bit counter that will wraparound, but is
 large enough to avoid ABA races in practice (because it takes a lot of
 real time to write 1 TB to a file).</p>
@@ -459,11 +472,11 @@ for readers.</p>
 EOF, and will have to relocate their read cursor.  It’s actually not
 hard to do this correctly, since we know the read cursor’s new
 positions hasn’t changed modulo 1 TB, but it is a slow error-handling
-path.  Similarly, we can fix up pointers into a file with modular
-arithmetic: while we can’t know for sure where it lies in the new
-file, we can figure out the only matching offset that has not yet been
-erased… and regular error handling will take care of the case where
-we did not find the data we were looking for.</p>
+path.  When that happens, we can fix up pointers into a file with
+modular arithmetic: while we can’t know for sure where it lies in the
+new file, we can figure out the only matching offset that has not yet
+been erased… and regular error handling will take care of the case
+where we did not find the data we were looking for.</p>
 
 <p>We can also make sure shrinking happens rarely after startup by
 shrinking more aggressively when we open the log file (e.g., whenever
@@ -473,12 +486,91 @@ reached 5 or 6 TB when at steady state.</p>
 <p>Of course, this collapse approach doesn’t work if you actually want to
 keep 1 TB of log data.  One could increase the chunk size… However,
 given that requirement, I would probably require a filesystem that
-supports 64-bit file sizes (e.g., XFS or ZFS), and disable file
+supports 64-bit file sizes (e.g., btrfs, xfs or zfs), and disable file
 shrinking.</p>
 
 <p>Again, there’s a pretty good fit between our use case and the one the
 flags were defined for, so the bulk of the work is
 <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L311-L371">figuring out what, if anything, we want to collapse away</a>.</p>
+
+<h2 id="on-the-read-side">On the read side</h2>
+
+<p>Let’s start by assuming the reader keeps up with the writer: there’s
+always going to be fun error handling code when a reader tries to read
+data that’s been rotated away.</p>
+
+<p>At some point, the reader will want to block until there is more data
+to read.  Reads from regular files don’t block, so they will have to
+use a filesystem watch facility like <code>inotify</code>… but at least there’s
+only one log file to watch.</p>
+
+<p>Once new data comes in, the reader can simply issue <code>read(2)</code> calls
+normally.  Very rarely, the reader will notice that its <code>read</code> call
+returns 0 bytes: the file offset is at <em>or after</em> EOF.  The reader
+should then <code>lseek</code> or <code>fstat</code> to figure out the file’s current
+logical size.  If the current offset <code>cur</code> is indeed after EOF, the
+file was shrunk by collapsing a couple 1 TB chunks.  We don’t know how
+many, but that’s fine because we also assume that any data lives in
+the last TB of the file.  We can use a bit of modular arithmetic to
+find the last offset in the file that is equivalent to <code>cur</code> modulo 1
+TB.</p>
+
+<p>Once we have that offset, the reader should also <code>lseek</code> with
+<code>SEEK_DATA</code> to make sure there is actual data to read: if there isn’t,
+the reader definitely fell behind.</p>
+
+<p>When a reader falls behind, it can’t do much except seek to the first
+chunk of data in the file (<code>SEEK_DATA</code> from offset 0), and start
+reading from that point.  This will probably yield one or more partial
+records, but that’s why we use a self-synchronising format with error
+detection.</p>
+
+<h2 id="thats-a-lot-of-complexity-compared-to-log-segment-files-">That’s a lot of complexity compared to log segment files (?)</h2>
+
+<p>On the read side, it’s actually not clear that the logic is actually
+more complicated than for segments files.</p>
+
+<p>For one, the <code>inotify</code> story to block until more data is written
+becomes much more complex with segments: readers must monitor the
+parent directory, and not just a single specific file.  That’s a
+problem when we want to store multiple log files in the same
+directory, and some logs are more active than others…  I suppose one
+could fix that with a subdirectory per log.</p>
+
+<p>When the reader is up to date, they still need to know when it’s time
+to switch to a new segment; merely reaching the end of the current
+segment doesn’t suffice, since more data could still be written.
+Maybe we can rely on writers to leave a special “end of segment”
+marker; that sounds like the best case for readers.</p>
+
+<p>When a reader falls behind, catching up now requires listing a
+directory’s contents to figure out where to resume reading.</p>
+
+<p>This can be fixed with a dedicated metadata file that contains two
+counters (trailing and leading segment ids), similar to what
+<a href="https://github.com/omniti-labs/jlog">jlog</a> does.</p>
+
+<p>I think the difference on the write-side is more striking.</p>
+
+<p>Linux filesystems only offer one lock-free primitive: sticky bits in
+the form of <code>link</code>ing / <code>renameat</code>ing files in a directory.</p>
+
+<p>If we want to maintain the lock-free property of our write protocol,
+must leave a tombstone for every single segment file that ever existed
+in our log (or, at least, enough that races are unlikely).</p>
+
+<p>Alternatively, we can <code>mmap</code> a metadata file read-write and use atomic
+operations.  However, that writable metadata memory map becomes a new
+single point of catastrophic corruption, and that’s not necessarily
+what you want in a disaster recovery mechanism.</p>
+
+<p>Either way, writers must also agree when it’s time to switch to a new
+segment.  The most robust way is probably to detect when writes went
+over the segment size limit after the fact.  Unfortunately, that
+approach can result in a burst of wasted I/O whenever we switch to a
+new segment.  If we want to reliably direct writes on the first go, we
+need to lock in userspace around writes… an easy way to wreck our
+write throughput under high load.</p>
 
 <h2 id="thats-all-i-got">That’s all I got!</h2>
 
@@ -502,7 +594,7 @@ $whatever, we have to relinquish all of our tools and rebuild a
 kernel, compiler, etc. from scratch.  In many cases, it’s more
 interesting to ask how far we can go without doing so, than to figure
 out what we need to give up in order to close the last couple
-percentage points.  There’s a reason Lent is only 40 days.</p>
+percentage points.  There’s a reason Lent is only 40 days out of the year.</p>
 
 <p>This <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h"><code>log_file_append.h</code> gist</a>
 is my first time combining all the tricks presener earlier in a
