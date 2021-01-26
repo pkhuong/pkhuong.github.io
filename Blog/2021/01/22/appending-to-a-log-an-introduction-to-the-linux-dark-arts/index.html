@@ -552,12 +552,25 @@ counters (trailing and leading segment ids), similar to what
 
 <p>I think the difference on the write-side is more striking.</p>
 
-<p>Linux filesystems only offer one lock-free primitive: sticky bits in
-the form of <code>link</code>ing / <code>renameat</code>ing files in a directory.</p>
+<p>The write / retention policy protocol I described earlier is
+wait-free, from the perspective of userspace.  Obviously, there is
+still coordination overhead and the syscalls are internally
+implemented with locks, but the kernel can hopefully be trusted to
+avoid preemption while holding locks.  What wait-freedom gives us is a
+guarantee that unlucky scheduling of a few userspace threads will
+never block other log writers.  This is a similar situation to atomic
+instructions: internally, chips implement these instructions with a
+locking protocol, but we assume that hardware critical sections don’t
+run forever.</p>
 
-<p>If we want to maintain the lock-free property of our write protocol,
-must leave a tombstone for every single segment file that ever existed
-in our log (or, at least, enough that races are unlikely).</p>
+<p>When we split our data across multiple files, we must build on top of
+the only lock-free primitive exposed by Linux filesystems: sticky bits
+in the form of <code>link</code>ing / <code>renameat</code>ing files in a directory.</p>
+
+<p>In order to maintain the wait-free (or even mere lock-free) property
+of our write protocol, we must keep monotonic state in the form of a
+tombstone for every single segment file that ever existed in our log
+(or, at least, enough that races are unlikely).</p>
 
 <p>Alternatively, we can <code>mmap</code> a metadata file read-write and use atomic
 operations.  However, that writable metadata memory map becomes a new
