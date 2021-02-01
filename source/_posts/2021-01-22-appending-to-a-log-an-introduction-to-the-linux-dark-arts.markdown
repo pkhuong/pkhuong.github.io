@@ -24,7 +24,9 @@ https://github.com/glommer and https://github.com/axboe.
 
 TL;DR: If you want to know the best way to write to a ton of data
 really fast, ask someone else.  I can only help you avoid a couple
-mistakes with [a bit of simple code](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h).
+mistakes with [a bit of simple code](/images/2021-01-22-appending-to-a-log-an-introduction-to-the-linux-dark-arts/log_file_append.html).[^howto-generate]
+
+[^howto-generate]: This HTML file was generated from [the C header file](/images/2021-01-22-appending-to-a-log-an-introduction-to-the-linux-dark-arts/log_file_append.h) with [an awk script](/images/2021-01-22-appending-to-a-log-an-introduction-to-the-linux-dark-arts/code2md.awk) driven by [this script](/images/2021-01-22-appending-to-a-log-an-introduction-to-the-linux-dark-arts/generate_html_doc.sh) and with [a mangled version of modest.css](/images/2021-01-22-appending-to-a-log-an-introduction-to-the-linux-dark-arts/modest.css).
 
 Here's an overview of the baseline I'll present:
 
@@ -35,11 +37,29 @@ Here's an overview of the baseline I'll present:
 3. Trigger periodic maintenance, including `fdatasync`, with
    memoryless probabilistic counting.
 4. Erase old data by punching holes, again, with alignment to avoid
-   zero-ing out partial blocks... and without ever going much more than 1 TB
-   behind EOF.
-5. Treat each log file like a ring buffer modulo 1 TB, and shrink
-   large files in muttliple 1 TB increments to avoid running into file
-   system limits with sparse files.
+   zero-ing out partial blocks.
+
+That's enough for wait-free writes and maintenance, and lock-free
+reads; moreover, readers only have to spin when they fell behind the
+periodic deletion of old data, and that's usually a bigger problem
+than the lack of progress guarantees.
+
+Unfortunately, some filesystems and many standard unix utilities do
+not deal well with large sparse files.  For example, `ext4` caps the
+logical size of each file to 16 TB, even for files that contain much
+fewer physical bytes.  On the utility front, `rsync` uses regular
+reads for all those zeros instead of `lseek`ing over holes.
+
+That's why I also describe "backward" compatible mode, which adds a
+fifth component: use file locks around maintenance (including hole
+punching), and periodically collapse the file in fixed (e.g., 1 GB)
+increments.
+
+Maintenance is usually optional, so writes and periodic maintenance
+are still wait-free: if the maintenance file lock is already taken, we
+can assume another thread or process will eventually clean things up
+for us.  Only when writes fail (potentially because of `ENOSPC` or
+`EFBIG`) do we block on mandatory maintenance.
 
 Yes, `O_APPEND` is atomic
 -------------------------
@@ -104,7 +124,7 @@ written.  If you have exclusive ownership *over the file description*
 refer to an actual file), you can `lseek(2)` after the write, and know
 that no one touched the offset in your private file object.
 
-See [`write_and_retry` in this gist](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L129-L164)
+See [the `write_and_retry` function in this gist](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L458-L493)
 for an example.
 
 Pace yourself
@@ -208,7 +228,7 @@ and `flushing` cursors, and allow the distance between `flushing` and
 `write` to grow for performance reasons (e.g., to make sure the
 `flushing` head is always aligned).
 
-Again, [there's an implementation in this gist](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L166-L244).
+Again, [there's an implementation in this gist](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L495-L631).
 
 When to perform regular maintenance
 -----------------------------------
@@ -252,9 +272,9 @@ standard Exponential with mean 1.  Rather than pre-scaling that to the
 expected flush period, we can divide the number of bytes written by
 that period, and subtract that scaled value from the countdown.
 
-The sampling logic, including a PRNG, [takes less than 100 LOC](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L373-L466),
+The sampling logic, including a PRNG, [takes less than 100 LOC](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L330-L443),
 and the code to 
-[count down and trigger maintenance is nothing special](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L589-L608).
+[count down and trigger maintenance is nothing special](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L1044-L1065).
 
 Dropping old data
 -----------------
@@ -288,7 +308,7 @@ on real time.
 
 There's a really good match between our use case and the `fallocate`
 flags, so 
-[the code mostly has to figure out what range of file offsets we want to erase](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L246-L309).
+[the code mostly has to figure out what range of file offsets we want to erase](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L652-L722).
 
 Shrinking large sparse files
 ----------------------------
@@ -296,11 +316,20 @@ Shrinking large sparse files
 Removing old data by punching holes works nicely on filesystems with
 reasonable (\\(2^{63}\\) bytes) limits on file sizes, like XFS or ZFS.
 
+It also has the nice property of being idempotent, and that the file
+offset always grows monotonically.  This monotonicity makes is easy
+for readers to just keep pumping more bytes (until they fall behind),
+and also means that concurrent maintenance isn't an issue.
+
 Unfortunately, ext4 isn't part of that club, and craps out at
 \\(2^{44}\\) bytes.  That's not the limit of a file's footprint, but
 on its size in metadata... and that's a problem for us, because we
 want to keep appending to log files, while regularly punching away old
 data to keep their physical footprint in check.
+
+Moreover, a lot of standard Unix utilities (e.g., rsync) don't handle
+large sparse files very well: they'll just keep reading terabytes of
+zeros without attempting to skip holes.
 
 In 2014, Linux gained another fallocate mode,
 `FALLOC_FL_COLLAPSE_RANGE`, targeted at DVR and video editing devices.
@@ -326,68 +355,31 @@ of a 10 MB file, we're left with a 9 MB file that has a range of bytes
 in its first 1 MB... so two consecutive calls to collapse away the
 first 1 MB of a 10 MB file are *not* idempotent, and yield an 8 MB file.
 
-Thankfully, Dave Chinner gave us an out when 
-[he argued that out-of-bounds collapse calls should be rejected](https://lwn.net/Articles/589309/)
-rather than converted to `ftruncate(fd, 0)`.
+There is a way to make collapse work without locks, but, for that
+trick to be safe, we need to collapse in huge increments (e.g.,
+multiples of 1 TB, and more than 2TB).  That doesn't play well with
+standard utilities.
 
-We do not rely on file collapse to control our logs' physical
-footprint: that's what hole punching is for.  We instead only need to
-collapse ranges to avoid running into ext4's 16 TB limit on the
-logical file size.  That gives us a lot of freedom.
+We'll instead use [file locks](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L214-L328)...
+but only with non-blocking `trylock` calls during steady state.
 
-Let's collapse at a coarse 1 TB granularity, and essentially treat that
-terabyte range like a 40 bit counter that will wraparound, but is
-large enough to avoid ABA races in practice (because it takes a lot of
-real time to write 1 TB to a file).
+When we do decide to shrink a log file, we'll do so in multiples
+of a fixed granularity (e.g., 1 GB).
 
-Concretely, we make collapse calls *idempotent enough* by only issuing
-them when the file is large enough that the collapsed range is at
-least 1 TB larger than the size of the resulting shrunk file.
-
-For example, we could wait until the file size is 4 TB (and completely
-sparse except for the tail end).  We can collapse away the first 3 TB
-chunks, since we know there's no data in there.  If the collapse goes
-through, the result will be a 1 TB file, maybe a bit longer if some
-data was logged.  A second collapse call to collapse away the first 3
-TB will now fail, since the file doesn't have 3 TBs to collapse!
-
-Remember that we also tried to keep the range of
-`FALLOC_FL_PUNCH_HOLE` calls within the last TB of data in the file
-(and maybe a bit more for alignment).  We'll always issue collapse
-calls that remove at least 2 TB, i.e., the end of the file moves by at
-least 2 TB.  If a hole-punching call were to lose a race with a
-collapse (for example, at the end of a 4 TB file), it would end up
-erasing data past the end of the (now less than 2 TB) file, a no-op
-that certainly will not erase fresh data.
-
-Collapsing at such a coarse granularity means it only happens rarely;
-that's important for writers, because collapse can be slow, but also
-for readers.
-
-Whenever we shrink a log file, readers will detect that they're past
-EOF, and will have to relocate their read cursor.  It's actually not
-hard to do this correctly, since we know the read cursor's new
-positions hasn't changed modulo 1 TB, but it is a slow error-handling
+This known granularity let readers relocate their read cursor when
+they detect that they're past EOF.  It's actually not hard to do this
+correctly, since we know the read cursor's new positions hasn't
+changed modulo 1 GB (for example), but it is a slow error-handling
 path.  When that happens, we can fix up pointers into a file with
 modular arithmetic: while we can't know for sure where it lies in the
 new file, we can figure out the only matching offset that has not yet
 been erased... and regular error handling will take care of the case
 where we did not find the data we were looking for.
 
-We can also make sure shrinking happens rarely after startup by
-shrinking more aggressively when we open the log file (e.g., whenever
-its size is greater than 4 TB), and only shrink log files that have
-reached 5 or 6 TB when at steady state.
-
-Of course, this collapse approach doesn't work if you actually want to
-keep 1 TB of log data.  One could increase the chunk size... However,
-given that requirement, I would probably require a filesystem that
-supports 64-bit file sizes (e.g., btrfs, xfs or zfs), and disable file
-shrinking.
-
 Again, there's a pretty good fit between our use case and the one the
-flags were defined for, so the bulk of the work is
-[figuring out what, if anything, we want to collapse away](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L311-L371).
+flags were defined for, so, after acquiring a lock on the log file,
+the bulk of the work is 
+[figuring out what, if anything, we want to collapse away](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L724-L809).
 
 On the read side
 ----------------
@@ -450,9 +442,10 @@ counters (trailing and leading segment ids), similar to what
 
 I think the difference on the write-side is more striking.
 
-The write / retention policy protocol I described earlier is
-wait-free, from the perspective of userspace.  Obviously, there is
-still coordination overhead and the syscalls are internally
+The write / retention policy protocol I described earlier is wait-free
+for regular writes, from the perspective of userspace... and even the
+locking component mostly uses non-blocking trylock. Obviously, there
+is still coordination overhead and the syscalls are internally
 implemented with locks, but the kernel can hopefully be trusted to
 avoid preemption while holding locks.  What wait-freedom gives us is a
 guarantee that unlucky scheduling of a few userspace threads will
@@ -461,16 +454,17 @@ instructions: internally, chips implement these instructions with a
 locking protocol, but we assume that hardware critical sections don't
 run forever.
 
-When we split our data across multiple files, we must build on top of
-the only lock-free primitive exposed by Linux filesystems: sticky bits
-in the form of `link`ing / `renameat`ing files in a directory.
+When we split our data across multiple files, we would have to build
+on top of the only lock-free primitive exposed by Linux filesystems:
+sticky bits in the form of `link`ing / `renameat`ing files in a
+directory.
 
 In order to maintain the wait-free (or even mere lock-free) property
-of our write protocol, we must keep monotonic state in the form of a
-tombstone for every single segment file that ever existed in our log
-(or, at least, enough that races are unlikely).
+of our write protocol, we would have to keep monotonic state in the
+form of a tombstone for every single segment file that ever existed in
+our log (or, at least, enough that races are unlikely).
 
-Alternatively, we can `mmap` a metadata file read-write and use atomic
+Alternatively, we could `mmap` a metadata file read-write and use atomic
 operations.  However, that writable metadata memory map becomes a new
 single point of catastrophic corruption, and that's not necessarily
 what you want in a disaster recovery mechanism.
@@ -486,18 +480,20 @@ write throughput under high load.
 That's all I got!
 -----------------
 
-You now know all the tricks I've learned about logging persistent data
-on Linux.  The result a simple logging scheme that pushes all locking
-and other complexity to the kernel, but still supports important use
-cases like multi-threaded and multi-process writes, log rotation, and
-even consumer-triggered rotation.
+You now know all the tricks (if you remember to use 
+[double checked locking when it makes senses](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L822-L893))
+I've learned about logging persistent data on Linux.  The result a
+simple logging scheme that pushes most of the coordination to
+the kernel, but still supports important use cases like multi-threaded
+and multi-process writes, log rotation, and even consumer-triggered
+rotation.
 
 If you need high throughput with a lot of small writes, you definitely
 need to add a buffering layer on top.  However, I've done pretty well
 with raw `write(2)` per record, e.g., for a write-ahead log of large
 and business-critical POST requests.
 
-If you really want peak write performance, you read the wrong
+If you really want peak write performance, you just read the wrong
 document.  This is more about seeing how much we can wring out of
 standard-ish POSIX interfaces, without trying to replace the kernel.
 
@@ -509,7 +505,7 @@ out what we need to give up in order to close the last couple
 percentage points.  There's a reason Lent is only 40 days out of the year.
 
 This [`log_file_append.h` gist](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h)
-is my first time combining all the tricks presener earlier in a
+is my first time combining all the tricks I presented here in a
 coherent interface. I hope it's useful.
 
 <p><hr style="width: 50%"></p>
