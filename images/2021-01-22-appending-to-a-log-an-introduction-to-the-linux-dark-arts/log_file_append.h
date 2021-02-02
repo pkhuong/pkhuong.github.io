@@ -274,6 +274,7 @@ file_flock_lock(int fd, const struct stat *st)
         mutex = file_flock_mutex(st);
         pthread_mutex_lock(mutex);
 
+        /* This will loop forever if something's wrong with `fd`. */
         while (flock(fd, LOCK_EX) != 0)
                 ;
         return;
@@ -455,6 +456,18 @@ update_countdown(struct writer_state *state)
  ** events as invalid records.
  **/
 
+static off_t
+lseek_retry(int fd, off_t offset, int whence)
+{
+        off_t r;
+
+        do {
+                r = lseek(fd, offset, whence);
+        } while (r == -1 && errno == EINTR);
+
+        return r;
+}
+
 /**
  * Appends `num` bytes from `data` to `log_fd`, with `log_fd` owned
  * exclusively by the caller.
@@ -472,7 +485,7 @@ write_and_retry(int log_fd, const void *data, size_t num)
 
                 r = write(log_fd, data, num);
                 if ((size_t)r == num)
-                        return lseek(log_fd, 0, SEEK_CUR);
+                        return lseek_retry(log_fd, 0, SEEK_CUR);
 
                 /* Short write: try again. */
                 if (r >= 0)
@@ -509,11 +522,9 @@ write_and_retry(int log_fd, const void *data, size_t num)
 static uint64_t
 saturating_add(uint64_t x, uint64_t y)
 {
+        uint64_t sum = x + y;
 
-        if (y > UINT64_MAX - x)
-                return UINT64_MAX;
-
-        return x + y;
+        return (sum < x) ? UINT64_MAX : sum;
 }
 
 /**
@@ -590,7 +601,7 @@ flush_pending_bytes(int fd, off_t file_size, size_t written,
          * aligned end of the file, modulo alignment.
          */
         (void)sync_file_range(fd, flush_begin, flush_end - flush_begin,
-             SYNC_FILE_RANGE_WRITE);
+            SYNC_FILE_RANGE_WRITE);
 
         /*
          * And now, we must block to make sure old data that was flushed
@@ -626,7 +637,7 @@ flush_pending_bytes(int fd, off_t file_size, size_t written,
          * `alignment` slop) bytes of data have made it to storage.
          */
         (void)sync_file_range(fd, flush_begin, flush_end - flush_begin,
-             SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER);
+            SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER);
         return;
 }
 
@@ -662,7 +673,7 @@ erase_byte_limit(off_t file_size, size_t written,
 {
         uint64_t retention = params->retention_bytes;
         off_t alignment_mask;
-        
+
         if (file_size <= 0 ||
             retention == 0 ||
             atomic_load(&info->erase_broken) == true)
@@ -697,20 +708,19 @@ static void
 erase_old_bytes(int fd, off_t retention_limit,
     struct log_file_append_info *info)
 {
-        static const size_t n_attempts = 3;
 
         if (retention_limit <= 0)
                 return;
 
-        for (size_t i = 0; i < n_attempts; i++) {
+        while (true) {
                 int r;
 
                 r = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
                     0, retention_limit);
                 if (r == 0)
-                        return;
+                        break;
 
-                if (errno == EINTR || errno == EIO)
+                if (errno == EINTR)
                         continue;
 
                 if (errno == ENOSYS || errno == EOPNOTSUPP)
@@ -735,8 +745,8 @@ shrink_file(int fd, off_t file_size, struct log_file_append_info *info,
         static const size_t n_attempts = 3;
         uint64_t shrink_granularity = params->granularity;
         uint64_t file_size_limit;
+        off_t r;
         off_t to_shrink;
-        bool definitely_want_to_shrink = false;
 
         if (file_size <= 0 ||
             shrink_granularity == 0 ||
@@ -757,43 +767,33 @@ shrink_file(int fd, off_t file_size, struct log_file_append_info *info,
          */
         to_shrink = (to_shrink / shrink_granularity) * shrink_granularity;
 
-        for (size_t i = 0; i < n_attempts; i++) {
-                off_t r;
+        if (to_shrink == 0)
+                return;
+
+        /* Confirm there is data to remove. */
+        r = lseek_retry(fd, to_shrink, SEEK_HOLE);
+        /*
+         * There's still data where we would like to shrink (or
+         * `lseek` failed, and there's nothing we can do about that).
+         * We'll wait for the retention code to delete that data, and
+         * instead shrink less.
+         */
+        if (r != to_shrink) {
+                if ((uint64_t)to_shrink <= shrink_granularity)
+                        return;
 
                 /*
-                 * Make sure the offset range we want to shrink has
-                 * been deleted.
+                 * If the log file has grown to twice the shrink
+                 * granularity, force a (less aggressive) collapse.
                  */
-                if (!definitely_want_to_shrink) {
-                        r = lseek(fd, to_shrink, SEEK_HOLE);
-                        if (r < 0)
-                                goto fail;
+                to_shrink -= shrink_granularity;
+        }
 
-                        /*
-                         * There's still data where we would like to shrink.
-                         * We'll let the retention code delete it first, and
-                         * instead shrink less.
-                         */
-                        if (r != to_shrink) {
-                                if ((uint64_t)to_shrink <= shrink_granularity)
-                                        return;
-
-                                /*
-                                 * If the log file has grown to twice
-                                 * the shrink granularity, force a
-                                 * (less aggressive) collapse.
-                                 */
-                                to_shrink -= shrink_granularity;
-                        }
-
-                        definitely_want_to_shrink = true;
-                }
-
+        for (size_t i = 0; i < n_attempts; i++) {
                 r = fallocate(fd, FALLOC_FL_COLLAPSE_RANGE, 0, to_shrink);
                 if (r == 0)
                         break;
 
-fail:
                 if (errno == EINTR) {
                         i--;
                         continue;
@@ -833,7 +833,7 @@ maintain_file(int fd, off_t size, size_t written, bool force,
 
         /* 0 probably isn't a real guess... */
         if (size <= 0)
-                size = lseek(fd, 0, SEEK_END);
+                size = lseek_retry(fd, 0, SEEK_END);
 
         if (size <= 0)
                 return;
@@ -863,7 +863,7 @@ maintain_file(int fd, off_t size, size_t written, bool force,
          * double-checked locking: there's nothing to do if the data
          * just before `erase_limit` has already been deleted.
          */
-        if (lseek(fd, erase_limit - 1, SEEK_HOLE) == erase_limit - 1)
+        if (lseek_retry(fd, erase_limit - 1, SEEK_HOLE) == erase_limit - 1)
                 return;
 
         /* If stat fails, we're in a bad shape. */
@@ -884,7 +884,7 @@ maintain_file(int fd, off_t size, size_t written, bool force,
          * the worst that can happen is that this specific maintenance
          * call will delete less data than it could.
          */
-        size = lseek(fd, 0, SEEK_END);
+        size = lseek_retry(fd, 0, SEEK_END);
         erase_limit = erase_byte_limit(size, written, info, &params->erase);
         if (erase_limit > 0) {
                 erase_old_bytes(fd, erase_limit, info);
@@ -917,7 +917,7 @@ check_features(int fd, off_t size, struct log_file_append_info *info)
         /* Can we punch holes? */
         while (atomic_load(&info->erase_broken) == false) {
                 int r;
-                        
+
                 r = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
                     large_offset, 1);
                 if (r == 0)
@@ -964,7 +964,7 @@ log_file_open(int dirfd, const char *path, mode_t mode,
         if (ret < 0 || (info == NULL && params == NULL))
                 return ret;
 
-        size = lseek(ret, 0, SEEK_END);
+        size = lseek_retry(ret, 0, SEEK_END);
         if (size < 0)
                 return ret;
 
@@ -1005,7 +1005,7 @@ derive_frequency(const struct log_file_append_params *params)
                 alignment = LOG_FILE_APPEND_DEFAULT_FLUSH_ALIGNMENT;
 
         /*
-         * We assume `alignment` is a power of two, so 
+         * We assume `alignment` is a power of two, so
          * `alignment == 2 ** __builtin_ctzll(alignment)`.
          */
         return ldexp(10.0, -__builtin_ctzll(alignment));
@@ -1023,7 +1023,7 @@ log_file_append(int log_fd, struct log_file_append_info *info,
         off_t ret;
 
         if (num == 0)
-                return lseek(log_fd, 0, SEEK_END);
+                return lseek_retry(log_fd, 0, SEEK_END);
 
         if (info == NULL)
                 info = &default_info;
