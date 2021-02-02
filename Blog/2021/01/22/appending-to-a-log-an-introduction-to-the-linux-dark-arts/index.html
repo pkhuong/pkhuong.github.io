@@ -231,7 +231,7 @@ written.  If you have exclusive ownership <em>over the file description</em>
 refer to an actual file), you can <code>lseek(2)</code> after the write, and know
 that no one touched the offset in your private file object.</p>
 
-<p>See <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L458-L493">the <code>write_and_retry</code> function in this gist</a>
+<p>See <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L471-L506">the <code>write_and_retry</code> function in this gist</a>
 for an example.</p>
 
 <h2 id="pace-yourself">Pace yourself</h2>
@@ -333,7 +333,7 @@ and <code>flushing</code> cursors, and allow the distance between <code>flushing
 <code>write</code> to grow for performance reasons (e.g., to make sure the
 <code>flushing</code> head is always aligned).</p>
 
-<p>Again, <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L495-L631">there’s an implementation in this gist</a>.</p>
+<p>Again, <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L508-L642">there’s an implementation in this gist</a>.</p>
 
 <h2 id="when-to-perform-regular-maintenance">When to perform regular maintenance</h2>
 
@@ -376,9 +376,9 @@ standard Exponential with mean 1.  Rather than pre-scaling that to the
 expected flush period, we can divide the number of bytes written by
 that period, and subtract that scaled value from the countdown.</p>
 
-<p>The sampling logic, including a PRNG, <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L330-L443">takes less than 100 LOC</a>,
+<p>The sampling logic, including a PRNG, <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L331-L444">takes less than 100 LOC</a>,
 and the code to 
-<a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L1044-L1065">count down and trigger maintenance is nothing special</a>.</p>
+<a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L1045-L1066">count down and trigger maintenance is nothing special</a>.</p>
 
 <h2 id="dropping-old-data">Dropping old data</h2>
 
@@ -411,7 +411,7 @@ on real time.</p>
 
 <p>There’s a really good match between our use case and the <code>fallocate</code>
 flags, so 
-<a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L652-L722">the code mostly has to figure out what range of file offsets we want to erase</a>.</p>
+<a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L663-L732">the code mostly has to figure out what range of file offsets we want to erase</a>.</p>
 
 <h2 id="shrinking-large-sparse-files">Shrinking large sparse files</h2>
 
@@ -462,7 +462,7 @@ trick to be safe, we need to collapse in huge increments (e.g.,
 multiples of 1 TB, and more than 2TB).  That doesn’t play well with
 standard utilities.</p>
 
-<p>We’ll instead use <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L214-L328">file locks</a>…
+<p>We’ll instead use <a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L214-L329">file locks</a>…
 but only with non-blocking <code>trylock</code> calls during steady state.</p>
 
 <p>When we do decide to shrink a log file, we’ll do so in multiples
@@ -481,7 +481,7 @@ where we did not find the data we were looking for.</p>
 <p>Again, there’s a pretty good fit between our use case and the one the
 flags were defined for, so, after acquiring a lock on the log file,
 the bulk of the work is 
-<a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L724-L809">figuring out what, if anything, we want to collapse away</a>.</p>
+<a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L734-L809">figuring out what, if anything, we want to collapse away</a>.</p>
 
 <h2 id="on-the-read-side">On the read side</h2>
 
@@ -580,7 +580,7 @@ write throughput under high load.</p>
 <h2 id="thats-all-i-got">That’s all I got!</h2>
 
 <p>You now know all the tricks (if you remember to use 
-<a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L822-L893">double checked locking when it makes senses</a>)
+<a href="https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L861-L888">double checked locking when it makes senses</a>)
 I’ve learned about logging persistent data on Linux.  The result a
 simple logging scheme that pushes most of the coordination to
 the kernel, but still supports important use cases like multi-threaded
