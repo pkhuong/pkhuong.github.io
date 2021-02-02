@@ -146,7 +146,7 @@
 <header>
 <h1 class="title">log_file_append.h</h1>
 <p class="author">Paul Khuong</p>
-<p class="date">Mon 01 Feb 2021 06:19:59 PM EST</p>
+<p class="date">Mon 01 Feb 2021 11:59:28 PM EST</p>
 </header>
 <nav id="TOC">
 <ul>
@@ -899,8 +899,9 @@
  
          return;
  }
- 
- /**
+ </code></pre>
+<h3 id="assembling-all-the-pieces-together">Assembling all the pieces together</h3>
+<pre><code> /**
   * Performs the maintenance tasks on `fd`.
   *
   * @param fd a descriptor for the file to maintain (flush new data,
@@ -983,9 +984,8 @@
          file_flock_unlock(fd, &amp;sb);
          return;
  }
- </code></pre>
-<h3 id="assembling-all-the-pieces-together">Assembling all the pieces together</h3>
-<pre><code> /**
+ 
+ /**
   * Updates `info` with disabled `fallocate` features for `fd`.
   */
  static void
@@ -1044,8 +1044,8 @@
      struct log_file_append_info *info,
      const struct log_file_append_params *params)
  {
-         struct stat sb;
          struct log_file_append_info default_info = { false };
+         off_t size;
          int ret;
  
          ret = openat(dirfd, path,
@@ -1053,17 +1053,18 @@
          if (ret &lt; 0 || (info == NULL &amp;&amp; params == NULL))
                  return ret;
  
-         if (fstat(ret, &amp;sb) &lt; 0 || sb.st_size &lt; 0)
+         size = lseek(ret, 0, SEEK_END);
+         if (size &lt; 0)
                  return ret;
  
          if (info != NULL) {
-                 check_features(ret, sb.st_size, info);
+                 check_features(ret, size, info);
          } else {
                  info = &amp;default_info;
          }
  
          if (params != NULL)
-                 maintain_file(ret, sb.st_size, 0, /*force=*/true, info, params);
+                 maintain_file(ret, size, 0, /*force=*/true, info, params);
          return ret;
  }
  

@@ -809,6 +809,10 @@ fail:
 }
 
 /**
+ ** ### Assembling all the pieces together
+ **/
+
+/**
  * Performs the maintenance tasks on `fd`.
  *
  * @param fd a descriptor for the file to maintain (flush new data,
@@ -893,10 +897,6 @@ maintain_file(int fd, off_t size, size_t written, bool force,
 }
 
 /**
- ** ### Assembling all the pieces together
- **/
-
-/**
  * Updates `info` with disabled `fallocate` features for `fd`.
  */
 static void
@@ -955,8 +955,8 @@ log_file_open(int dirfd, const char *path, mode_t mode,
     struct log_file_append_info *info,
     const struct log_file_append_params *params)
 {
-        struct stat sb;
         struct log_file_append_info default_info = { false };
+        off_t size;
         int ret;
 
         ret = openat(dirfd, path,
@@ -964,17 +964,18 @@ log_file_open(int dirfd, const char *path, mode_t mode,
         if (ret < 0 || (info == NULL && params == NULL))
                 return ret;
 
-        if (fstat(ret, &sb) < 0 || sb.st_size < 0)
+        size = lseek(ret, 0, SEEK_END);
+        if (size < 0)
                 return ret;
 
         if (info != NULL) {
-                check_features(ret, sb.st_size, info);
+                check_features(ret, size, info);
         } else {
                 info = &default_info;
         }
 
         if (params != NULL)
-                maintain_file(ret, sb.st_size, 0, /*force=*/true, info, params);
+                maintain_file(ret, size, 0, /*force=*/true, info, params);
         return ret;
 }
 
