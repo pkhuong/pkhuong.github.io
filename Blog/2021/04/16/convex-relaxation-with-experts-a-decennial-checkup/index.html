@@ -1,0 +1,335 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Convex relaxation with experts: a decennial checkup - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2021/04/16/convex-relaxation-with-experts-a-decennial-checkup/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Convex relaxation with experts: a decennial checkup</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+April
+  
+16th, 
+2021
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2021/04/16/convex-relaxation-with-experts-a-decennial-checkup/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>Sometime in 2011,<sup id="fnref:reciprocal" role="doc-noteref"><a href="#fn:reciprocal" class="footnote">1</a></sup> I really had to take a break from
+Lagrangian relaxations for combinatorial problems and read
+<a href="https://www.cs.princeton.edu/~arora/pubs/MWsurvey.pdf">Arora, Hazan, and Kale’s survey on the multiplicative weight update (MWU) algorithm</a>.
+After tangling with the heavily theoretical presentation, I saw
+that the the tight, non-asymptotic, convergence bounds guaranteed by
+MWU (and other state-of-the-art algorithms for the experts problem)
+might be a good way to address a practical obstacle for Lagrangian
+relaxations: “pricing” algorithms (which tell us how to the relative
+importance of relaxed constraints) are sensitive to
+parameters, and more robust algorithms tend to scale badly.</p>
+
+<p>Unfortunately for me, theoreticians treat optimisation as a trivial
+extension of satisfaction (just add a linear constraint on the
+objective value and binary/galloping search), which is fine for coarse
+complexity classes like P, but not really for useful metrics like
+wall-clock ime… and I was already focusing on getting out of
+graduate school, ideally but not necessarily with a doctorate.  TL;DR:
+I was pretty sure we could make it useful, but I couldn’t figure out
+how, and I wasn’t in the mood to spend too much time on this high risk
+angle.</p>
+
+<p>I eventually defended something, found a job in industry, and happily
+stopped thinking about mathematical optimisation for a couple years…
+but eventually this unresolved business came back to haunt me, and
+I now believe we can build on top of the experts problem to fix
+multiple practical problems in Lagrangian relaxations:</p>
+
+<ol>
+  <li>We can generate a nearly feasible and super-optimal fractional solution, or a certificate of infeasibility</li>
+  <li>The <a href="https://papers.nips.cc/paper/2011/file/64223ccf70bbb65a3a4aceac37e21016-Paper.pdf">AdaHedge</a> algorithm comes with worst-case convergence bounds and <em>no</em> parameter to tune</li>
+  <li>We don’t need subgradients, so don’t have to solve subproblems to optimality, and can instead detect when we must work harder (or prove infeasibility)</li>
+  <li><a href="http://proceedings.mlr.press/v40/Luo15.pdf">AdaNormalHedge</a> adds support for warm starts and generating constraint/variable on demand</li>
+  <li>The iteration complexity for both algorithms above scales logarithmatically with the number of decision variables \(n\), and both only need \\mathcal{O}(n)\) space, and time per iteration.</li>
+</ol>
+
+<p>The first property is important when embedding the convex relaxation
+in a search program.  Fractional solutions help guide branch-and-bound
+methods, but they’re also an important input for cut separation
+algorithms (e.g., in branch-and-cut).  Explicitly detecting
+infeasibility is also helpful when we don’t necessarily have a primal
+feasible solution, even when we assume there is one.</p>
+
+<p>Worst-case bounds mean that we can guarantee progress in the innermost
+relaxation, instead of relying on a graduate student to stare at logs
+and artfully tweak parameters.  Ideally practitioners don’t have to
+tweak any parameter, and a method without any parameter obviously
+achieves that.</p>
+
+<p>Avoiding a full solve to optimality for each subproblem was the main
+driver for the formulations I describe in my dissertation: useful
+(stronger than the linear relaxation) Lagrangian relaxations break
+discrete optimisation problems into simpler, but usually still
+NP-hard, ones.  In practice, subproblems don’t vary that much from one
+iteration to the next, and so the optimal solutions to these
+subproblems also tend to be stable… but proving optimality is still
+hard.  For example, when I applied a MIP solver to my subproblems I
+would often find that the optimal solutions in consecutive iterations
+had the same values for integer decision variables; I could have
+simply solved a linear program for the remaining continuous decision
+variables, except that I would then have no proof of optimality, and
+accidentally feeding a suboptimal solution to the outer Lagrangian
+method would cause all sorts of badness.</p>
+
+<p>If the last two bullets aren’t self-explanatory, I don’t know how to
+explain them well :x</p>
+
+<p>Finally, I believe robust Lagrangian relaxation solvers are important
+because most programmers (most people) don’t have any intuition for
+the quality of integer linear formulations,<sup id="fnref:hard-means-good" role="doc-noteref"><a href="#fn:hard-means-good" class="footnote">2</a></sup> but
+programmers tend to be very good at writing code to solve small
+discrete optimisation problems, especially when heuristics are
+acceptable… and Lagrangian relaxation, Lagrangian decomposition in
+particular, reduces large integrated discrete optimisation problems to
+a lot of smaller independent ones.</p>
+
+<p>The above probably only makes sense if you’re familiar with both
+online learning and Lagrangian decomposition.  If that’s you, you
+might enjoy <a href="https://www.authorea.com/users/2541/articles/324048-no-regret-surrogate-decomposition">this draft</a>.
+These are two topics from disjoint research communities that aren’t
+explored at the undergraduate level, so, for almost everyone else,
+let’s see if I can provide the necessary background here!</p>
+
+<p>The plan:</p>
+
+<ol>
+  <li>The experts problem: what is it, why is it even solvable?</li>
+  <li>A classic reduction from linear feasibility to the experts problem</li>
+  <li>Surrogate relaxation, a.k.a. I can’t believe it’s not Lagrangian relaxation</li>
+  <li>Lagrangian decomposition, a relaxation method for arbitrary finite domain problems</li>
+  <li>A reduction from surrogate decomposition to the experts problem</li>
+</ol>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:reciprocal" role="doc-endnote">
+      <p>I’m pretty sure that was the reason behind <a href="https://pvk.ca/Blog/LowLevel/software-reciprocal.html">this post on double float reciprocals</a>. <a href="#fnref:reciprocal" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:hard-means-good" role="doc-endnote">
+      <p>ILPs are often compared to assembly language, and it seems newcomers to both tools fall prey to the same fallacy: it works, and it was hard to write, so it must be good ;) <a href="#fnref:hard-means-good" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+April
+  
+16th, 
+2021
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2021/01/11/stuff-your-logs/" title="Previous Post: Stuff your logs!">&laquo; Stuff your logs!</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2021 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2021/04/16/convex-relaxation-with-experts-a-decennial-checkup/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2021/04/16/convex-relaxation-with-experts-a-decennial-checkup/';
+      this.page.title = 'Convex relaxation with experts: a decennial checkup';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>
