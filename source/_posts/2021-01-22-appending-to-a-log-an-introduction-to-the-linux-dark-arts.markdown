@@ -124,7 +124,7 @@ written.  If you have exclusive ownership *over the file description*
 refer to an actual file), you can `lseek(2)` after the write, and know
 that no one touched the offset in your private file object.
 
-See [the `write_and_retry` function in this gist](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L458-L493)
+See [the `write_and_retry` function in this gist](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L471-L506)
 for an example.
 
 Pace yourself
@@ -228,7 +228,7 @@ and `flushing` cursors, and allow the distance between `flushing` and
 `write` to grow for performance reasons (e.g., to make sure the
 `flushing` head is always aligned).
 
-Again, [there's an implementation in this gist](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L495-L631).
+Again, [there's an implementation in this gist](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L508-L642).
 
 When to perform regular maintenance
 -----------------------------------
@@ -272,9 +272,9 @@ standard Exponential with mean 1.  Rather than pre-scaling that to the
 expected flush period, we can divide the number of bytes written by
 that period, and subtract that scaled value from the countdown.
 
-The sampling logic, including a PRNG, [takes less than 100 LOC](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L330-L443),
+The sampling logic, including a PRNG, [takes less than 100 LOC](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L331-L444),
 and the code to 
-[count down and trigger maintenance is nothing special](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L1044-L1065).
+[count down and trigger maintenance is nothing special](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L1045-L1066).
 
 Dropping old data
 -----------------
@@ -308,7 +308,7 @@ on real time.
 
 There's a really good match between our use case and the `fallocate`
 flags, so 
-[the code mostly has to figure out what range of file offsets we want to erase](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L652-L722).
+[the code mostly has to figure out what range of file offsets we want to erase](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L663-L732).
 
 Shrinking large sparse files
 ----------------------------
@@ -360,7 +360,7 @@ trick to be safe, we need to collapse in huge increments (e.g.,
 multiples of 1 TB, and more than 2TB).  That doesn't play well with
 standard utilities.
 
-We'll instead use [file locks](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L214-L328)...
+We'll instead use [file locks](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L214-L329)...
 but only with non-blocking `trylock` calls during steady state.
 
 When we do decide to shrink a log file, we'll do so in multiples
@@ -379,7 +379,7 @@ where we did not find the data we were looking for.
 Again, there's a pretty good fit between our use case and the one the
 flags were defined for, so, after acquiring a lock on the log file,
 the bulk of the work is 
-[figuring out what, if anything, we want to collapse away](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L724-L809).
+[figuring out what, if anything, we want to collapse away](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L734-L809).
 
 On the read side
 ----------------
@@ -481,7 +481,7 @@ That's all I got!
 -----------------
 
 You now know all the tricks (if you remember to use 
-[double checked locking when it makes senses](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L822-L893))
+[double checked locking when it makes senses](https://gist.github.com/pkhuong/7a1aeb5ad0ef24299c5117f5f1310a38#file-log_file_append-h-L861-L888))
 I've learned about logging persistent data on Linux.  The result a
 simple logging scheme that pushes most of the coordination to
 the kernel, but still supports important use cases like multi-threaded
