@@ -1,0 +1,14 @@
+Docker sucks under crostini by default.  The trick is to use the btrfs
+storage driver (crostini itself runs on btrfs).
+
+https://docs.docker.com/storage/storagedriver/btrfs-driver/
+
+TL;DR: write
+
+```
+{
+  "storage-driver": "btrfs"
+}
+```
+
+to /etc/docker/daemon.json
