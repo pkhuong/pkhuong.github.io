@@ -2,7 +2,9 @@
 
 set -e
 
-cp ../Gemfile ../Gemfile.lock .
+cp ../Gemfile .
+
+cp ../Gemfile.lock . || echo "No lock file."
 
 docker build -t blog \
   --build-arg USER_ID=$(id -u) \
