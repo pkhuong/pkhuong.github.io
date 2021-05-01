@@ -169,3 +169,5 @@ about write sets and block in individual writes.
 TL;DR: we can implement plain physical replication in a VFS, and have
 sqlite inform the VFS of transaction boundaries instead of wasting IO
 on journaling.
+
+<p><hr style="width: 50%" /></p>
