@@ -74,32 +74,38 @@ In fact, we could probably even support
 unlike sqlite's native WAL mode, by waiting for the writer to
 release locks to find quiescent points.
 
-There are downsides to this approach, compared to [shipping sqlite's WAL](https://litestream.io/).  I can think of these three:
+There are downsides to this approach, compared to [shipping sqlite's WAL](https://litestream.io/).
+There's an obvious trade-off regarding reliability and invasiveness:
+reading the WAL file from the outside is much less likely to break the
+main DB, but parsing the WAL to find new frames might result in broken
+recovery logs, and relying on sqlite's database open logic to apply
+WAL segments makes it harder to implement live read replication.
+Apart from that, I can think of three definite downsides:
 
 1. Writing to a db without using our replicating VFS will break
    everything
-2. Write transactions must fit in RAM.
+2. Write transactions must fit in RAM
 3. The classic rollback mode does not support concurrent readers
-   while a write is in flight.
+   while a write is in flight
 
 We can fix #1 by using a special on-disk format that will break the
 regular OS VFS, so that's not too much of an issue.  I'm not sure what
 I think of #2.  In practice, most sqlite *databases* comfortably fit
 in RAM...
 
-The last point is more subtle than it looks, because the WAL's mode
-support for readers while a write is in flight is not great: sqlite's
+The last point is more subtle than it looks, because the WAL mode's
+support for reads while a write is in flight is not great: sqlite's
 [WAL file can grow without bounds as long as a read transaction is open](https://www.sqlite.org/cgi/src/doc/wal2/doc/wal2.md).
-This failure mode can be surprising in production, and is particularly
+This behaviour can be surprising in production, and is particularly
 annoying when one independently ships a journal to persistent remote
 storage.
 
-Concurrent reads, at least on a given replica, are also irrelevant for
+Concurrent reads, at least on the write leader, are also irrelevant for
 the use case I'm interested in.  Backtrace's backend uses sqlite to
 store configuration data, and caches the database's contents as
 heap-allocated objects.  Concurrent readers access the latter
 in-memory object, which are synchronised more loosely and efficiently
-than sqlite.  Our primary reason for journaling writes to sqlite is
+than sqlite.  Our primary reason for journaling sqlite writes is
 fail-over; secondarily, we would like remote read-only replicas, but
 these concurrent readers wouldn't be visible to the writer's sqlite.
 
