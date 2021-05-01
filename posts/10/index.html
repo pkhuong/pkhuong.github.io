@@ -133,7 +133,7 @@ along with a
 has <a href="https://cs.uwaterloo.ca/research/tr/1995/50/CS95-50.pdf">long</a>
 been exploring the <a href="http://www2.math.uu.se/~svante/papers/sj297-aofa.pdf">distribution of displacements</a> (i.e., search times)
 for random elements.  The <a href="https://www3.cs.stonybrook.edu/~bender/newpub/BenderHu07-TODS.pdf">packed memory array</a> angle has also been around
-for <a href="https://www.cs.cmu.edu/~jcreed/p251-willard.pdf">a while</a>.<sup id="fnref:waterloo" role="doc-noteref"><a href="#fn:waterloo" class="footnote">1</a></sup></p>
+for <a href="https://www.cs.cmu.edu/~jcreed/p251-willard.pdf">a while</a>.<sup id="fnref:waterloo" role="doc-noteref"><a href="#fn:waterloo" class="footnote" rel="footnote">1</a></sup></p>
 
 <p>I’m a bit wary of the “random element” aspect of the linear probing
 bounds: while I’m comfortable with an expectation over the hash
@@ -142,7 +142,7 @@ could repeatedly ask for the same key, and consistently experience
 worse-than-expected performance.  I’m more interested in bounding the
 worst-case displacement (the distance between the ideal location for
 an element, and where it is actually located) across all values in a
-randomly generated<sup id="fnref:memory-less" role="doc-noteref"><a href="#fn:memory-less" class="footnote">2</a></sup> Robin Hood table, with high enough
+randomly generated<sup id="fnref:memory-less" role="doc-noteref"><a href="#fn:memory-less" class="footnote" rel="footnote">2</a></sup> Robin Hood table, with high enough
 probability.  That probability doesn’t have to be extremely high:
 \(p = 0.9\) or even \(p = 0.5\) is good enough, as long as we can
 either rehash with an independent hash function, or the probability of
@@ -338,7 +338,7 @@ for this case as well.</p>
 two-sided two-sample critical values we used earlier: given an
 overflow probability of \(1 - \alpha\), we need to buffer at most
 \(\sqrt{-\frac{n \ln \alpha}{2}},\) elements.  For 
-\(\alpha = 10\sp{-20}\) that’s less than \(4.8 \sqrt{n}\).<sup id="fnref:three-centuries" role="doc-noteref"><a href="#fn:three-centuries" class="footnote">3</a></sup>
+\(\alpha = 10\sp{-20}\) that’s less than \(4.8 \sqrt{n}\).<sup id="fnref:three-centuries" role="doc-noteref"><a href="#fn:three-centuries" class="footnote" rel="footnote">3</a></sup>
 This square root scaling is pretty good news in practice: shrinking
 \(n\) to \(\sqrt{n}\) tends to correspond to going down a rung or two in
 the storage hierarchy.  For example, \(10\sp{15}\) elements is

@@ -133,7 +133,7 @@ and the same with additional branch coverage feedback (“bts”, for Intel Bran
 
 <p>On average, knowing the grammar for Heartbeat requests lets Hypothesis find
 the vulnerability after 535 calls to OpenSSL;
-when we add branch coverage feedback, the average goes down to 473<sup id="fnref:realtime" role="doc-noteref"><a href="#fn:realtime" class="footnote">1</a></sup> calls, 11.5% faster.
+when we add branch coverage feedback, the average goes down to 473<sup id="fnref:realtime" role="doc-noteref"><a href="#fn:realtime" class="footnote" rel="footnote">1</a></sup> calls, 11.5% faster.
 The plot shows that,
 as long as we have time for more than 100 calls to OpenSSL,
 branch coverage information makes it more likely that Hypothesis will find Heartbleed
@@ -151,9 +151,9 @@ There’s a place for them, same as there is for manual QA testing… but their 
 
 <p>Here are the sort of things I want to know when I look at typical unit test code:</p>
 <ol>
-  <li>Why do we make this exact assertion; what makes a result acceptable?<sup id="fnref:matchers" role="doc-noteref"><a href="#fn:matchers" class="footnote">2</a></sup></li>
+  <li>Why do we make this exact assertion; what makes a result acceptable?<sup id="fnref:matchers" role="doc-noteref"><a href="#fn:matchers" class="footnote" rel="footnote">2</a></sup></li>
   <li>Why do we feed this or that input; what makes input data useful or interesting?</li>
-  <li>What is expected to change when I tweak the external behaviour of the system under test;<sup id="fnref:change-detector" role="doc-noteref"><a href="#fn:change-detector" class="footnote">3</a></sup> how are answers to the previous two questions encoded?</li>
+  <li>What is expected to change when I tweak the external behaviour of the system under test;<sup id="fnref:change-detector" role="doc-noteref"><a href="#fn:change-detector" class="footnote" rel="footnote">3</a></sup> how are answers to the previous two questions encoded?</li>
 </ol>
 
 <p>As programmers, I think it’s natural to say that,
@@ -323,7 +323,7 @@ Falsifying example: test_u64_block_bitmask(
 </code></pre>
 
 <p>Hypothesis finds the bug in a fraction of a second,
-but, more importantly, it then works harder to report a minimal counter-example.<sup id="fnref:unless-examples" role="doc-noteref"><a href="#fn:unless-examples" class="footnote">4</a></sup>
+but, more importantly, it then works harder to report a minimal counter-example.<sup id="fnref:unless-examples" role="doc-noteref"><a href="#fn:unless-examples" class="footnote" rel="footnote">4</a></sup>
 With all but the last mask set to 0,
 it’s easy to guess that we’re probably ignoring the value of
 the last mask (and maybe more), which would be why we found a bitmask of
@@ -506,7 +506,7 @@ This approach to defining the input data is decidedly non-magical,
 compared to the way I work with fuzzers.
 However, fuzzers also tend to be slow and somewhat fickle.
 I think it makes sense to ask programmers to think about how their own code should be tested,
-instead of hoping a computer program will eventually intuit what edge cases look like.<sup id="fnref:no-preconception" role="doc-noteref"><a href="#fn:no-preconception" class="footnote">5</a></sup></p>
+instead of hoping a computer program will eventually intuit what edge cases look like.<sup id="fnref:no-preconception" role="doc-noteref"><a href="#fn:no-preconception" class="footnote" rel="footnote">5</a></sup></p>
 
 <p>It’s pretty cool that Hypothesis will now generate a bunch of API calls for me, but,
 again, what makes Hypothesis really valuable is the way it
@@ -562,7 +562,7 @@ control:    UINT64_MAX - 2 (payload)    UINT64_MAX - 2 (sentinel)
 and convert to a heap-allocated vector whenever the row value would be interpreted as a sentinel,
 and now Hypothesis doesn’t find anything wrong.
 We also know that this specific failure is fixed,
-because Hypothesis retries examples from its <a href="https://hypothesis.readthedocs.io/en/latest/database.html">failure database</a><sup id="fnref:failure-in-ci" role="doc-noteref"><a href="#fn:failure-in-ci" class="footnote">6</a></sup> on every rerun.</p>
+because Hypothesis retries examples from its <a href="https://hypothesis.readthedocs.io/en/latest/database.html">failure database</a><sup id="fnref:failure-in-ci" role="doc-noteref"><a href="#fn:failure-in-ci" class="footnote" rel="footnote">6</a></sup> on every rerun.</p>
 
 <h3 id="but-hypothesis-is-a-python-library">But Hypothesis is a Python library?!</h3>
 <p>There are multiple language-specific libraries under the <a href="https://github.com/HypothesisWorks/hypothesis">Hypothesis project</a>;

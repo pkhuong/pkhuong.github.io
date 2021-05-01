@@ -202,7 +202,7 @@ and know that the multiplier will fit in a machine word.</p>
 <p>Let the absolute error on this approximation be
 \(\varepsilon = m/2\sp{s} - 1/d.\)
 The final truncation will be exact for any \(x \in \mathbb{Z}\)
-iff \(0 \leq \varepsilon x &lt; 1 - (x \mod d)/d,\)<sup id="fnref:you-know-what-i-mean" role="doc-noteref"><a href="#fn:you-know-what-i-mean" class="footnote">1</a></sup>
+iff \(0 \leq \varepsilon x &lt; 1 - (x \mod d)/d,\)<sup id="fnref:you-know-what-i-mean" role="doc-noteref"><a href="#fn:you-know-what-i-mean" class="footnote" rel="footnote">1</a></sup>
 which is always satisfied when
 \[0 \leq \varepsilon x &lt; \frac{1}{d} \Longleftrightarrow 0 \leq x &lt; \frac{1}{\varepsilon d}.\]</p>
 
@@ -250,7 +250,7 @@ and factor \(mx + m = m(x + 1)\) with a saturating increment.</p>
 along with their respective correctness conditions.
 The two approaches are complementary, in that each is more accurate when the other one introduces more approximation error.
 Let’s make sure we can always use one or the other with word-sized multipliers, 
-for any non-zero word-sized divisor \(d\) that is not a power of two.<sup id="fnref:po2-works" role="doc-noteref"><a href="#fn:po2-works" class="footnote">2</a></sup></p>
+for any non-zero word-sized divisor \(d\) that is not a power of two.<sup id="fnref:po2-works" role="doc-noteref"><a href="#fn:po2-works" class="footnote" rel="footnote">2</a></sup></p>
 
 <p>Given a constant non-power-of-two divisor \(d,\) \(0 &lt; d &lt; 2\sp{w} - 1,\)
 we’ll show that \(s = w + \lfloor \log\sb{2} d\rfloor\) only needs
@@ -355,7 +355,7 @@ but SBCL’s type propagation capabilities are more than sufficient.</p>
 <p>When targeting 64 bit machines, it seems like it would make sense to use 32 bit multiplications opportunistically.
 However, I’m mostly interested in x86-64,
 and <a href="https://www.agner.org/optimize/instruction_tables.pdf">Agner Fog’s tables</a> show that integer multiplications perform nearly identically, regardless of bitwidth
-(if anything, 32 bit multiplications are slower than 8 or 64 bit ones).<sup id="fnref:no-16-bit" role="doc-noteref"><a href="#fn:no-16-bit" class="footnote">3</a></sup>
+(if anything, 32 bit multiplications are slower than 8 or 64 bit ones).<sup id="fnref:no-16-bit" role="doc-noteref"><a href="#fn:no-16-bit" class="footnote" rel="footnote">3</a></sup>
 Any win will be on code size, but,
 if we can get away with an 8 or 32 bit constant,
 we can definitely use a round-up constant with \(s = 64.\)
@@ -377,7 +377,7 @@ and thus gets to use the bottom 4 bits of every word for type information.
 The stock configuration reserves one bit (all even bit patterns) for 63-bit signed “fixnums”,
 with the remaining 8 odd bit patterns shared between a few pointer types
 and small immediates like characters and single floats.
-In that configuration, the value \(3\) is represented as \(3\cdot 2 = 6.\)<sup id="fnref:32-bit-tag" role="doc-noteref"><a href="#fn:32-bit-tag" class="footnote">4</a></sup></p>
+In that configuration, the value \(3\) is represented as \(3\cdot 2 = 6.\)<sup id="fnref:32-bit-tag" role="doc-noteref"><a href="#fn:32-bit-tag" class="footnote" rel="footnote">4</a></sup></p>
 
 <p>SBCL also supports unboxed signed and unsigned integers,
 and does not have to use a boxed (tagged) representation for machine integers.
@@ -473,7 +473,7 @@ Otherwise, \(d &gt; 2,\) and
 which lets us weaken
 \[0 \leq x &lt; \frac{d\sb{1}-r\sb{\mathrm{max}}}{\varepsilon d\sb{1} d\sb{2}} \Longrightarrow 0 \leq x &lt; (2 \varepsilon d\sb{2})\sp{-1},\]
 which is still better than \((\varepsilon d\sb{1} d\sb{2})\sp{-1}\)
-and yields at least one extra bit of accuracy when \(d\sb{1} \neq 3.\)<sup id="fnref:what-if-d-eq-3" role="doc-noteref"><a href="#fn:what-if-d-eq-3" class="footnote">5</a></sup></p>
+and yields at least one extra bit of accuracy when \(d\sb{1} \neq 3.\)<sup id="fnref:what-if-d-eq-3" role="doc-noteref"><a href="#fn:what-if-d-eq-3" class="footnote" rel="footnote">5</a></sup></p>
 
 <p>In the other case,
 \(x = qd\sb{1} + r\) and (\(d\sb{1}/2 \leq r\sb{\mathrm{min}} \leq r &lt; d\sb{1}.\))

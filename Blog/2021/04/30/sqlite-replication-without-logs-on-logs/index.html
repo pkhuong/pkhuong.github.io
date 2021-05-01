@@ -1,0 +1,399 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Sqlite replication without logs on logs - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2021/04/30/sqlite-replication-without-logs-on-logs/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Sqlite replication without logs on logs</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+April
+  
+30th, 
+2021
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2021/04/30/sqlite-replication-without-logs-on-logs/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>When we use sqlite on a log-structured file system like ZFS, BTRFS, or
+F2FS that’s backed by a solid state drive, what actually happens is:
+sqlite emulates atomic file updates on top of POSIX file operations
+with a journal (undo or write-ahead log, for sqlite), the filesystem
+implements these in-places updates by appending to a log with a bunch
+of random-access writes that happen to be mostly sequential (in order
+to minimise write amplifications), and the SSD itself relies on a
+translation layer to implement that theoretically arbitrary write
+patterns as batched writes to the actual Flash physical medium.</p>
+
+<p>This <a href="https://www.usenix.org/conference/inflow14/workshop-program/presentation/yang">log stacking antipattern</a>
+increases the write pressure on the final Flash chips, and
+generally wastes performance potential.</p>
+
+<p>Obviously, this is an interface design problem: both the filesystem
+and the storage device expose interfaces that simultaneously do not
+match the best way to work with the underlying implementation, and
+does not expose useful functionality afforded by that
+implementation.<sup id="fnref:expressive-power" role="doc-noteref"><a href="#fn:expressive-power" class="footnote" rel="footnote">1</a></sup> This happens a lot with storage,
+and it’s not a bad approach: storage moves slowly because losing data
+can be catastrophic and both filesystems and devices stick around for
+a long time, so it’s better to make a new filesystem or storage medium
+present the same interface as older implementations, and only think
+about extending or replacing that legacy interface once the new
+implementations have proven themselves in production.  There’s also a
+history of exciting interfaces that end up overfitting on contemporary
+designs, and become obsolete after a couple years.  The storage
+community has learned to be conservative with interfaces across layers
+(application, filesystem, device), and I think that’s a reasonable
+approach.</p>
+
+<p>In 2017, the F2FS (flash-friendly) filesystem introduced such 
+<a href="http://esos.hanyang.ac.kr/files/publication/conferences/international/HPCCT2016-108_final.pdf">an extension for applications that need atomic batch updates</a>,
+e.g., Android apps that store data with sqlite.  Using this extension in
+sqlite’s <a href="https://sqlite.org/atomiccommit.html">classic rollback journal mode</a>
+resulted in <em>higher performance than even the WAL mode</em>, as
+long as the rollback journal remained in memory.  That was good enough
+for upstream sqlite to widen its VFS interface with markers
+that bracket <a href="https://www.sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntlbeginatomicwrite">atomic batches of writes</a>.</p>
+
+<p>When the VFS promises it can commit <em>batches</em> of writes atomically,
+sqlite’s rollback-based (non-WAL) commit logic will not persist
+a rollback journal to disk, and instead commit its buffered updates
+as a single atomic batch.</p>
+
+<p>One way to implement that functionality is to actually use a
+filesystem that exposes transaction fcntls.  Another option would be
+to emulate transactions with a temporary (unlinked) file and
+<a href="https://lwn.net/Kernel/Index/#reflink">copy-on-write reflinks</a>.</p>
+
+<p>However, there’s an approach that extends the range of applications
+that might use sqlite: with asynchronous streaming replication, we can
+provide durability for write batches by sending them over the network.
+Building on top of sqlite’s native support for VFS write transactions
+makes our lives simpler (just write a shim VFS), and means sqlite
+won’t waste time maintaining its own journal.  Asynchronous replication
+gets us the ability to fail-over from one designated active node to
+another without blocking (most) writes.</p>
+
+<p>In fact, we could probably even support
+<a href="https://sqlite.org/lockingv3.html">cross-data base transactions</a>,
+unlike sqlite’s native WAL mode, by waiting for the writer to
+release locks to find quiescent points.</p>
+
+<p>There are downsides to this approach, compared to <a href="https://litestream.io/">shipping sqlite’s WAL</a>.  I can think of these three:</p>
+
+<ol>
+  <li>Writing to a db without using our replicating VFS will break
+everything</li>
+  <li>Write transactions must fit in RAM.</li>
+  <li>The classic rollback mode does not support concurrent readers
+while a write is in flight.</li>
+</ol>
+
+<p>We can fix #1 by using a special on-disk format that will break the
+regular OS VFS, so that’s not too much of an issue.  I’m not sure what
+I think of #2.  In practice, most sqlite <em>databases</em> comfortably fit
+in RAM…</p>
+
+<p>The last point is more subtle than it looks, because the WAL’s mode
+support for readers while a write is in flight is not great: sqlite’s
+<a href="https://www.sqlite.org/cgi/src/doc/wal2/doc/wal2.md">WAL file can grow without bounds as long as a read transaction is open</a>.
+This failure mode can be surprising in production, and is particularly
+annoying when one independently ships a journal to persistent remote
+storage.</p>
+
+<p>Concurrent reads, at least on a given replica, are also irrelevant for
+the use case I’m interested in.  Backtrace’s backend uses sqlite to
+store configuration data, and caches the database’s contents as
+heap-allocated objects.  Concurrent readers access the latter
+in-memory object, which are synchronised more loosely and efficiently
+than sqlite.  Our primary reason for journaling writes to sqlite is
+fail-over; secondarily, we would like remote read-only replicas, but
+these concurrent readers wouldn’t be visible to the writer’s sqlite.</p>
+
+<p>In fact, if I did need concurrent reads, I’d probably consider a
+dedicated write connection with concurrent reads service from
+read-only replicas backed by the replicating VFS’s journal.</p>
+
+<p>Allowing multiple threads to try and write to sqlite is also a bad
+idea: while multiple write transactions may be open at the same time,
+only the fastest one can actually commit writes, and all others will
+fail (fast) to upgrade, due to the potential write conflict. We can
+avoid that by opening all write transactions in <code>IMMEDIATE</code> or
+<code>EXCLUSIVE</code> mode, but I think it makes more sense to handle write
+ownership in the application, with a dedicated write connection, if
+not a dedicated write thread.  Handling write exclusion at the
+connection level also makes it easier to eventually support replicated
+writes from multiple machines (only one connection can hold the
+networked write lock at any one time).</p>
+
+<p>If we service read-only connections from read-only snapshots of the
+database, the data will eventually grow stale.  However, opening and
+closing a connection to a sqlite database is <em>fast</em> (just some local
+filesystem operations, except for potential hiccups in WAL mode), so
+connection pools aren’t that useful.  This makes it practical to
+regularly a new connection with a fresh replica, e.g., whenever a
+worker services a read-only request.  That gives us the same guarantee
+as WAL readers that open a transaction for each request.</p>
+
+<h2 id="implementation-plan">Implementation plan</h2>
+
+<p>Let’s start with the simple case of single-threaded access to one
+database (no cross-database transaction) with streaming replication:
+that suffices for a high availability backend for a low-traffic
+configuration sqlite database.</p>
+
+<p>We can create a shim VFS that delegates everything to the regular OS
+VFS.  We know we only need to replicate the main database file, since
+the rollback journal is replaced by VFS-level transactions.  However,
+we still have to handle regular writes to the main database file that
+aren’t bracketed by batch begin/commit/abort markers.</p>
+
+<p>We’ll handle these regular writes as trivial atomic batches of one,
+and inform sqlite that individual writes of any size are atomic.</p>
+
+<p>When committing an atomic batch (trivial or otherwise), we can either
+first perform the writes to the database file, and then log them
+asynchronously, or log the writes before actually updating the local
+snapshot.</p>
+
+<p>We’re using streaming replication because we’re OK with losing recent
+data in the event of a crash, as long as we can find a valid snapshot,
+so I think it’s fine to write first.  If we have to roll back or
+there’s a crash in the middle of a write transaction, we’ll just have
+to replay the replication stream.  These should be exceedingly rare
+events, so it makes sense to optimise for the case when the commit
+succeeds.</p>
+
+<p>Since we write before logging, we can use the local database file as a
+buffer for the replication stream, and only send byte to the
+replication code.  However, this also means that we mustn’t overwrite
+pages that are still being used as buffers.  We can start by blocking
+when in <code>BEGIN_ATOMIC_WRITE</code> until all data has been read from the database
+file into the replication stream.  Later, maybe we’ll want to be smarter
+about write sets and block in individual writes.</p>
+
+<p>TL;DR: we can implement plain physical replication in a VFS, and have
+sqlite inform the VFS of transaction boundaries instead of wasting IO
+on journaling.</p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:expressive-power" role="doc-endnote">
+      <p>Random access to arbitrary sectors is a minimal interface to implement everything else, but it doesn’t let the filesystem inform the device of its goal with all these writes, so the end result is less than ideal. <a href="#fnref:expressive-power" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+April
+  
+30th, 
+2021
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2021/01/11/stuff-your-logs/" title="Previous Post: Stuff your logs!">&laquo; Stuff your logs!</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2021 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2021/04/30/sqlite-replication-without-logs-on-logs/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2021/04/30/sqlite-replication-without-logs-on-logs/';
+      this.page.title = 'Sqlite replication without logs on logs';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>

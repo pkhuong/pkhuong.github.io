@@ -4,7 +4,7 @@
   <title><![CDATA[Category: AsymmetricSynchronisation | Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/Blog/categories/asymmetricsynchronisation/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2021-04-16T16:43:26-04:00</updated>
+  <updated>2021-05-01T12:57:07-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -21,14 +21,14 @@
     <content type="html"><![CDATA[<p><small>2020-07-09: we can fix <a href="#hp_read_swf-relaxed">time-travel in <code>hp_read_swf</code></a> without changing the fast path. See <a href="#addendum-2020-07-09">the addendum</a>.</small></p>
 
 <p>Back in February 2020, Blelloch and Wei submitted this cool preprint: <a href="https://arxiv.org/abs/2002.07053">Concurrent Reference Counting and Resource Management in Wait-free Constant Time</a>.
-Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also" role="doc-noteref"><a href="#fn:but-also" class="footnote">1</a></sup>
-<a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">Safe memory reclamation (PDF)</a> is a key component in lock-free algorithms when garbage collection isn’t an option,<sup id="fnref:it-is-gc" role="doc-noteref"><a href="#fn:it-is-gc" class="footnote">2</a></sup>
+Their work mostly caught my attention because they propose a wait-free implementation of hazard pointers for safe memory reclamation.<sup id="fnref:but-also" role="doc-noteref"><a href="#fn:but-also" class="footnote" rel="footnote">1</a></sup>
+<a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">Safe memory reclamation (PDF)</a> is a key component in lock-free algorithms when garbage collection isn’t an option,<sup id="fnref:it-is-gc" role="doc-noteref"><a href="#fn:it-is-gc" class="footnote" rel="footnote">2</a></sup>
 and <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">hazard pointers (PDF)</a> let us bound the amount of resources stranded by delayed cleanups much more tightly than, e.g., <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf">epoch reclamation (PDF)</a>.
 However the usual implementation has a <em>loop</em> in its <a href="https://www.iecc.com/gclist/GC-algorithms.html">read barriers (in the garbage collection sense)</a>,
 which can be annoying for code generation and bad for worst-case time bounds.</p>
 
 <p>Blelloch and Wei’s wait-free algorithm eliminates that loop… with a construction that stacks <a href="https://arxiv.org/abs/1911.09671">two emulated primitives—strong LL/SC, and atomic copy, implemented with the former—</a>on top of what real hardware offers.
-I see the real value of the construction in proving that wait-freedom is achievable,<sup id="fnref:not-obvious" role="doc-noteref"><a href="#fn:not-obvious" class="footnote">3</a></sup>
+I see the real value of the construction in proving that wait-freedom is achievable,<sup id="fnref:not-obvious" role="doc-noteref"><a href="#fn:not-obvious" class="footnote" rel="footnote">3</a></sup>
 and that the key is atomic memory-memory copies.</p>
 
 <p>In this post, I’ll show how to flatten down that abstraction tower into something practical with a bit of engineering elbow grease,
@@ -55,22 +55,22 @@ The introduction includes a concise explanation of the safe memory reclamation (
 once all links to these resources have been removed from that data structure (<a href="http://concurrencykit.org/presentations/ebr.pdf#page=8">after “logical deletion”</a>).
 The problem makes intuitive sense for dynamically managed memory,
 but it applies equally well to any resource (e.g., file descriptors),
-and its solutions can even be seen as extremely read-optimised reader/writer locks.<sup id="fnref:RCU" role="doc-noteref"><a href="#fn:RCU" class="footnote">4</a></sup></p>
+and its solutions can even be seen as extremely read-optimised reader/writer locks.<sup id="fnref:RCU" role="doc-noteref"><a href="#fn:RCU" class="footnote" rel="footnote">4</a></sup></p>
 
 <p>The basic idea behind Hazard Pointers is to have
-each thread publish to permanently allocated<sup id="fnref:stable-alloc" role="doc-noteref"><a href="#fn:stable-alloc" class="footnote">5</a></sup> hazard pointer records (HP records) the set of resources (pointers) it’s temporarily borrowing from a lock-free data structure.
+each thread publish to permanently allocated<sup id="fnref:stable-alloc" role="doc-noteref"><a href="#fn:stable-alloc" class="footnote" rel="footnote">5</a></sup> hazard pointer records (HP records) the set of resources (pointers) it’s temporarily borrowing from a lock-free data structure.
 That’s enough information for a background thread to snapshot the current list of resources that have been logically deleted but not yet physically released (the limbo list),
 scan all records for all threads,
 and physically release all resources in the snapshot that aren’t in any HP record.</p>
 
 <p>With just enough batching of the limbo list, this scheme can be practical:
 in practice, lock-free algorithms only need to pin a few (usually one or two) nodes at a time to ensure memory safety.  As long as we avoid running arbitrary code while holding hazardous references, we can bound the number of records each thread may need at any one time.
-Scanning the records thus takes time roughly linear in the number of active threads, and we can amortise that to constant time per deleted item by waiting until the size of the limbo list is greater than a multiple of the number of active threads.<sup id="fnref:even-with-pinned-nodes" role="doc-noteref"><a href="#fn:even-with-pinned-nodes" class="footnote">6</a></sup></p>
+Scanning the records thus takes time roughly linear in the number of active threads, and we can amortise that to constant time per deleted item by waiting until the size of the limbo list is greater than a multiple of the number of active threads.<sup id="fnref:even-with-pinned-nodes" role="doc-noteref"><a href="#fn:even-with-pinned-nodes" class="footnote" rel="footnote">6</a></sup></p>
 
 <p>The tricky bit is figuring out how to reliably publish to a HP record without locking.
 Hazard pointers simplify that challenge with three observations:</p>
 <ol>
-  <li>It’s OK to have arbitrary garbage in a record (let’s disregard language-level<sup id="fnref:or-hw-level" role="doc-noteref"><a href="#fn:or-hw-level" class="footnote">7</a></sup> undefined behaviour), since protected values are only ever subtracted from the limbo list: a garbage record simply doesn’t protect anything.</li>
+  <li>It’s OK to have arbitrary garbage in a record (let’s disregard language-level<sup id="fnref:or-hw-level" role="doc-noteref"><a href="#fn:or-hw-level" class="footnote" rel="footnote">7</a></sup> undefined behaviour), since protected values are only ever subtracted from the limbo list: a garbage record simply doesn’t protect anything.</li>
   <li>It’s also OK to leave a false positive in a record: correctness arguments for hazard pointers already assume each record keeps a different node (resource) alive, and that’s the worst case.</li>
   <li>1 and 2 mean it doesn’t matter what pinned value we read in a record whose last update was started after we snapshotted the limbo list: resources in the limbo list are unreachable, so freshly pinned resources can’t refer to anything in the snapshot.</li>
 </ol>
@@ -78,7 +78,7 @@ Hazard pointers simplify that challenge with three observations:</p>
 <p>This is where the clever bit of hazard pointers comes in:
 we must make sure that any resource (pointer to a node, etc.) we borrow from a lock-free data structure is immediately protected by a HP record.
 We can’t make two things happen atomically without locking.
-Instead, we’ll <em>guess</em><sup id="fnref:guessing-is-fine" role="doc-noteref"><a href="#fn:guessing-is-fine" class="footnote">8</a></sup> what resource we will borrow,
+Instead, we’ll <em>guess</em><sup id="fnref:guessing-is-fine" role="doc-noteref"><a href="#fn:guessing-is-fine" class="footnote" rel="footnote">8</a></sup> what resource we will borrow,
 publish that guess,
 and then actually borrow the resource.
 If we guessed correctly, we can immediately use the borrowed resource;
@@ -106,7 +106,7 @@ record that will protect the value borrowed from <code>cell</code>.</p>
 </span><span class="line">            <span class="k">return</span> <span class="n">guess</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>In practice, we must make sure that our write to <code>record.pin</code> is visible before re-reading the <code>cell</code>’s value, and we should also make sure the pointer read is ordered with respect to the rest of the calling read-side code.<sup id="fnref:beware-accidental-success" role="doc-noteref"><a href="#fn:beware-accidental-success" class="footnote">9</a></sup></p>
+<p>In practice, we must make sure that our write to <code>record.pin</code> is visible before re-reading the <code>cell</code>’s value, and we should also make sure the pointer read is ordered with respect to the rest of the calling read-side code.<sup id="fnref:beware-accidental-success" role="doc-noteref"><a href="#fn:beware-accidental-success" class="footnote" rel="footnote">9</a></sup></p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>hp_read_explicit.py </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -171,7 +171,7 @@ resource only enters the limbo list once <em>all</em> its persistent
 references have been cleared (in particular, this means circular
 backreferences must be broken before scheduling a node for
 destruction), so any newly pinned value cannot refer to any resource
-awaiting destruction in the limbo list.<sup id="fnref:DEBRA-plus" role="doc-noteref"><a href="#fn:DEBRA-plus" class="footnote">10</a></sup></p>
+awaiting destruction in the limbo list.<sup id="fnref:DEBRA-plus" role="doc-noteref"><a href="#fn:DEBRA-plus" class="footnote" rel="footnote">10</a></sup></p>
 
 <p>The following sequence diagrams shows how the fencing guarantees that any
 iteration of <code>hp_read_explicit</code> will fail if it starts before <code>C1</code>
@@ -184,7 +184,7 @@ when it reads the record in <code>C2</code>.</p>
     <img src="/images/2020-07-07-flatter-wait-free-hazard-pointers/fenced-hp.png" />
 </a></p>
 
-<p>This all works, but it’s slow:<sup id="fnref:travis-says-its-fine" role="doc-noteref"><a href="#fn:travis-says-its-fine" class="footnote">11</a></sup> we added an <em>atomic</em> write instruction (or worse, a fence) to a read-only operation.  We can do better with a little help from our operating system.</p>
+<p>This all works, but it’s slow:<sup id="fnref:travis-says-its-fine" role="doc-noteref"><a href="#fn:travis-says-its-fine" class="footnote" rel="footnote">11</a></sup> we added an <em>atomic</em> write instruction (or worse, a fence) to a read-only operation.  We can do better with a little help from our operating system.</p>
 
 <h2 id="injecting-fences-with-os-support">Injecting fences with OS support</h2>
 
@@ -213,7 +213,7 @@ Windows has <a href="https://docs.microsoft.com/en-us/windows/win32/api/processt
 on other operating systems, we can probably <a href="https://github.com/pkhuong/barrierd">do something useful with scheduler statistics</a> or ask for a new syscall.</p>
 
 <p>Armed with these new blocking system calls, we can replace the store-load fence in <code>R1</code> with a compiler barrier, and execute a slow <code>membarrier</code>/<code>FlushProcessWriteBuffers</code> after <code>C1</code>.
-The cleanup function will then wait long enough<sup id="fnref:arguably-lock-ful" role="doc-noteref"><a href="#fn:arguably-lock-ful" class="footnote">12</a></sup> to ensure that any
+The cleanup function will then wait long enough<sup id="fnref:arguably-lock-ful" role="doc-noteref"><a href="#fn:arguably-lock-ful" class="footnote" rel="footnote">12</a></sup> to ensure that any
 read-side operation that had executed before <code>R1</code> at the time we read the limbo list in <code>C1</code> will be visible (e.g., because the operating system knows a preemption interrupt executed at least once on each core).</p>
 
 <p>The pseudocode for this asymmetric strategy follows.</p>
@@ -751,7 +751,7 @@ pointers without crashing.  One might think mutual exclusion in the
 cleanup function fixes that, but programs often mix and match
 different reclamation schemes, as well as lock-free and lock-ful code.
 On Linux, we could
-abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;<sup id="fnref:no-guarantees" role="doc-noteref"><a href="#fn:no-guarantees" class="footnote">13</a></sup>
+abuse <a href="https://man7.org/linux/man-pages/man2/process_vm_readv.2.html">the <code>process_vm_readv</code> syscall</a>;<sup id="fnref:no-guarantees" role="doc-noteref"><a href="#fn:no-guarantees" class="footnote" rel="footnote">13</a></sup>
 in general I suppose we could install signal handlers to catch <code>SIGSEGV</code> and <code>SIGBUS</code>.</p>
 
 <div id="hp_read_swf-relaxed"></div>
@@ -772,7 +772,7 @@ the hazard pointer implementation is technically correct.  However,
 this scenario shows that <code>hp_read_swf</code> can violate memory ordering and
 causality, and even let long-overwritten values time travel into the future.  The
 simpler read-side code sequence comes at a cost: its load is extremely
-relaxed, much more so than any intuitive mental model might allow.<sup id="fnref:hybrid-swf" role="doc-noteref"><a href="#fn:hybrid-swf" class="footnote">14</a></sup></p>
+relaxed, much more so than any intuitive mental model might allow.<sup id="fnref:hybrid-swf" role="doc-noteref"><a href="#fn:hybrid-swf" class="footnote" rel="footnote">14</a></sup></p>
 
 <p>EDIT 2020-07-09: However, see <a href="#addendum-2020-07-09">this addendum</a> for a way to fix that race
 without affecting the fast (read) path.</p>
@@ -988,7 +988,7 @@ from realistic (if I found an inner loop that <em>only</em> traversed a
 singly linked list, I’d consider a different data structure), but helps
 establish an upper bound on the overhead from different hazard pointer
 read sides.  I would usually show a faceted graph of the latency
-distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen" role="doc-noteref"><a href="#fn:did-not-randomize-codegen" class="footnote">15</a></sup>
+distribution for the various methods… but the results are so stable<sup id="fnref:did-not-randomize-codegen" role="doc-noteref"><a href="#fn:did-not-randomize-codegen" class="footnote" rel="footnote">15</a></sup>
 that I doubt there’s any additional information to be found in the graphs,
 compared to the tables below.</p>
 
@@ -1629,7 +1629,7 @@ That question can’t be answered with the memory model, and worst-case
 execution time bounds are a joke on contemporary x86.</p>
 
 <p>I found an answer by remembering that <code>IRET</code>, the instruction used to
-return from interrupt handlers, <a href="https://www.felixcloutier.com/x86/IRET:IRETD.html">is a full barrier</a>.<sup id="fnref:model-ooe" role="doc-noteref"><a href="#fn:model-ooe" class="footnote">1</a></sup>
+return from interrupt handlers, <a href="https://www.felixcloutier.com/x86/IRET:IRETD.html">is a full barrier</a>.<sup id="fnref:model-ooe" role="doc-noteref"><a href="#fn:model-ooe" class="footnote" rel="footnote">1</a></sup>
 We also know that interrupts happen at frequent and regular intervals,
 if only for the preemption timer (every 4-10ms on stock Linux/x86oid).</p>
 
@@ -1939,7 +1939,7 @@ observe the timestamp update from a different core than the updater,
 in which case TSO saves us, or after the handler has returned with a
 serialising IRET.</p>
 
-<p>We can bundle all that logic in a <a href="https://github.com/pkhuong/barrierd/blob/master/signal.ebpf.inc">short eBPF program</a>.<sup id="fnref:ebpf" role="doc-noteref"><a href="#fn:ebpf" class="footnote">2</a></sup>
+<p>We can bundle all that logic in a <a href="https://github.com/pkhuong/barrierd/blob/master/signal.ebpf.inc">short eBPF program</a>.<sup id="fnref:ebpf" role="doc-noteref"><a href="#fn:ebpf" class="footnote" rel="footnote">2</a></sup>
 The program has a map of thread-local arrays (of 1 CLOCK_MONOTONIC
 timestamp each), a map of perf event queues (one per CPU), and an
 array of 1 “watermark” timestamp.  Whenever the program runs, it gets
@@ -2036,7 +2036,7 @@ membarrier (<code>IPI</code>) is usually slightly faster than <code>mprotect</co
 <p>The performance of IPI-based barriers should be roughly independent of
 system load. However, we did observe a slowdown for expedited
 membarrier (between \(68.4-73.0\%\) of the time, 
-\(p &lt; 10\sp{-12}\) according to a binomial test<sup id="fnref:CSM" role="doc-noteref"><a href="#fn:CSM" class="footnote">3</a></sup>) on the same 
+\(p &lt; 10\sp{-12}\) according to a binomial test<sup id="fnref:CSM" role="doc-noteref"><a href="#fn:CSM" class="footnote" rel="footnote">3</a></sup>) on the same 
 4-way system, when all CPUs were running CPU-intensive code at low
 priority.  In this second experiment, we have a sample size of one
 million observations for each method, and the worst case for <code>IPI</code> via
@@ -2268,12 +2268,12 @@ that the preemption can be observed. It’s a
 <a href="http://fare.tunes.org/tmp/emergent/pclsr.htm">PCLSRing</a> issue! Even
 Unices guarantee programmers won’t observe a thread in the middle of a
 syscall: when a thread (process) must be interrupted, any pending
-syscall either runs to completion, or returns with an error<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote">1</a></sup>.
+syscall either runs to completion, or returns with an error<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote" rel="footnote">1</a></sup>.
 What we need is a similar guarantee for steps of our own
-non-blocking protocols<sup id="fnref:sun" role="doc-noteref"><a href="#fn:sun" class="footnote">2</a></sup>.</p>
+non-blocking protocols<sup id="fnref:sun" role="doc-noteref"><a href="#fn:sun" class="footnote" rel="footnote">2</a></sup>.</p>
 
 <p>Hardware transactional memory kind of solves the problem
-(preemption aborts any pending transaction) but is a bit slow<sup id="fnref:a" role="doc-noteref"><a href="#fn:a" class="footnote">3</a></sup>, and
+(preemption aborts any pending transaction) but is a bit slow<sup id="fnref:a" role="doc-noteref"><a href="#fn:a" class="footnote" rel="footnote">3</a></sup>, and
 needs a fallback mechanism. Other emulation schemes for PCLSRing
 userspace code divide the problem in two:</p>
 
@@ -2282,7 +2282,7 @@ userspace code divide the problem in two:</p>
 critical section.</li>
   <li>Guaranteeing that that other thread will not blindly resume
 executing its critical section (i.e., knowing that the thread knows
-that we know it’s been interrupted<sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote">4</a></sup>).</li>
+that we know it’s been interrupted<sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote" rel="footnote">4</a></sup>).</li>
 </ol>
 
 <p>The first part is relatively easy. For per-CPU data, it suffices to
@@ -2298,7 +2298,7 @@ scheduling information in <a href="http://man7.org/linux/man-pages/man5/proc.5.h
 will rarely, but not never, drop interrupts when I used it to
 “profile” context switches, and signaling when we determine that
 the holder has been pre-empted has memory visibility issues for
-per-CPU data<sup id="fnref:3" role="doc-noteref"><a href="#fn:3" class="footnote">5</a></sup>.</p>
+per-CPU data<sup id="fnref:3" role="doc-noteref"><a href="#fn:3" class="footnote" rel="footnote">5</a></sup>.</p>
 
 <p>Until earlier this month, the best known solution on mainline Linux
 involved <em>cross-modifying code</em>! When a CPU executes a memory write
@@ -2367,7 +2367,7 @@ the functionality, they can update to 4.18, or backport the feature.</p>
 <span class="line-number">19</span>
 <span class="line-number">20</span>
 <span class="line-number">21</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">static</span> <span class="k">const</span> <span class="kt">char</span> <span class="n">values</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="sc">&#39;X&#39;</span><span class="p">,</span> <span class="sc">&#39;Y&#39;</span> <span class="p">};</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">static</span> <span class="k">const</span> <span class="kt">char</span> <span class="n">values</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="sc">&#39;X&#39;</span><span class="p">,</span> <span class="sc">&#39;Y&#39;</span> <span class="p">};</span>
 </span><span class="line">
 </span><span class="line"><span class="k">static</span> <span class="kt">char</span>
 </span><span class="line"><span class="nf">read_value</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
@@ -2412,7 +2412,7 @@ switching by poking around segment registers.</p>
 
 <p>After learning about this <a href="http://lackingrhoticity.blogspot.com/2018/01/observing-interrupts-from-userland-on-x86.html">trick to observe interrupts from userland</a>,
 I decided to do a close reading of Linux’s task switching code on
-x86-64 and eventually found <a href="https://elixir.bootlin.com/linux/v4.18/source/arch/x86/kernel/process_64.c#L174">this interesting comment</a><sup id="fnref:4" role="doc-noteref"><a href="#fn:4" class="footnote">6</a></sup>.</p>
+x86-64 and eventually found <a href="https://elixir.bootlin.com/linux/v4.18/source/arch/x86/kernel/process_64.c#L174">this interesting comment</a><sup id="fnref:4" role="doc-noteref"><a href="#fn:4" class="footnote" rel="footnote">6</a></sup>.</p>
 
 <p>Observing a value of <code>0</code> in the <code>FS</code> or <code>GS</code> registers can mean
 two things:</p>
@@ -2519,7 +2519,7 @@ is already taken by <code>glibc</code> to implement thread-local storage).</p>
 <span class="line-number">63</span>
 <span class="line-number">64</span>
 <span class="line-number">65</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define RUN_ME </span><span class="cm">/*</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cp">#define RUN_ME </span><span class="cm">/*</span>
 </span><span class="line"><span class="cm">gcc-6 -std=gnu99 $0 -o h4x &amp;&amp; ./h4x; exit $?;</span>
 </span><span class="line">
 </span><span class="line"><span class="cm">Should output</span>
@@ -2527,13 +2527,13 @@ is already taken by <code>glibc</code> to implement thread-local storage).</p>
 </span><span class="line"><span class="cm">Re-reads: XYX</span>
 </span><span class="line"><span class="cm">*/</span><span class="cp"></span>
 </span><span class="line"><span class="cp">#define _GNU_SOURCE</span>
-</span><span class="line"><span class="cp">#include &lt;asm/prctl.h&gt;</span>
-</span><span class="line"><span class="cp">#include &lt;assert.h&gt;</span>
-</span><span class="line"><span class="cp">#include &lt;stdint.h&gt;</span>
-</span><span class="line"><span class="cp">#include &lt;stdio.h&gt;</span>
-</span><span class="line"><span class="cp">#include &lt;sys/prctl.h&gt;</span>
-</span><span class="line"><span class="cp">#include &lt;sys/syscall.h&gt;</span>
-</span><span class="line"><span class="cp">#include &lt;unistd.h&gt;</span>
+</span><span class="line"><span class="cp">#include</span> <span class="cpf">&lt;asm/prctl.h&gt;</span><span class="cp"></span>
+</span><span class="line"><span class="cp">#include</span> <span class="cpf">&lt;assert.h&gt;</span><span class="cp"></span>
+</span><span class="line"><span class="cp">#include</span> <span class="cpf">&lt;stdint.h&gt;</span><span class="cp"></span>
+</span><span class="line"><span class="cp">#include</span> <span class="cpf">&lt;stdio.h&gt;</span><span class="cp"></span>
+</span><span class="line"><span class="cp">#include</span> <span class="cpf">&lt;sys/prctl.h&gt;</span><span class="cp"></span>
+</span><span class="line"><span class="cp">#include</span> <span class="cpf">&lt;sys/syscall.h&gt;</span><span class="cp"></span>
+</span><span class="line"><span class="cp">#include</span> <span class="cpf">&lt;unistd.h&gt;</span><span class="cp"></span>
 </span><span class="line">
 </span><span class="line"><span class="k">static</span> <span class="k">const</span> <span class="kt">char</span> <span class="n">values</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="sc">&#39;X&#39;</span><span class="p">,</span> <span class="sc">&#39;Y&#39;</span> <span class="p">};</span>
 </span><span class="line">
@@ -2549,7 +2549,7 @@ is already taken by <code>glibc</code> to implement thread-local storage).</p>
 </span><span class="line"><span class="k">static</span> <span class="kt">void</span>
 </span><span class="line"><span class="nf">set_gs</span><span class="p">(</span><span class="kt">unsigned</span> <span class="kt">short</span> <span class="n">value</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
-</span><span class="line">        <span class="n">asm</span> <span class="k">volatile</span><span class="p">(</span><span class="s">&quot;movw %0, %%gs&quot;</span> <span class="o">::</span> <span class="s">&quot;r&quot;</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="o">:</span> <span class="s">&quot;memory&quot;</span><span class="p">);</span>
+</span><span class="line">        <span class="k">asm</span> <span class="k">volatile</span><span class="p">(</span><span class="s">&quot;movw %0, %%gs&quot;</span> <span class="o">::</span> <span class="s">&quot;r&quot;</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="o">:</span> <span class="s">&quot;memory&quot;</span><span class="p">);</span>
 </span><span class="line"><span class="p">}</span>
 </span><span class="line">
 </span><span class="line"><span class="cm">/* Read gs:values[0]. */</span>
@@ -2882,16 +2882,16 @@ is a 64 bit spinlock.</p>
 <span class="line-number">9</span>
 <span class="line-number">10</span>
 <span class="line-number">11</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">typedef</span> <span class="k">union</span> <span class="n">rlock_owner_seq</span> <span class="p">{</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">typedef</span> <span class="k">union</span> <span class="n">rlock_owner_seq</span> <span class="p">{</span>
 </span><span class="line">        <span class="kt">uint64_t</span> <span class="n">bits</span><span class="p">;</span>
 </span><span class="line">        <span class="k">struct</span> <span class="p">{</span>
 </span><span class="line">                <span class="kt">uint64_t</span> <span class="nl">sequence</span><span class="p">:</span><span class="mi">22</span><span class="p">;</span>
 </span><span class="line">                <span class="kt">uint64_t</span> <span class="nl">address</span><span class="p">:</span><span class="mi">42</span><span class="p">;</span>
 </span><span class="line">        <span class="p">};</span>
-</span><span class="line"><span class="p">}</span> <span class="kt">rlock_owner_seq_t</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span> <span class="n">rlock_owner_seq_t</span><span class="p">;</span>
 </span><span class="line">
 </span><span class="line"><span class="k">struct</span> <span class="n">rlock</span> <span class="p">{</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">owner</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">owner</span><span class="p">;</span>
 </span><span class="line"><span class="p">};</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
@@ -2922,9 +2922,9 @@ is a 64 bit spinlock.</p>
 <span class="line-number">14</span>
 <span class="line-number">15</span>
 <span class="line-number">16</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">struct</span> <span class="n">rlock_owner</span> <span class="p">{</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">struct</span> <span class="n">rlock_owner</span> <span class="p">{</span>
 </span><span class="line">        <span class="cm">/* SPMC. */</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">;</span>
 </span><span class="line">        <span class="cm">/* MPMC: Asked to cancel up to here (inclusively). */</span>
 </span><span class="line">        <span class="kt">uint32_t</span> <span class="n">cancel_sequence</span><span class="p">;</span>
 </span><span class="line">        <span class="cm">/* MPMC: Signaled to cancel up to here (inclusively). */</span>
@@ -2982,10 +2982,10 @@ means making sure we observe any cancellation request.</p>
 <span class="line-number">31</span>
 <span class="line-number">32</span>
 <span class="line-number">33</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">bool</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">static</span> <span class="kr">inline</span> <span class="kt">bool</span>
 </span><span class="line"><span class="nf">update_self</span><span class="p">(</span><span class="k">struct</span> <span class="n">rlock_owner</span> <span class="o">*</span><span class="n">self</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">snapshot</span> <span class="o">=</span> <span class="p">{</span> <span class="p">.</span><span class="n">bits</span> <span class="o">=</span> <span class="n">self</span><span class="o">-&gt;</span><span class="n">seq</span><span class="p">.</span><span class="n">bits</span> <span class="p">};</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">snapshot</span> <span class="o">=</span> <span class="p">{</span> <span class="p">.</span><span class="n">bits</span> <span class="o">=</span> <span class="n">self</span><span class="o">-&gt;</span><span class="n">seq</span><span class="p">.</span><span class="n">bits</span> <span class="p">};</span>
 </span><span class="line">        <span class="kt">uint32_t</span> <span class="n">cancel_sequence</span> <span class="o">=</span> <span class="n">ck_pr_load_32</span><span class="p">(</span><span class="o">&amp;</span><span class="n">self</span><span class="o">-&gt;</span><span class="n">cancel_sequence</span><span class="p">);</span>
 </span><span class="line">
 </span><span class="line">        <span class="cm">/* We&#39;ve been asked to cancel if cancel_sequence == seq.sequence. */</span>
@@ -3061,11 +3061,11 @@ owner/sequence descriptor.</p>
 <span class="line-number">37</span>
 <span class="line-number">38</span>
 <span class="line-number">39</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">rlock_owner_seq_t</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="n">rlock_owner_seq_t</span>
 </span><span class="line"><span class="nf">rlock_lock</span><span class="p">(</span><span class="k">struct</span> <span class="n">rlock</span> <span class="o">*</span><span class="n">lock</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="k">struct</span> <span class="n">rlock_owner</span> <span class="o">*</span><span class="n">self</span> <span class="o">=</span> <span class="n">get_self</span><span class="p">();</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">,</span> <span class="n">snapshot</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">,</span> <span class="n">snapshot</span><span class="p">;</span>
 </span><span class="line">
 </span><span class="line">        <span class="cm">/* Load the current owner. */</span>
 </span><span class="line">        <span class="n">snapshot</span><span class="p">.</span><span class="n">bits</span> <span class="o">=</span> <span class="n">ck_pr_load_64</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lock</span><span class="o">-&gt;</span><span class="n">owner</span><span class="p">.</span><span class="n">bits</span><span class="p">);</span>
@@ -3185,12 +3185,12 @@ owner/sequence descriptor.</p>
 <span class="line-number">78</span>
 <span class="line-number">79</span>
 <span class="line-number">80</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">bool</span>
 </span><span class="line"><span class="nf">rlock_owner_cancel</span><span class="p">(</span><span class="k">union</span> <span class="n">rlock_owner_seq</span> <span class="n">owner</span><span class="p">,</span>
 </span><span class="line">    <span class="k">struct</span> <span class="n">rlock</span> <span class="o">*</span><span class="n">evict</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="k">struct</span> <span class="n">rlock_owner</span> <span class="o">*</span><span class="n">victim</span> <span class="o">=</span> <span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="p">)((</span><span class="kt">uintptr_t</span><span class="p">)</span><span class="n">owner</span><span class="p">.</span><span class="n">address</span> <span class="o">*</span> <span class="mi">64</span><span class="p">);</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">snapshot</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">snapshot</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">uint32_t</span> <span class="n">acked</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">uint32_t</span> <span class="n">sequence</span> <span class="o">=</span> <span class="n">owner</span><span class="p">.</span><span class="n">sequence</span><span class="p">;</span>
 </span><span class="line">
@@ -3441,12 +3441,12 @@ marks the end of the critical section.</p>
 <span class="line-number">67</span>
 <span class="line-number">68</span>
 <span class="line-number">69</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
-</span><span class="line"><span class="nf">rlock_store_64</span><span class="p">(</span><span class="kt">rlock_owner_seq_t</span> <span class="n">snapshot</span><span class="p">,</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">bool</span>
+</span><span class="line"><span class="nf">rlock_store_64</span><span class="p">(</span><span class="n">rlock_owner_seq_t</span> <span class="n">snapshot</span><span class="p">,</span>
 </span><span class="line">    <span class="k">struct</span> <span class="n">rlock</span> <span class="o">*</span><span class="n">lock</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">dst</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">value</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="k">struct</span> <span class="n">rlock_owner</span> <span class="o">*</span><span class="n">self</span> <span class="o">=</span> <span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="p">)((</span><span class="kt">uintptr_t</span><span class="p">)</span><span class="n">snapshot</span><span class="p">.</span><span class="n">address</span> <span class="o">*</span> <span class="mi">64</span><span class="p">);</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">uint32_t</span> <span class="n">op_count</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">int</span> <span class="n">status</span><span class="p">;</span>
 </span><span class="line">
@@ -3459,7 +3459,7 @@ marks the end of the critical section.</p>
 </span><span class="line">
 </span><span class="line">        <span class="cm">/* The handler will reset RAX to 1 on skip. */</span>
 </span><span class="line">        <span class="n">status</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
-</span><span class="line">        <span class="n">asm</span> <span class="k">volatile</span><span class="p">(</span>
+</span><span class="line">        <span class="k">asm</span> <span class="k">volatile</span><span class="p">(</span>
 </span><span class="line">            <span class="cm">/* Move the lock&#39;s address in the critical section flag. */</span>
 </span><span class="line">            <span class="s">&quot;0: movq %[lock], %[critical_section]</span><span class="se">\n\t</span><span class="s">&quot;</span>
 </span><span class="line">            <span class="cm">/* Do we still own the lock? */</span>
@@ -3557,11 +3557,11 @@ the thread is in a critical section, and we can skip it by overwriting
 <span class="line-number">36</span>
 <span class="line-number">37</span>
 <span class="line-number">38</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">void</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">void</span>
 </span><span class="line"><span class="nf">rlock_signal_handler</span><span class="p">(</span><span class="kt">int</span> <span class="n">signal</span><span class="p">,</span> <span class="kt">siginfo_t</span> <span class="o">*</span><span class="n">info</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">arg</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
-</span><span class="line">        <span class="kt">ucontext_t</span> <span class="o">*</span><span class="n">ctx</span> <span class="o">=</span> <span class="n">arg</span><span class="p">;</span>
-</span><span class="line">        <span class="kt">mcontext_t</span> <span class="o">*</span><span class="n">mctx</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">ctx</span><span class="o">-&gt;</span><span class="n">uc_mcontext</span><span class="p">;</span>
+</span><span class="line">        <span class="n">ucontext_t</span> <span class="o">*</span><span class="n">ctx</span> <span class="o">=</span> <span class="n">arg</span><span class="p">;</span>
+</span><span class="line">        <span class="n">mcontext_t</span> <span class="o">*</span><span class="n">mctx</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">ctx</span><span class="o">-&gt;</span><span class="n">uc_mcontext</span><span class="p">;</span>
 </span><span class="line">        <span class="k">struct</span> <span class="n">rlock_owner</span> <span class="o">*</span><span class="n">self</span> <span class="o">=</span> <span class="n">rlock_self</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">uintptr_t</span> <span class="n">rip</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">size_t</span> <span class="n">nloc</span> <span class="o">=</span> <span class="n">__stop_rlock_store_list</span> <span class="o">-</span> <span class="n">__start_rlock_store_list</span><span class="p">;</span>

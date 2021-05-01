@@ -146,7 +146,7 @@ logging overhead.  I’m not talking about “oh, there are too many
 useless lines here and there” because that’s something you should
 trivially address in a log reader or <code>grep -v</code>.  I’m not really
 talking about effects like running out of disk (log rotation should
-be shared tech),<sup id="fnref:distributed-log" role="doc-noteref"><a href="#fn:distributed-log" class="footnote">1</a></sup> but more about issues like “we
+be shared tech),<sup id="fnref:distributed-log" role="doc-noteref"><a href="#fn:distributed-log" class="footnote" rel="footnote">1</a></sup> but more about issues like “we
 didn’t expect to call this code in a tight loop, but we do when
 $SITUATION and now we’re spending 90% of our time formatting log
 records.”</li>

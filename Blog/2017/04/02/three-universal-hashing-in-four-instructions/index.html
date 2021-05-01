@@ -125,7 +125,7 @@ April
 <span class="line-number">4</span>
 <span class="line-number">5</span>
 <span class="line-number">6</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">bool</span>
 </span><span class="line"><span class="nf">bit_hash</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">table</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">bit</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">    <span class="cm">/* table is a random uniform uint64_t, bit is a random bit. */</span>
@@ -141,7 +141,7 @@ April
 <span class="line-number">3</span>
 <span class="line-number">4</span>
 <span class="line-number">5</span>
-</pre></td><td class="code"><pre><code class="s"><span class="line">        andq    <span class="o">%rsi, %</span>rdi <span class="c1"># x &amp; table</span>
+</pre></td><td class="code"><pre><code class="s"><span class="line"><span></span>        andq    <span class="o">%rsi, %</span>rdi <span class="c1"># x &amp; table</span>
 </span><span class="line">        xorl    <span class="o">%eax, %</span>eax <span class="c1"># work around a hardware perf bug in popcnt</span>
 </span><span class="line">        xorq    <span class="o">%rdi, %</span>rdx <span class="c1"># () ^ bit</span>
 </span><span class="line">        popcntq <span class="o">%rdx, %</span>rax <span class="c1"># get the popcount</span>
@@ -192,7 +192,7 @@ implementation would be something like the following.</p>
 <span class="line-number">9</span>
 <span class="line-number">10</span>
 <span class="line-number">11</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">bool</span>
 </span><span class="line"><span class="nf">bit_hash_slow</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="kt">bool</span> <span class="n">random_table</span><span class="p">[</span><span class="mi">64</span><span class="p">][</span><span class="mi">2</span><span class="p">])</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">    <span class="kt">int</span> <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span>

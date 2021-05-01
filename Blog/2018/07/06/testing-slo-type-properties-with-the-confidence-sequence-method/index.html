@@ -223,7 +223,7 @@ failures is</p>
 <p><span>
 \[P((a, b) | p = \hat{p}) \sim \hat{p}^{a} \cdot (1 - \hat{p})^{b},\]
 </span>
-where the right-hand side is a proportion<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote">1</a></sup>, rather than a
+where the right-hand side is a proportion<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote" rel="footnote">1</a></sup>, rather than a
 probability.</p>
 
 <p>We can now apply 
@@ -428,7 +428,7 @@ reporting is censored in all sorts of ways, so…)</p>
 <p>There are ways to recover a classical confidence interval, given \(n\) observations from a Bernoulli. However,
 they’re pretty convoluted, and, as 
 <a href="https://bayes.wustl.edu/etj/articles/confidence.pdf">Jaynes argues in his note on confidence intervals</a>, the classical
-approach gives values that are roughly the same<sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote">2</a></sup> as the Bayesian
+approach gives values that are roughly the same<sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote" rel="footnote">2</a></sup> as the Bayesian
 approach… so I’ll just use the Bayesian credibility interval instead.</p>
 
 <p><em>See <a href="https://stats.stackexchange.com/questions/2272/whats-the-difference-between-a-confidence-interval-and-a-credible-interval/2287#2287">this stackexchange post</a> 
@@ -677,7 +677,7 @@ floats as sign-magnitude integers.</p>
 <span class="line-number">38</span>
 <span class="line-number">39</span>
 <span class="line-number">40</span>
-</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="o">#+</span><span class="nv">sbcl</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span></span><span class="o">#+</span><span class="nv">sbcl</span>
 </span><span class="line"><span class="p">(</span><span class="k">progn</span>
 </span><span class="line">  <span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">inline</span> <span class="nv">%float-bits</span> <span class="nv">%bits-float</span> <span class="nv">next</span> <span class="nv">prev</span><span class="p">))</span>
 </span><span class="line">  <span class="p">(</span><span class="nb">defun</span> <span class="nv">%float-bits</span> <span class="p">(</span><span class="nv">x</span><span class="p">)</span>
@@ -807,7 +807,7 @@ on \(\log x\).</p>
 <span class="line-number">25</span>
 <span class="line-number">26</span>
 <span class="line-number">27</span>
-</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">type</span> <span class="p">(</span><span class="kt">unsigned-byte</span> <span class="mi">31</span><span class="p">)</span> <span class="vg">*libm-error-limit*</span><span class="p">))</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span></span><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">type</span> <span class="p">(</span><span class="kt">unsigned-byte</span> <span class="mi">31</span><span class="p">)</span> <span class="vg">*libm-error-limit*</span><span class="p">))</span>
 </span><span class="line"><span class="p">(</span><span class="nb">defvar</span> <span class="vg">*libm-error-limit*</span> <span class="mi">4</span>
 </span><span class="line">  <span class="s">&quot;Assume libm is off by less than 4 ULPs.&quot;</span><span class="p">)</span>
 </span><span class="line">
@@ -937,7 +937,7 @@ only that one place: all the other operations are exact!</p>
 <span class="line-number">67</span>
 <span class="line-number">68</span>
 <span class="line-number">69</span>
-</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="c1">;;; Kahan-style summation.</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span></span><span class="c1">;;; Kahan-style summation.</span>
 </span><span class="line"><span class="c1">;;;</span>
 </span><span class="line"><span class="c1">;;; Represent the accumulator as an evaluated sum of two doubles. As</span>
 </span><span class="line"><span class="c1">;;; long as the compensation term is initially 0, the result is a safe</span>
@@ -1071,7 +1071,7 @@ by one.</p>
 <span class="line-number">33</span>
 <span class="line-number">34</span>
 <span class="line-number">35</span>
-</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="c1">;;; Upper bound for log c(n, s).</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span></span><span class="c1">;;; Upper bound for log c(n, s).</span>
 </span><span class="line">
 </span><span class="line"><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">type</span> <span class="kt">double-float</span> <span class="vg">*minus-log-sqrt-2pi*</span><span class="p">))</span>
 </span><span class="line"><span class="p">(</span><span class="nb">defvar</span> <span class="vg">*minus-log-sqrt-2pi*</span> <span class="mf">-0.9189385332046727d0</span>
@@ -1164,7 +1164,7 @@ Sequence Method’s stopping criterion is straightforward.</p>
 <span class="line-number">28</span>
 <span class="line-number">29</span>
 <span class="line-number">30</span>
-</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">ftype</span> <span class="p">(</span><span class="k">function</span> <span class="p">((</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">)</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span></span><span class="p">(</span><span class="nb">declaim</span> <span class="p">(</span><span class="k">ftype</span> <span class="p">(</span><span class="k">function</span> <span class="p">((</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">)</span>
 </span><span class="line">                           <span class="p">(</span><span class="nc">real</span> <span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="p">(</span><span class="mi">1</span><span class="p">))</span>
 </span><span class="line">                           <span class="p">(</span><span class="kt">unsigned-byte</span> <span class="mi">49</span><span class="p">)</span>
 </span><span class="line">                           <span class="nc">real</span><span class="p">)</span>
@@ -1199,7 +1199,7 @@ Sequence Method’s stopping criterion is straightforward.</p>
 <p>The other, much harder, part is computing credible (Bayesian)
 intervals for the Beta distribution. I won’t go over the code,
 but the <a href="https://github.com/pkhuong/csm/blob/47ecdd8f676a213dfb47ad0a329090a4c22b3125/csm.lisp#L465">basic strategy</a> is to invert the CDF, a monotonic function,
-by <a href="https://en.wikipedia.org/wiki/Bisection_method">bisection</a><sup id="fnref:3" role="doc-noteref"><a href="#fn:3" class="footnote">3</a></sup>, and to assume we’re looking for improbable 
+by <a href="https://en.wikipedia.org/wiki/Bisection_method">bisection</a><sup id="fnref:3" role="doc-noteref"><a href="#fn:3" class="footnote" rel="footnote">3</a></sup>, and to assume we’re looking for improbable 
 (\(\mathrm{cdf} &lt; 0.5\)) thresholds. This assumption lets us pick a
 <a href="http://dlmf.nist.gov/8.17#ii">simple hypergeometric series</a> that is
 normally useless, but

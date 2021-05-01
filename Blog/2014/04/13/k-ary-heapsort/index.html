@@ -204,7 +204,7 @@ restores the max-heap property under the assumption that only the root
 <span class="line-number">51</span>
 <span class="line-number">52</span>
 <span class="line-number">53</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define REF(I) ((void *)((char *)base + ((I) * size)))</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cp">#define REF(I) ((void *)((char *)base + ((I) * size)))</span>
 </span><span class="line">
 </span><span class="line"><span class="cp">#define ALIGNED_SIZE 16</span>
 </span><span class="line">
@@ -298,7 +298,7 @@ each swap.</p>
 <span class="line-number">30</span>
 <span class="line-number">31</span>
 <span class="line-number">32</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">typedef</span> <span class="kt">int</span> <span class="n">vector</span> <span class="nf">__attribute__</span><span class="p">((</span><span class="n">vector_size</span><span class="p">(</span><span class="n">ALIGNED_SIZE</span><span class="p">)));</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">typedef</span> <span class="kt">int</span> <span class="n">vector</span> <span class="nf">__attribute__</span><span class="p">((</span><span class="n">vector_size</span><span class="p">(</span><span class="n">ALIGNED_SIZE</span><span class="p">)));</span>
 </span><span class="line">
 </span><span class="line"><span class="cp">#define CHUNK_SIZE sizeof(long)</span>
 </span><span class="line">
@@ -417,7 +417,7 @@ and a heapsort.</p>
 <span class="line-number">74</span>
 <span class="line-number">75</span>
 <span class="line-number">76</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cm">/*</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cm">/*</span>
 </span><span class="line"><span class="cm"> * Given a way-ary heap, sift the head&#39;th element down to restore the</span>
 </span><span class="line"><span class="cm"> * heap property.</span>
 </span><span class="line"><span class="cm"> */</span>
@@ -724,7 +724,7 @@ different swap function:</p>
 <span class="line-number">18</span>
 <span class="line-number">19</span>
 <span class="line-number">20</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define CHUNK_SIZE 8</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cp">#define CHUNK_SIZE 8</span>
 </span><span class="line">
 </span><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">void</span>
 </span><span class="line"><span class="nf">SWAP</span><span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="n">x</span><span class="p">,</span> <span class="kt">char</span> <span class="o">*</span><span class="n">y</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">n</span><span class="p">)</span>

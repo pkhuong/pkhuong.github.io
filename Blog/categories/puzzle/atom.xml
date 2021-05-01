@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Puzzle | Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/Blog/categories/puzzle/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2021-04-16T16:43:26-04:00</updated>
+  <updated>2021-05-01T12:57:07-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -43,7 +43,7 @@ value matches any of the follow nine cases:</p>
   <li><code>0b00000000</code></li>
 </ul>
 
-<p>Looking at the bit patterns,<sup id="fnref:b-for-bit-literal" role="doc-noteref"><a href="#fn:b-for-bit-literal" class="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
+<p>Looking at the bit patterns,<sup id="fnref:b-for-bit-literal" role="doc-noteref"><a href="#fn:b-for-bit-literal" class="footnote" rel="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
 is pretty natural.  These instructions are somewhat complex (latency
 closer to 3 cycles than 1, and often port restricted),
 and it seems like the sort of problem that would have had efficient
@@ -64,7 +64,7 @@ or bitscan.  There’s also a simpler classic solution to this problem:</p>
 <p><code>x == 0 || is_power_of_two(x) &lt;==&gt; (x &amp; (x - 1)) == 0</code></p>
 
 <p>How does that expression work?  Say <code>x</code> is a power of two. Its binary
-representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian" role="doc-noteref"><a href="#fn:big-endian" class="footnote">2</a></sup>
+representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian" role="doc-noteref"><a href="#fn:big-endian" class="footnote" rel="footnote">2</a></sup>
 a single “1” bit, and trailing zeros (maybe none).  Let’s see what happens when
 we subtract 1 from <code>x</code>:</p>
 
@@ -111,7 +111,7 @@ ends.  Let’s focus on the fast path, when the encoded ULEB fits in a
 machine register.</p>
 
 <p>We have <code>uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...</code>:
-a sequence of bytes<sup id="fnref:remember-endianness" role="doc-noteref"><a href="#fn:remember-endianness" class="footnote">3</a></sup> with the topmost bit equal to 1,
+a sequence of bytes<sup id="fnref:remember-endianness" role="doc-noteref"><a href="#fn:remember-endianness" class="footnote" rel="footnote">3</a></sup> with the topmost bit equal to 1,
 terminated by a byte with the top bit set to 0,
 and, finally, arbitrary nuisance bytes (<code>m...m</code>, <code>n...n</code>, etc.) we wish to ignore.
 Ideally, we’d extract <code>data = 0b0000000000000000...?zzzzzzz?yyyyyyy?...</code> from <code>uleb</code>: we want to clear the
@@ -271,7 +271,7 @@ That’s another nice primitive to generate bitmasks dynamically.</p>
 <span class="line-number">4</span>
 <span class="line-number">5</span>
 <span class="line-number">6</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">bool</span>
 </span><span class="line"><span class="nf">bit_hash</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">table</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">bit</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">    <span class="cm">/* table is a random uniform uint64_t, bit is a random bit. */</span>
@@ -287,7 +287,7 @@ That’s another nice primitive to generate bitmasks dynamically.</p>
 <span class="line-number">3</span>
 <span class="line-number">4</span>
 <span class="line-number">5</span>
-</pre></td><td class="code"><pre><code class="s"><span class="line">        andq    <span class="o">%rsi, %</span>rdi <span class="c1"># x &amp; table</span>
+</pre></td><td class="code"><pre><code class="s"><span class="line"><span></span>        andq    <span class="o">%rsi, %</span>rdi <span class="c1"># x &amp; table</span>
 </span><span class="line">        xorl    <span class="o">%eax, %</span>eax <span class="c1"># work around a hardware perf bug in popcnt</span>
 </span><span class="line">        xorq    <span class="o">%rdi, %</span>rdx <span class="c1"># () ^ bit</span>
 </span><span class="line">        popcntq <span class="o">%rdx, %</span>rax <span class="c1"># get the popcount</span>
@@ -338,7 +338,7 @@ implementation would be something like the following.</p>
 <span class="line-number">9</span>
 <span class="line-number">10</span>
 <span class="line-number">11</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">bool</span>
 </span><span class="line"><span class="nf">bit_hash_slow</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="kt">bool</span> <span class="n">random_table</span><span class="p">[</span><span class="mi">64</span><span class="p">][</span><span class="mi">2</span><span class="p">])</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">    <span class="kt">int</span> <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span>

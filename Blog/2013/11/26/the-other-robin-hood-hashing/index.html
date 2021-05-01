@@ -144,7 +144,7 @@ uncorrelated addresses (and writes that bump entries out), we might as
 well go for simpler strategies with awesome worst-case bounds, like
 2-left or cuckoo hashing.  Then again, I’m not convinced that these
 schemes are useful in software either: we can do a lot of probing
-in the time it takes to read a second random address<sup id="fnref:mlp" role="doc-noteref"><a href="#fn:mlp" class="footnote">1</a></sup>.  In
+in the time it takes to read a second random address<sup id="fnref:mlp" role="doc-noteref"><a href="#fn:mlp" class="footnote" rel="footnote">1</a></sup>.  In
 hardware, the trade-offs seem completely different; I wouldn’t be
 surprised if two 128 KB SRAM chips were cheaper than a single 256 KB
 chip.</p>

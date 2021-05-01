@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/Blog/categories/appnexus/"/>
-  <updated>2021-04-16T16:43:26-04:00</updated>
+  <updated>2021-05-01T12:57:07-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -78,7 +78,7 @@ be <em>read</em> heavy.</p>
 
 <p>Some time later, I revisited a <a href="http://www.cs.au.dk/~gerth/papers/soda02.pdf">paper by Brodal, Fagerberg, and Jacob (PDF)</a>.  They
 do a lot of clever things to get interesting performance bounds, but
-I’m really not convinced it’s all worth the complexity<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote">1</a></sup>… especially in
+I’m really not convinced it’s all worth the complexity<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote" rel="footnote">1</a></sup>… especially in
 the context of our desert island challenge.  I did find one trick very
 interesting: they preserve logarithmic time lookups when binary
 searching arrays with missing values by recasting these arrays as
@@ -224,7 +224,7 @@ interpolate to skip the first iterations of the search.  If we can
 also assume that the keys are uniformly distributed once mapped to
 integers, we can use a linear Robin Hood hash table: with a linear
 (but small) space overhead, we get constant time expected inserts and
-lookups, and what seems to be \( O(\lg \lg n) \) worst case<sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote">2</a></sup>
+lookups, and what seems to be \( O(\lg \lg n) \) worst case<sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote" rel="footnote">2</a></sup>
 lookups with high probability.</p>
 
 <p>Something else is bothering me.  We embed in full binary trees, and

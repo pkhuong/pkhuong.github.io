@@ -4,7 +4,7 @@
   <title><![CDATA[Category: LazyKnapsack | Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/Blog/categories/lazyknapsack/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2021-04-16T16:43:26-04:00</updated>
+  <updated>2021-05-01T12:57:07-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -129,13 +129,13 @@ requires a logarithmic number of iterations.</p>
 
 <p><a href="https://cs.stackexchange.com/questions/27685/can-someone-explain-lazyselect">Lazy Select</a> offers a completely different angle for the selection
 problem.  Selecting the \(k\)th smallest element from a list of
-\(n\) elements is the same as finding the \(k / n\)th quantile<sup id="fnref:abuse-of-language" role="doc-noteref"><a href="#fn:abuse-of-language" class="footnote">1</a></sup> in
-that list of \(n\) elements.  We can use <a href="https://en.wikipedia.org/wiki/Hoeffding%27s_inequality">concentration bounds</a><sup id="fnref:binomial" role="doc-noteref"><a href="#fn:binomial" class="footnote">2</a></sup> to estimate quantiles from a sample of, e.g.,
+\(n\) elements is the same as finding the \(k / n\)th quantile<sup id="fnref:abuse-of-language" role="doc-noteref"><a href="#fn:abuse-of-language" class="footnote" rel="footnote">1</a></sup> in
+that list of \(n\) elements.  We can use <a href="https://en.wikipedia.org/wiki/Hoeffding%27s_inequality">concentration bounds</a><sup id="fnref:binomial" role="doc-noteref"><a href="#fn:binomial" class="footnote" rel="footnote">2</a></sup> to estimate quantiles from a sample of, e.g.,
 \(m = n^{3/4}\) elements: the population quantile value is very
 probably between the \(qm - \frac{\log m}{\sqrt{m}}\)th and \(qm +
 \frac{\log m}{\sqrt{m}}\)th values of the sample.  Moreover, this
 range very probably includes at most \(\mathcal{O}(n^{3/4})\)
-elements<sup id="fnref:same-bounds" role="doc-noteref"><a href="#fn:same-bounds" class="footnote">3</a></sup>, so a second pass suffices to buffer all the
+elements<sup id="fnref:same-bounds" role="doc-noteref"><a href="#fn:same-bounds" class="footnote" rel="footnote">3</a></sup>, so a second pass suffices to buffer all the
 elements around the quantile, and find the exact quantile.  Even with
 a much smaller sample size \(m = \sqrt{n},\) we would only need four
 passes.</p>
@@ -177,7 +177,7 @@ with the same parameter \(m / W!\)</p>
 <p>That helps, but we could still end up spending much more than constant
 time on very heavy elements.  The trick is to deterministically
 special-case these elements: stash any element with large weight
-\(w_i \geq W / m\) to the side, exactly once.  By <a href="https://en.wikipedia.org/wiki/Markov%27s_inequality">Markov’s inequality</a>,<sup id="fnref:pigeonhole" role="doc-noteref"><a href="#fn:pigeonhole" class="footnote">4</a></sup>
+\(w_i \geq W / m\) to the side, exactly once.  By <a href="https://en.wikipedia.org/wiki/Markov%27s_inequality">Markov’s inequality</a>,<sup id="fnref:pigeonhole" role="doc-noteref"><a href="#fn:pigeonhole" class="footnote" rel="footnote">4</a></sup>
 we know there aren’t too many heavy elements: at most \(m.\)</p>
 
 <h2 id="lets-test-this-out">Let’s test this out</h2>
@@ -427,7 +427,7 @@ to confirm that the lower bound is valid at least
 </span><span class="line">    <span class="k">assert</span> <span class="n">actual</span> <span class="o">&gt;=</span> <span class="n">wanted</span><span class="p">,</span> <span class="s2">&quot;Result: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="nb">str</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>With a false positive rate of at most one in a million,<sup id="fnref:lotta-errors" role="doc-noteref"><a href="#fn:lotta-errors" class="footnote">5</a></sup> we can
+<p>With a false positive rate of at most one in a million,<sup id="fnref:lotta-errors" role="doc-noteref"><a href="#fn:lotta-errors" class="footnote" rel="footnote">5</a></sup> we can
 run automated tests against <code>check_bounds</code>.  I’ll use
 <a href="https://hypothesis.works/">Hypothesis</a> to generate list of pairs of weight and predicate value:</p>
 
@@ -491,7 +491,7 @@ we’d use a tolerance of \(\sqrt{\log(n) / n},\) for an error
 rate of \(1 / n^2.\) I prefer to simply use something like \(7 /
 \sqrt{n}:\) the error rate is then less than \(10^{-42},\)
 orders of manitude smaller than the probability of hardware failure in any given
-nanosecond.<sup id="fnref:memory-error" role="doc-noteref"><a href="#fn:memory-error" class="footnote">6</a></sup>
+nanosecond.<sup id="fnref:memory-error" role="doc-noteref"><a href="#fn:memory-error" class="footnote" rel="footnote">6</a></sup>
 We can still check for failure of our Las Vegas algorithm,
 but if something went wrong, it’s much more likely that we detected
 a hardware failure than anything else.  It’s like running <a href="https://en.wikipedia.org/wiki/Super_PI">SuperPi</a>
@@ -623,11 +623,11 @@ In Python, this streaming algorithm looks like this.</p>
 <span class="line-number">18</span>
 <span class="line-number">19</span>
 <span class="line-number">20</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">StreamingVariance</span><span class="p">:</span>
-</span><span class="line">    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">StreamingVariance</span><span class="p">:</span>
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">=</span> <span class="mi">0</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="mi">0</span>
-</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="mi">0</span>  <span class="c"># centered 2nd moment (~variance of the sum of observations)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="mi">0</span>  <span class="c1"># centered 2nd moment (~variance of the sum of observations)</span>
 </span><span class="line">
 </span><span class="line">    <span class="k">def</span> <span class="nf">observe</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">+=</span> <span class="mi">1</span>
@@ -701,11 +701,11 @@ stack of observation.  That’s still better than nothing.</p>
 <span class="line-number">32</span>
 <span class="line-number">33</span>
 <span class="line-number">34</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">VarianceStack</span><span class="p">:</span>
-</span><span class="line">    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">VarianceStack</span><span class="p">:</span>
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">=</span> <span class="mi">0</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="mi">0</span>
-</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="mi">0</span>  <span class="c"># variance of the sum</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="mi">0</span>  <span class="c1"># variance of the sum</span>
 </span><span class="line">
 </span><span class="line">    <span class="k">def</span> <span class="nf">push</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">+=</span> <span class="mi">1</span>
@@ -726,7 +726,7 @@ stack of observation.  That’s still better than nothing.</p>
 </span><span class="line">        <span class="n">next_n</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">-</span> <span class="mi">1</span>
 </span><span class="line">        <span class="n">old_mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="n">old_mean</span> <span class="o">+</span> <span class="p">(</span><span class="n">old_mean</span> <span class="o">-</span> <span class="n">v</span><span class="p">)</span> <span class="o">/</span> <span class="n">next_n</span>
-</span><span class="line">        <span class="c"># var_sum should never be negative, clamp it so.</span>
+</span><span class="line">        <span class="c1"># var_sum should never be negative, clamp it so.</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">var_sum</span> <span class="o">-</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">old_mean</span><span class="p">))</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">-=</span> <span class="mi">1</span>
 </span><span class="line">
@@ -823,17 +823,17 @@ the number of float values between the reference and the actual results.</p>
 <span class="line-number">60</span>
 <span class="line-number">61</span>
 <span class="line-number">62</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="kn">import</span> <span class="nn">struct</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="kn">import</span> <span class="nn">struct</span>
 </span><span class="line"><span class="kn">import</span> <span class="nn">unittest</span>
 </span><span class="line"><span class="kn">import</span> <span class="nn">hypothesis.strategies</span> <span class="kn">as</span> <span class="nn">st</span>
 </span><span class="line"><span class="kn">from</span> <span class="nn">hypothesis.stateful</span> <span class="kn">import</span> <span class="n">RuleBasedStateMachine</span><span class="p">,</span> <span class="n">invariant</span><span class="p">,</span> <span class="n">precondition</span><span class="p">,</span> <span class="n">rule</span>
 </span><span class="line">
 </span><span class="line">
 </span><span class="line"><span class="k">def</span> <span class="nf">float_bits</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-</span><span class="line">    <span class="n">bits</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack</span><span class="p">(</span><span class="s">&#39;=q&#39;</span><span class="p">,</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s">&#39;=d&#39;</span><span class="p">,</span> <span class="n">x</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
+</span><span class="line">    <span class="n">bits</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack</span><span class="p">(</span><span class="s1">&#39;=q&#39;</span><span class="p">,</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s1">&#39;=d&#39;</span><span class="p">,</span> <span class="n">x</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
 </span><span class="line">    <span class="n">significand</span> <span class="o">=</span> <span class="n">bits</span> <span class="o">%</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">63</span><span class="p">)</span>
-</span><span class="line">    <span class="c"># ~significand = -1 - significand. We need that instead of just</span>
-</span><span class="line">    <span class="c"># -significand to handle signed zeros.</span>
+</span><span class="line">    <span class="c1"># ~significand = -1 - significand. We need that instead of just</span>
+</span><span class="line">    <span class="c1"># -significand to handle signed zeros.</span>
 </span><span class="line">    <span class="k">return</span> <span class="n">significand</span> <span class="k">if</span> <span class="n">bits</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="k">else</span> <span class="o">~</span><span class="n">significand</span>
 </span><span class="line">
 </span><span class="line">
@@ -845,15 +845,15 @@ the number of float values between the reference and the actual results.</p>
 </span><span class="line">
 </span><span class="line">
 </span><span class="line"><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
-</span><span class="line">    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span class="line">        <span class="nb">super</span><span class="p">(</span><span class="n">VarianceStackDriver</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__init__</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">(</span><span class="n">VarianceStackDriver</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span> <span class="o">=</span> <span class="p">[]</span>
 </span><span class="line">
 </span><span class="line">    <span class="nd">@rule</span><span class="p">(</span><span class="n">v</span><span class="o">=</span><span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">allow_nan</span><span class="o">=</span><span class="bp">False</span><span class="p">,</span> <span class="n">allow_infinity</span><span class="o">=</span><span class="bp">False</span><span class="p">))</span>
 </span><span class="line">    <span class="k">def</span> <span class="nf">push</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
 </span><span class="line">
-</span><span class="line">    <span class="c"># Don&#39;t generate `pop()` calls when the stack is empty.</span>
+</span><span class="line">    <span class="c1"># Don&#39;t generate `pop()` calls when the stack is empty.</span>
 </span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span>
 </span><span class="line">    <span class="nd">@rule</span><span class="p">()</span>
 </span><span class="line">    <span class="k">def</span> <span class="nf">pop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -883,7 +883,7 @@ the number of float values between the reference and the actual results.</p>
 </span><span class="line">
 </span><span class="line"><span class="n">StackTest</span> <span class="o">=</span> <span class="n">VarianceStackDriver</span><span class="o">.</span><span class="n">TestCase</span>
 </span><span class="line">
-</span><span class="line"><span class="k">if</span> <span class="n">__name__</span> <span class="o">==</span> <span class="s">&#39;__main__&#39;</span><span class="p">:</span>
+</span><span class="line"><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
 </span><span class="line">    <span class="n">unittest</span><span class="o">.</span><span class="n">main</span><span class="p">()</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
@@ -928,7 +928,7 @@ so taking the square of that value errors out instead of returning infinity.</p>
 <span class="line-number">16</span>
 <span class="line-number">17</span>
 <span class="line-number">18</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="kn">import</span> <span class="nn">math</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="kn">import</span> <span class="nn">math</span>
 </span><span class="line"><span class="kn">import</span> <span class="nn">sys</span>
 </span><span class="line"><span class="o">...</span>
 </span><span class="line">
@@ -997,14 +997,14 @@ only the standard streaming variance algorithm).</p>
 <span class="line-number">41</span>
 <span class="line-number">42</span>
 <span class="line-number">43</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">def</span> <span class="nf">assert_almost_equal</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">max_delta</span><span class="o">=</span><span class="n">FLOAT_DISTANCE</span><span class="p">):</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">assert_almost_equal</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">max_delta</span><span class="o">=</span><span class="n">FLOAT_DISTANCE</span><span class="p">):</span>
 </span><span class="line">    <span class="n">distance</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">float_bits</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">-</span> <span class="n">float_bits</span><span class="p">(</span><span class="n">y</span><span class="p">))</span>
-</span><span class="line">    <span class="c"># Print out some useful information on failure.</span>
-</span><span class="line">    <span class="k">assert</span> <span class="n">distance</span> <span class="o">&lt;=</span> <span class="n">max_delta</span><span class="p">,</span> <span class="s">&#39;</span><span class="si">%.18g</span><span class="s"> != </span><span class="si">%.18g</span><span class="s"> (</span><span class="si">%f</span><span class="s">)&#39;</span> <span class="o">%</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">distance</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+</span><span class="line">    <span class="c1"># Print out some useful information on failure.</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">distance</span> <span class="o">&lt;=</span> <span class="n">max_delta</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">%.18g</span><span class="s1"> != </span><span class="si">%.18g</span><span class="s1"> (</span><span class="si">%f</span><span class="s1">)&#39;</span> <span class="o">%</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">distance</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
 </span><span class="line">
 </span><span class="line"><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
-</span><span class="line">    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span class="line">        <span class="nb">super</span><span class="p">(</span><span class="n">VarianceStackDriver</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__init__</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">(</span><span class="n">VarianceStackDriver</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span> <span class="o">=</span> <span class="p">[]</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_stack</span> <span class="o">=</span> <span class="n">VarianceStack</span><span class="p">()</span>
 </span><span class="line">
@@ -1013,7 +1013,7 @@ only the standard streaming variance algorithm).</p>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_stack</span><span class="o">.</span><span class="n">push</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
 </span><span class="line">
-</span><span class="line">    <span class="c"># Never generate `pop()`</span>
+</span><span class="line">    <span class="c1"># Never generate `pop()`</span>
 </span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span> <span class="ow">and</span> <span class="bp">False</span><span class="p">)</span>
 </span><span class="line">    <span class="nd">@rule</span><span class="p">()</span>
 </span><span class="line">    <span class="k">def</span> <span class="nf">pop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -1069,7 +1069,7 @@ it’s missing the <code>n - 1</code> correction term in the denominator.</p>
 <span class="line-number">7</span>
 <span class="line-number">8</span>
 <span class="line-number">9</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
 </span><span class="line">    <span class="o">...</span>
 </span><span class="line">
 </span><span class="line">    <span class="k">def</span> <span class="nf">reference_variance</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -1091,7 +1091,7 @@ it’s missing the <code>n - 1</code> correction term in the denominator.</p>
 <span class="line-number">6</span>
 <span class="line-number">7</span>
 <span class="line-number">8</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">VarianceStackDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
 </span><span class="line">    <span class="o">...</span>
 </span><span class="line">
 </span><span class="line">    <span class="nd">@precondition</span><span class="p">(</span><span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">)</span>
@@ -1148,21 +1148,21 @@ in \([-2\sp{-12}, 2\sp{12}].\)</p>
 <span class="line-number">16</span>
 <span class="line-number">17</span>
 <span class="line-number">18</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="c"># Let values be off by ~1 single float ULP</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="c1"># Let values be off by ~1 single float ULP</span>
 </span><span class="line"><span class="n">FLOAT_DISTANCE</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="mi">32</span>
 </span><span class="line">
-</span><span class="line"><span class="c"># or by 1e-8</span>
+</span><span class="line"><span class="c1"># or by 1e-8</span>
 </span><span class="line"><span class="n">ABSOLUTE_EPS</span> <span class="o">=</span> <span class="mf">1e-8</span>
 </span><span class="line">
 </span><span class="line">
 </span><span class="line"><span class="k">def</span> <span class="nf">assert_almost_equal</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">max_delta</span><span class="o">=</span><span class="n">FLOAT_DISTANCE</span><span class="p">,</span> <span class="n">abs_eps</span><span class="o">=</span><span class="n">ABSOLUTE_EPS</span><span class="p">):</span>
 </span><span class="line">    <span class="n">delta</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">y</span><span class="p">)</span>
 </span><span class="line">    <span class="n">distance</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">float_bits</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">-</span> <span class="n">float_bits</span><span class="p">(</span><span class="n">y</span><span class="p">))</span>
-</span><span class="line">    <span class="k">assert</span> <span class="n">distance</span> <span class="o">&lt;=</span> <span class="n">max_delta</span> <span class="ow">or</span> <span class="n">delta</span> <span class="o">&lt;=</span> <span class="n">abs_eps</span><span class="p">,</span> <span class="s">&#39;</span><span class="si">%.18g</span><span class="s"> != </span><span class="si">%.18g</span><span class="s"> (</span><span class="si">%f</span><span class="s">)&#39;</span> <span class="o">%</span> <span class="p">(</span>
+</span><span class="line">    <span class="k">assert</span> <span class="n">distance</span> <span class="o">&lt;=</span> <span class="n">max_delta</span> <span class="ow">or</span> <span class="n">delta</span> <span class="o">&lt;=</span> <span class="n">abs_eps</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">%.18g</span><span class="s1"> != </span><span class="si">%.18g</span><span class="s1"> (</span><span class="si">%f</span><span class="s1">)&#39;</span> <span class="o">%</span> <span class="p">(</span>
 </span><span class="line">        <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">distance</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
 </span><span class="line">
 </span><span class="line">
-</span><span class="line"><span class="c"># Avoid generating very large observations.</span>
+</span><span class="line"><span class="c1"># Avoid generating very large observations.</span>
 </span><span class="line"><span class="n">MAX_RANGE</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="mi">12</span>
 </span><span class="line">
 </span><span class="line"><span class="n">FLOAT_STRATEGY</span> <span class="o">=</span> <span class="n">st</span><span class="o">.</span><span class="n">floats</span><span class="p">(</span><span class="n">width</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">min_value</span><span class="o">=-</span><span class="n">MAX_RANGE</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="n">MAX_RANGE</span><span class="p">)</span>
@@ -1261,19 +1261,19 @@ augmented to keep track of the current mean and variance of all values.</p>
 <span class="line-number">58</span>
 <span class="line-number">59</span>
 <span class="line-number">60</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">VarianceBag</span><span class="p">(</span><span class="n">VarianceStack</span><span class="p">):</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">VarianceBag</span><span class="p">(</span><span class="n">VarianceStack</span><span class="p">):</span>
 </span><span class="line">    <span class="k">def</span> <span class="nf">update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">old</span><span class="p">,</span> <span class="n">new</span><span class="p">):</span>
-</span><span class="line">        <span class="c"># Replace one instance of `old` with `new` by</span>
-</span><span class="line">        <span class="c"># removing `old` and inserting `new`.</span>
+</span><span class="line">        <span class="c1"># Replace one instance of `old` with `new` by</span>
+</span><span class="line">        <span class="c1"># removing `old` and inserting `new`.</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">old</span><span class="p">)</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">push</span><span class="p">(</span><span class="n">new</span><span class="p">)</span>
 </span><span class="line">
 </span><span class="line">
 </span><span class="line"><span class="k">class</span> <span class="nc">VarianceBagDriver</span><span class="p">(</span><span class="n">RuleBasedStateMachine</span><span class="p">):</span>
-</span><span class="line">    <span class="n">keys</span> <span class="o">=</span> <span class="n">Bundle</span><span class="p">(</span><span class="s">&quot;keys&quot;</span><span class="p">)</span>
+</span><span class="line">    <span class="n">keys</span> <span class="o">=</span> <span class="n">Bundle</span><span class="p">(</span><span class="s2">&quot;keys&quot;</span><span class="p">)</span>
 </span><span class="line">
-</span><span class="line">    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span class="line">        <span class="nb">super</span><span class="p">(</span><span class="n">VarianceBagDriver</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__init__</span><span class="p">()</span>
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="nb">super</span><span class="p">(</span><span class="n">VarianceBagDriver</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">entries</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
 </span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">variance_bag</span> <span class="o">=</span> <span class="n">VarianceBag</span><span class="p">()</span>
 </span><span class="line">
@@ -1404,7 +1404,7 @@ for which Hypothesis also fails to find failures.</p>
 <span class="line-number">12</span>
 <span class="line-number">13</span>
 <span class="line-number">14</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">class</span> <span class="nc">VarianceBag</span><span class="p">(</span><span class="n">VarianceStack</span><span class="p">):</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">VarianceBag</span><span class="p">(</span><span class="n">VarianceStack</span><span class="p">):</span>
 </span><span class="line">    <span class="k">def</span> <span class="nf">update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">old</span><span class="p">,</span> <span class="n">new</span><span class="p">):</span>
 </span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">&gt;</span> <span class="mi">0</span>
 </span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
@@ -1511,7 +1511,7 @@ generate all small cases up to, e.g., 10 values.</p>
 <span class="line-number">47</span>
 <span class="line-number">48</span>
 <span class="line-number">49</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">def</span> <span class="nf">updated_expressions</span><span class="p">(</span><span class="nb">vars</span><span class="p">,</span> <span class="n">new_x</span><span class="p">):</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">updated_expressions</span><span class="p">(</span><span class="nb">vars</span><span class="p">,</span> <span class="n">new_x</span><span class="p">):</span>
 </span><span class="line">    <span class="n">x</span> <span class="o">=</span> <span class="nb">vars</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
 </span><span class="line">    <span class="n">num_var</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">vars</span><span class="p">)</span>
 </span><span class="line">    <span class="n">mean</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">vars</span><span class="p">)</span> <span class="o">/</span> <span class="n">num_var</span>
@@ -1526,8 +1526,8 @@ generate all small cases up to, e.g., 10 values.</p>
 </span><span class="line">
 </span><span class="line"><span class="k">def</span> <span class="nf">test_num_var</span><span class="p">(</span><span class="n">num_var</span><span class="p">):</span>
 </span><span class="line">    <span class="k">assert</span> <span class="n">num_var</span> <span class="o">&gt;</span> <span class="mi">0</span>
-</span><span class="line">    <span class="nb">vars</span> <span class="o">=</span> <span class="p">[</span><span class="n">Real</span><span class="p">(</span><span class="s">&#39;x_</span><span class="si">%i</span><span class="s">&#39;</span> <span class="o">%</span> <span class="n">i</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">num_var</span><span class="p">)]</span>
-</span><span class="line">    <span class="n">new_x</span> <span class="o">=</span> <span class="n">Real</span><span class="p">(</span><span class="s">&#39;new_x&#39;</span><span class="p">)</span>
+</span><span class="line">    <span class="nb">vars</span> <span class="o">=</span> <span class="p">[</span><span class="n">Real</span><span class="p">(</span><span class="s1">&#39;x_</span><span class="si">%i</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="n">i</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">num_var</span><span class="p">)]</span>
+</span><span class="line">    <span class="n">new_x</span> <span class="o">=</span> <span class="n">Real</span><span class="p">(</span><span class="s1">&#39;new_x&#39;</span><span class="p">)</span>
 </span><span class="line">
 </span><span class="line">    <span class="n">new_mean</span><span class="p">,</span> <span class="n">new_var_sum</span> <span class="o">=</span> <span class="n">updated_expressions</span><span class="p">(</span><span class="nb">vars</span><span class="p">,</span> <span class="n">new_x</span><span class="p">)</span>
 </span><span class="line">    <span class="n">new_vars</span> <span class="o">=</span> <span class="p">[</span><span class="n">new_x</span><span class="p">]</span> <span class="o">+</span> <span class="nb">vars</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
@@ -1535,7 +1535,7 @@ generate all small cases up to, e.g., 10 values.</p>
 </span><span class="line">    <span class="n">s</span><span class="o">.</span><span class="n">push</span><span class="p">()</span>
 </span><span class="line">    <span class="n">s</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">new_mean</span> <span class="o">!=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">new_vars</span><span class="p">)</span> <span class="o">/</span> <span class="n">num_var</span><span class="p">)</span>
 </span><span class="line">    <span class="n">result</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">check</span><span class="p">()</span>
-</span><span class="line">    <span class="k">print</span><span class="p">(</span><span class="s">&#39;updated mean </span><span class="si">%s</span><span class="s">&#39;</span> <span class="o">%</span> <span class="n">result</span><span class="p">)</span>
+</span><span class="line">    <span class="k">print</span><span class="p">(</span><span class="s1">&#39;updated mean </span><span class="si">%s</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="n">result</span><span class="p">)</span>
 </span><span class="line">    <span class="k">if</span> <span class="n">result</span> <span class="o">!=</span> <span class="n">unsat</span><span class="p">:</span>
 </span><span class="line">        <span class="k">print</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">model</span><span class="p">())</span>
 </span><span class="line">        <span class="k">return</span> <span class="bp">False</span>
@@ -1546,7 +1546,7 @@ generate all small cases up to, e.g., 10 values.</p>
 </span><span class="line">    <span class="n">s</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">new_var_sum</span> <span class="o">!=</span> <span class="nb">sum</span><span class="p">(</span>
 </span><span class="line">        <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">new_mean</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">v</span> <span class="o">-</span> <span class="n">new_mean</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">new_vars</span><span class="p">))</span>
 </span><span class="line">    <span class="n">result</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">check</span><span class="p">()</span>
-</span><span class="line">    <span class="k">print</span><span class="p">(</span><span class="s">&#39;updated variance </span><span class="si">%s</span><span class="s">&#39;</span> <span class="o">%</span> <span class="n">result</span><span class="p">)</span>
+</span><span class="line">    <span class="k">print</span><span class="p">(</span><span class="s1">&#39;updated variance </span><span class="si">%s</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="n">result</span><span class="p">)</span>
 </span><span class="line">    <span class="k">if</span> <span class="n">result</span> <span class="o">!=</span> <span class="n">unsat</span><span class="p">:</span>
 </span><span class="line">        <span class="k">print</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">model</span><span class="p">())</span>
 </span><span class="line">        <span class="k">return</span> <span class="bp">False</span>
@@ -1554,11 +1554,11 @@ generate all small cases up to, e.g., 10 values.</p>
 </span><span class="line">
 </span><span class="line">
 </span><span class="line"><span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">11</span><span class="p">):</span>
-</span><span class="line">    <span class="k">print</span><span class="p">(</span><span class="s">&#39;testing n=</span><span class="si">%i</span><span class="s">&#39;</span> <span class="o">%</span> <span class="n">i</span><span class="p">)</span>
+</span><span class="line">    <span class="k">print</span><span class="p">(</span><span class="s1">&#39;testing n=</span><span class="si">%i</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="n">i</span><span class="p">)</span>
 </span><span class="line">    <span class="k">if</span> <span class="n">test_num_var</span><span class="p">(</span><span class="n">i</span><span class="p">):</span>
-</span><span class="line">        <span class="k">print</span><span class="p">(</span><span class="s">&#39;OK&#39;</span><span class="p">)</span>
+</span><span class="line">        <span class="k">print</span><span class="p">(</span><span class="s1">&#39;OK&#39;</span><span class="p">)</span>
 </span><span class="line">    <span class="k">else</span><span class="p">:</span>
-</span><span class="line">        <span class="k">print</span><span class="p">(</span><span class="s">&#39;FAIL </span><span class="si">%i</span><span class="s">&#39;</span> <span class="o">%</span> <span class="n">i</span><span class="p">)</span>
+</span><span class="line">        <span class="k">print</span><span class="p">(</span><span class="s1">&#39;FAIL </span><span class="si">%i</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="n">i</span><span class="p">)</span>
 </span><span class="line">        <span class="k">break</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
@@ -1581,7 +1581,7 @@ with automated tests,
 and with some exhaustive checking of small inputs (to which I claim most bugs can be reduced).</p>
 
 <p>I’m now pretty sure the code works, but there’s another more obviously correct way to solve that update problem.
-This <a href="https://prod-ng.sandia.gov/techlib-noauth/access-control.cgi/2008/086212.pdf">2008 report by Philippe Pébay</a><sup id="fnref:pebay2016" role="doc-noteref"><a href="#fn:pebay2016" class="footnote">1</a></sup>
+This <a href="https://prod-ng.sandia.gov/techlib-noauth/access-control.cgi/2008/086212.pdf">2008 report by Philippe Pébay</a><sup id="fnref:pebay2016" role="doc-noteref"><a href="#fn:pebay2016" class="footnote" rel="footnote">1</a></sup>
 presents formulas to compute the mean, variance, and arbitrary moments
 in one pass,
 and shows how to combine accumulators,

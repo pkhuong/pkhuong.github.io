@@ -229,7 +229,7 @@ happen on a timer.</p>
 
 <p>When a write errors out, we can blindly (maybe once or twice) try
 again: the encoding is independent of the output file’s state.  When a
-write is cut short, we can still issue the same<sup id="fnref:suffix" role="doc-noteref"><a href="#fn:suffix" class="footnote">1</a></sup> write call,
+write is cut short, we can still issue the same<sup id="fnref:suffix" role="doc-noteref"><a href="#fn:suffix" class="footnote" rel="footnote">1</a></sup> write call,
 without trying to “fix” the short write: the encoding and the
 read-side logic already protect against that kind of corruption.</p>
 
@@ -371,7 +371,7 @@ an implicit 0 byte before decoding the next block (one binary flag).</p>
 <p>We have different goals for the software we write at
 <a href="https://www.backtrace.io">Backtrace</a>.  For our logging use case, we
 pass around fully constructed records, and we want to issue a single
-write syscall per record, with periodic <code>fsync</code>.<sup id="fnref:why-not-fewer" role="doc-noteref"><a href="#fn:why-not-fewer" class="footnote">2</a></sup>
+write syscall per record, with periodic <code>fsync</code>.<sup id="fnref:why-not-fewer" role="doc-noteref"><a href="#fn:why-not-fewer" class="footnote" rel="footnote">2</a></sup>
 Buffering is baked in, so there’s no point in making sure we can work
 with a small write buffer.  We also don’t care as much about the space
 overhead (the worst-case bound is already pretty good) as much as we
@@ -559,7 +559,7 @@ block’s literal data is overwritten).</p>
 </code></pre>
 
 <p>where <code>crc</code> is the <code>crc32c</code> of whole record, including the
-header,<sup id="fnref:initialize-your-crc" role="doc-noteref"><a href="#fn:initialize-your-crc" class="footnote">3</a></sup> and <code>generation</code> is a yet-unused
+header,<sup id="fnref:initialize-your-crc" role="doc-noteref"><a href="#fn:initialize-your-crc" class="footnote" rel="footnote">3</a></sup> and <code>generation</code> is a yet-unused
 arbitrary 32-bit payload that we added for forward compatibility.
 There is no size field: the framing already handles that.</p>
 

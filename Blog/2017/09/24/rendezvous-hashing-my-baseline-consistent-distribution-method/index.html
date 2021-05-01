@@ -178,7 +178,7 @@ order on hostnames.</p>
 <span class="line-number">20</span>
 <span class="line-number">21</span>
 <span class="line-number">22</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="n">Destination</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s">&#39;Destination&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s">&#39;host&#39;</span><span class="p">,</span> <span class="s">&#39;hash&#39;</span><span class="p">])</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="n">Destination</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s1">&#39;Destination&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;host&#39;</span><span class="p">,</span> <span class="s1">&#39;hash&#39;</span><span class="p">])</span>
 </span><span class="line">
 </span><span class="line">
 </span><span class="line"><span class="k">def</span> <span class="nf">merge_hashes</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
@@ -195,11 +195,11 @@ order on hostnames.</p>
 </span><span class="line">
 </span><span class="line">
 </span><span class="line"><span class="k">def</span> <span class="nf">pick_destinations</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">destinations</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
-</span><span class="line">    <span class="n">key_hash</span> <span class="o">=</span> <span class="n">hash_key</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>  <span class="c"># hash the key once, instead of hash(key + host)</span>
+</span><span class="line">    <span class="n">key_hash</span> <span class="o">=</span> <span class="n">hash_key</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>  <span class="c1"># hash the key once, instead of hash(key + host)</span>
 </span><span class="line">    <span class="n">annotated</span> <span class="o">=</span> <span class="p">[(</span><span class="n">merge_hashes</span><span class="p">(</span><span class="n">key_hash</span><span class="p">,</span> <span class="n">dest</span><span class="o">.</span><span class="n">hash</span><span class="p">),</span> <span class="n">dest</span><span class="o">.</span><span class="n">host</span><span class="p">)</span>
 </span><span class="line">                 <span class="k">for</span> <span class="n">dest</span> <span class="ow">in</span> <span class="n">destinations</span><span class="p">]</span>
-</span><span class="line">    <span class="n">ordered</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">annotated</span><span class="p">)</span>  <span class="c"># lexicographic sort on merged hash, host.</span>
-</span><span class="line">    <span class="k">return</span> <span class="p">[</span><span class="n">host</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">ordered</span><span class="p">[:</span><span class="n">k</span><span class="p">]]</span>  <span class="c"># grab host from the first k</span>
+</span><span class="line">    <span class="n">ordered</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">annotated</span><span class="p">)</span>  <span class="c1"># lexicographic sort on merged hash, host.</span>
+</span><span class="line">    <span class="k">return</span> <span class="p">[</span><span class="n">host</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">ordered</span><span class="p">[:</span><span class="n">k</span><span class="p">]]</span>  <span class="c1"># grab host from the first k</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>We only need to store the list of destinations, and we can convince
@@ -264,7 +264,7 @@ Resch’s proof of correctness for this tweaked exponential fits on a
 <span class="line-number">11</span>
 <span class="line-number">12</span>
 <span class="line-number">13</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="n">Destination</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s">&#39;Destination&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s">&#39;host&#39;</span><span class="p">,</span> <span class="s">&#39;hash&#39;</span><span class="p">,</span> <span class="s">&#39;weight&#39;</span><span class="p">])</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="n">Destination</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s1">&#39;Destination&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;host&#39;</span><span class="p">,</span> <span class="s1">&#39;hash&#39;</span><span class="p">,</span> <span class="s1">&#39;weight&#39;</span><span class="p">])</span>
 </span><span class="line">
 </span><span class="line">
 </span><span class="line"><span class="k">def</span> <span class="nf">score</span><span class="p">(</span><span class="n">hash_value</span><span class="p">,</span> <span class="n">weight</span><span class="p">):</span>

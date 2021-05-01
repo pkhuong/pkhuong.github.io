@@ -470,7 +470,7 @@ However, this results in a much weaker secondary hash, since a chunk
 could lose up to \(2n - 2\) bits (\(n - 1\) in each 64-bit half)
 of hash information to a plain shift.
 The shifted xor-shifts might be a bit slower to compute, but
-guarantees that we only lose at most 2 bits<sup id="fnref:one-bit-with-ph" role="doc-noteref"><a href="#fn:one-bit-with-ph" class="footnote">1</a></sup> of
+guarantees that we only lose at most 2 bits<sup id="fnref:one-bit-with-ph" role="doc-noteref"><a href="#fn:one-bit-with-ph" class="footnote" rel="footnote">1</a></sup> of
 information per chunk.  This feels like an interface that’s harder to
 misuse.</p>
 
@@ -564,7 +564,7 @@ with the PH key, i.e.,</p>
 
 <p>When checksumming blocks of the same size, this is a no-op with respect
 to collision probabilities.  Implementations might however benefit
-from the ability to use a fused <code>xor</code> with load from memory<sup id="fnref:latency" role="doc-noteref"><a href="#fn:latency" class="footnote">2</a></sup>
+from the ability to use a fused <code>xor</code> with load from memory<sup id="fnref:latency" role="doc-noteref"><a href="#fn:latency" class="footnote" rel="footnote">2</a></sup>
 to compute \(m_i \oplus k_i\), and feed that both into the checksum
 and into <code>CLMUL</code> for PH.</p>
 
@@ -576,7 +576,7 @@ probability at most \(2^{-64}\).</p>
 
 <p>With a small tweak to the checksum function, we can easily guarantee
 that blocks with a different number of chunks collide with probability
-less than \(2^{-126}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" class="footnote">3</a></sup></p>
+less than \(2^{-126}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" class="footnote" rel="footnote">3</a></sup></p>
 
 <p><small>Thank you Joonas for helping me rubber duck the presentation, and Jim for pointing me in the right direction, and for the fruitful discussion!</small></p>
 

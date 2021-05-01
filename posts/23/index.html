@@ -186,7 +186,7 @@ bits.</p>
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>"lb.lisp" </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
-</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">lb</span> <span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span></span><span class="p">(</span><span class="nb">defun</span> <span class="nv">lb</span> <span class="p">(</span><span class="nv">x</span><span class="p">)</span>
 </span><span class="line">  <span class="p">(</span><span class="nb">1-</span> <span class="p">(</span><span class="nb">integer-length</span> <span class="nv">x</span><span class="p">)))</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
@@ -240,7 +240,7 @@ only need to find the range index</p>
 <span class="line-number">8</span>
 <span class="line-number">9</span>
 <span class="line-number">10</span>
-</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">bucket</span> <span class="p">(</span><span class="nv">x</span> <span class="nv">linear</span> <span class="nv">subbin</span><span class="p">)</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span></span><span class="p">(</span><span class="nb">defun</span> <span class="nv">bucket</span> <span class="p">(</span><span class="nv">x</span> <span class="nv">linear</span> <span class="nv">subbin</span><span class="p">)</span>
 </span><span class="line">  <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">n-bits</span> <span class="p">(</span><span class="nv">lb</span> <span class="p">(</span><span class="nb">logior</span> <span class="nv">x</span> <span class="p">(</span><span class="nb">ash</span> <span class="mi">1</span> <span class="nv">linear</span><span class="p">))))</span>
 </span><span class="line">         <span class="p">(</span><span class="nv">shift</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n-bits</span> <span class="nv">subbin</span><span class="p">))</span>
 </span><span class="line">         <span class="p">(</span><span class="nv">mask</span> <span class="p">(</span><span class="nb">ldb</span> <span class="p">(</span><span class="nb">byte</span> <span class="nv">shift</span> <span class="mi">0</span><span class="p">)</span> <span class="mi">-1</span><span class="p">))</span>
@@ -294,7 +294,7 @@ CL-USER&gt; (bucket 34 4 2)
 <span class="line-number">6</span>
 <span class="line-number">7</span>
 <span class="line-number">8</span>
-</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span class="p">(</span><span class="nb">defun</span> <span class="nv">bucket-down</span> <span class="p">(</span><span class="nv">x</span> <span class="nv">linear</span> <span class="nv">subbin</span><span class="p">)</span>
+</pre></td><td class="code"><pre><code class="lisp"><span class="line"><span></span><span class="p">(</span><span class="nb">defun</span> <span class="nv">bucket-down</span> <span class="p">(</span><span class="nv">x</span> <span class="nv">linear</span> <span class="nv">subbin</span><span class="p">)</span>
 </span><span class="line">  <span class="p">(</span><span class="k">let*</span> <span class="p">((</span><span class="nv">n-bits</span> <span class="p">(</span><span class="nv">lb</span> <span class="p">(</span><span class="nb">logior</span> <span class="nv">x</span> <span class="p">(</span><span class="nb">ash</span> <span class="mi">1</span> <span class="nv">linear</span><span class="p">))))</span>
 </span><span class="line">         <span class="p">(</span><span class="nv">shift</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">n-bits</span> <span class="nv">subbin</span><span class="p">))</span>
 </span><span class="line">         <span class="p">(</span><span class="nv">sub-index</span> <span class="p">(</span><span class="nb">ash</span> <span class="nv">x</span> <span class="p">(</span><span class="nb">-</span> <span class="nv">shift</span><span class="p">)))</span>
@@ -383,7 +383,7 @@ instead of up.</p>
 <span class="line-number">42</span>
 <span class="line-number">43</span>
 <span class="line-number">44</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">unsigned</span> <span class="kt">int</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">static</span> <span class="kr">inline</span> <span class="kt">unsigned</span> <span class="kt">int</span>
 </span><span class="line"><span class="nf">lb</span><span class="p">(</span><span class="kt">size_t</span> <span class="n">x</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="cm">/* I need an extension just for integer-length (: */</span>

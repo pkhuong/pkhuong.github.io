@@ -134,7 +134,7 @@ https://github.com/glommer and https://github.com/axboe.</p>
 
 <p>TL;DR: If you want to know the best way to write to a ton of data
 really fast, ask someone else.  I can only help you avoid a couple
-mistakes with <a href="/images/2021-01-22-appending-to-a-log-an-introduction-to-the-linux-dark-arts/log_file_append.html">a bit of simple code</a>.<sup id="fnref:howto-generate" role="doc-noteref"><a href="#fn:howto-generate" class="footnote">1</a></sup></p>
+mistakes with <a href="/images/2021-01-22-appending-to-a-log-an-introduction-to-the-linux-dark-arts/log_file_append.html">a bit of simple code</a>.<sup id="fnref:howto-generate" role="doc-noteref"><a href="#fn:howto-generate" class="footnote" rel="footnote">1</a></sup></p>
 
 <p>Here’s an overview of the baseline I’ll present:</p>
 
@@ -180,7 +180,7 @@ with readers that detect corruption and handle duplicate data.</p>
 <p>Given that, we only need our writes to a log file to be atomic on
 success.  When a write fails, all that matters is that we can detect
 the failure (e.g., short write), and try again.  We get that with
-POSIX <code>O_APPEND</code> semantics,<sup id="fnref:NFS-go-home" role="doc-noteref"><a href="#fn:NFS-go-home" class="footnote">2</a></sup> even when appending to a
+POSIX <code>O_APPEND</code> semantics,<sup id="fnref:NFS-go-home" role="doc-noteref"><a href="#fn:NFS-go-home" class="footnote" rel="footnote">2</a></sup> even when appending to a
 log file (inode) from multiple threads or processes, via any number
 of file objects.</p>
 
@@ -299,7 +299,7 @@ it again when we append more data and trigger another flush.</p>
 
 <p>This didn’t used to be so bad on spinning rust, but contemporary
 storage media (SSDs, NVMes, SMR drives… anything but persistent
-memory) really don’t like partial overwrites.<sup id="fnref:bad-ssd" role="doc-noteref"><a href="#fn:bad-ssd" class="footnote">3</a></sup> Arguably, CoW
+memory) really don’t like partial overwrites.<sup id="fnref:bad-ssd" role="doc-noteref"><a href="#fn:bad-ssd" class="footnote" rel="footnote">3</a></sup> Arguably, CoW
 filesystems don’t have that problem: they instead copy partially
 overwritten blocks in software.  TL;DR: no one likes to flush partial
 blocks.</p>

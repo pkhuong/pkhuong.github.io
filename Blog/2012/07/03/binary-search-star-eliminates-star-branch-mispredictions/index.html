@@ -227,7 +227,7 @@ linear (lower bound) search:</p>
 <span class="line-number">8</span>
 <span class="line-number">9</span>
 <span class="line-number">10</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="n">ALWAYS_INLINE</span> <span class="kt">size_t</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="n">ALWAYS_INLINE</span> <span class="kt">size_t</span>
 </span><span class="line"><span class="nf">linear_search</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">size</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="k">for</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span> <span class="o">=</span> <span class="n">size</span><span class="p">;</span> <span class="n">i</span> <span class="o">--&gt;</span> <span class="mi">0</span><span class="p">;)</span> <span class="p">{</span>
@@ -317,7 +317,7 @@ complicated version that searches the data forward:</p>
 <span class="line-number">9</span>
 <span class="line-number">10</span>
 <span class="line-number">11</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="n">ALWAYS_INLINE</span> <span class="kt">size_t</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="n">ALWAYS_INLINE</span> <span class="kt">size_t</span>
 </span><span class="line"><span class="nf">fwd_search</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">size</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="k">for</span> <span class="p">(</span><span class="kt">size_t</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">size</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
@@ -353,7 +353,7 @@ complicated version that searches the data forward:</p>
 <span class="line-number">19</span>
 <span class="line-number">20</span>
 <span class="line-number">21</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cm">/* log_2 ceiling */</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cm">/* log_2 ceiling */</span>
 </span><span class="line"><span class="n">ALWAYS_INLINE</span> <span class="kt">unsigned</span> <span class="nf">lb</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">x</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="k">if</span> <span class="p">(</span><span class="n">x</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">)</span> <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
@@ -499,7 +499,7 @@ performed here.</p>
 <span class="line-number">34</span>
 <span class="line-number">35</span>
 <span class="line-number">36</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">typedef</span> <span class="kt">int</span> <span class="n">v4si</span> <span class="nf">__attribute__</span> <span class="p">((</span><span class="n">vector_size</span> <span class="p">(</span><span class="mi">16</span><span class="p">)));</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">typedef</span> <span class="kt">int</span> <span class="n">v4si</span> <span class="nf">__attribute__</span> <span class="p">((</span><span class="n">vector_size</span> <span class="p">(</span><span class="mi">16</span><span class="p">)));</span>
 </span><span class="line"><span class="k">typedef</span> <span class="kt">float</span> <span class="n">v4sf</span> <span class="nf">__attribute__</span> <span class="p">((</span><span class="n">vector_size</span> <span class="p">(</span><span class="mi">16</span><span class="p">)));</span>
 </span><span class="line">
 </span><span class="line"><span class="cp">#define PCMP(KEYS, VALS) (__builtin_ia32_movmskps                       \</span>

@@ -190,7 +190,7 @@ optimisation should flow naturally from that
 point of view.  Finally, I’ll guess why I had more success
 with <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a> this time than with 
 <a href="https://www.satyenkale.com/papers/mw-survey.pdf">Multiplicative Weight Update</a>
-eight years ago.<sup id="fnref:wall" role="doc-noteref"><a href="#fn:wall" class="footnote">1</a></sup></p>
+eight years ago.<sup id="fnref:wall" role="doc-noteref"><a href="#fn:wall" class="footnote" rel="footnote">1</a></sup></p>
 
 <h2 id="the-experts-problem-and-lp-feasibility">The experts problem and LP feasibility</h2>
 
@@ -241,14 +241,14 @@ experts (e.g., 60% rock, 40% paper, 0% scissors).  The cost
 \(\mathrm{rock} = -0.5\), \(\mathrm{paper} = 0.5\), 
 \(\mathrm{scissors} = 0\)), and we incur the weighted average
 from our play (e.g., \(60\% \cdot -0.5 + 40\% \cdot 0.5 = -0.1\))
-before playing the next round.<sup id="fnref:equivalent" role="doc-noteref"><a href="#fn:equivalent" class="footnote">2</a></sup>  The goal is to minimise
+before playing the next round.<sup id="fnref:equivalent" role="doc-noteref"><a href="#fn:equivalent" class="footnote" rel="footnote">2</a></sup>  The goal is to minimise
 our worst-case regret, the additive difference between the total cost
 incurred by our mixtures of experts and that of the a posteriori best single
 expert.  In this case as well, online learning
 algorithms guarantee regret in \(\mathcal{O}(\sqrt{T} \, \lg n)\)</p>
 
 <p>This line of research is interesting because simple algorithms achieve
-that bound, with explicit constant factors on the order of 1,<sup id="fnref:which-log" role="doc-noteref"><a href="#fn:which-log" class="footnote">3</a></sup>
+that bound, with explicit constant factors on the order of 1,<sup id="fnref:which-log" role="doc-noteref"><a href="#fn:which-log" class="footnote" rel="footnote">3</a></sup>
 and <a href="http://drops.dagstuhl.de/opus/volltexte/2017/7499/pdf/LIPIcs-ICALP-2017-48.pdf">those bounds are known to be non-asymptotically tight for a large class of algorithms</a>.
 Like dense linear algebra or fast Fourier transforms, where algorithms
 are often compared by counting individual floating point operations,
@@ -574,7 +574,7 @@ width is narrower.</p>
 
 <p><a href="https://arxiv.org/abs/1301.0534">de Rooij and others published AdaHedge in 2013</a>,
 an algorithm that addresses both these issues by smoothly estimating
-its parameter over time, without using the doubling trick.<sup id="fnref:doubling" role="doc-noteref"><a href="#fn:doubling" class="footnote">4</a></sup>
+its parameter over time, without using the doubling trick.<sup id="fnref:doubling" role="doc-noteref"><a href="#fn:doubling" class="footnote" rel="footnote">4</a></sup>
 AdaHedge’s loss (convergence rate to an \(\varepsilon-\)solution)
 still depends on the relaxation’s width.  However, it depends on the
 maximum width actually observed during the solution process, and not
@@ -597,7 +597,7 @@ by more than \(1\), but some points could be covered by hundreds of
 tours, so the worst case satisfaction width is high. I had to rely on
 the way AdaHedge adapts to the actual hardness of the problem.  In the
 end, \(34492\) iterations sufficed to find a solution that was \(4.5\%\)
-infeasible.<sup id="fnref:wrong-log" role="doc-noteref"><a href="#fn:wrong-log" class="footnote">5</a></sup>  This corresponds to a worst case with a width
+infeasible.<sup id="fnref:wrong-log" role="doc-noteref"><a href="#fn:wrong-log" class="footnote" rel="footnote">5</a></sup>  This corresponds to a worst case with a width
 of less than \(2\), which is probably not what happened.  It seems
 more likely that the surrogate dual isn’t actually an omniscient
 adversary, and AdaHedge was able to exploit some of that “easiness.”</p>

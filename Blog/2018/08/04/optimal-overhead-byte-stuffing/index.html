@@ -160,7 +160,7 @@ re-encode an arbitrary bytestream while avoiding the reserved value 255.
 The state of the art for this “byte stuffing” problem is 
 <a href="http://www.stuartcheshire.org/papers/cobsforton.pdf">Consistent overhead byte stuffing (COBS)</a>,
 which adds a fixed overhead of one byte, plus at most one encoded byte
-for every 254 byte of initial data (i.e., \(&lt; 0.394\%\)).<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote">1</a></sup></p>
+for every 254 byte of initial data (i.e., \(&lt; 0.394\%\)).<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote" rel="footnote">1</a></sup></p>
 
 <p>The entropy bound is \(\log\sb{255}256 - 1 &lt; 0.0707\%\), less than
 one fifth as much. Using rANS (and paying attention to the constant
@@ -216,7 +216,7 @@ but also from short writes: Unix’s <a href="">write(2)</a> guarantees that
 writes are always in full byte increments, even if the syscall
 ultimately fails. Again, this assumes that badly framed or otherwise
 corrupt records can be detected. Saltzer’s, Reed’s, and Clark’s
-<a href="http://web.mit.edu/Saltzer/www/publications/endtoend/endtoend.pdf">classic end-to-end arguments paper</a><sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote">2</a></sup>
+<a href="http://web.mit.edu/Saltzer/www/publications/endtoend/endtoend.pdf">classic end-to-end arguments paper</a><sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote" rel="footnote">2</a></sup>
 reminds us that instrumenting records to detect data corruption is a
 good idea, even when building on top of “reliable” abstractions like
 TCP or file storage.</p>
@@ -254,7 +254,7 @@ return the integer accumulator to its value before the encoding.</p>
 <span class="line-number">2</span>
 <span class="line-number">3</span>
 <span class="line-number">4</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">def</span> <span class="nf">encode</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">):</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">encode</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">):</span>
 </span><span class="line">    <span class="k">return</span> <span class="p">(</span><span class="n">denominator</span> <span class="o">*</span> <span class="p">(</span><span class="n">accumulator</span> <span class="o">//</span> <span class="n">frequency</span><span class="p">)</span>
 </span><span class="line">            <span class="o">+</span> <span class="n">base</span>
 </span><span class="line">            <span class="o">+</span> <span class="p">(</span><span class="n">accumulator</span> <span class="o">%</span> <span class="n">frequency</span><span class="p">))</span>
@@ -274,7 +274,7 @@ total frequency denominator, base, and frequency.</p>
 <span class="line-number">5</span>
 <span class="line-number">6</span>
 <span class="line-number">7</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="k">def</span> <span class="nf">extract_symbol</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">):</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">extract_symbol</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">):</span>
 </span><span class="line">    <span class="k">return</span> <span class="n">accumulator</span> <span class="o">%</span> <span class="n">denominator</span>
 </span><span class="line">
 </span><span class="line"><span class="k">def</span> <span class="nf">decode</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">):</span>
@@ -308,23 +308,23 @@ can’t hurt to double-check:</p>
 <span class="line-number">17</span>
 <span class="line-number">18</span>
 <span class="line-number">19</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="kn">from</span> <span class="nn">hypothesis</span> <span class="kn">import</span> <span class="n">given</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="kn">from</span> <span class="nn">hypothesis</span> <span class="kn">import</span> <span class="n">given</span>
 </span><span class="line"><span class="kn">from</span> <span class="nn">hypothesis.strategies</span> <span class="kn">import</span> <span class="n">data</span><span class="p">,</span> <span class="n">integers</span>
 </span><span class="line">
 </span><span class="line"><span class="nd">@given</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span> <span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">data</span><span class="p">())</span>
 </span><span class="line"><span class="k">def</span> <span class="nf">encode_extract_symbol_roundtrip</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
-</span><span class="line">    <span class="c"># Hypothesis provides accumulator and denominator directly. </span>
-</span><span class="line">    <span class="c"># Generate the rest while taking constraints into account.</span>
+</span><span class="line">    <span class="c1"># Hypothesis provides accumulator and denominator directly. </span>
+</span><span class="line">    <span class="c1"># Generate the rest while taking constraints into account.</span>
 </span><span class="line">    <span class="n">base</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="n">denominator</span> <span class="o">-</span> <span class="mi">1</span><span class="p">),</span>
-</span><span class="line">                     <span class="n">label</span><span class="o">=</span><span class="s">&quot;base&quot;</span><span class="p">)</span>
+</span><span class="line">                     <span class="n">label</span><span class="o">=</span><span class="s2">&quot;base&quot;</span><span class="p">)</span>
 </span><span class="line">    <span class="n">frequency</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
 </span><span class="line">                                   <span class="n">max_value</span><span class="o">=</span><span class="n">denominator</span> <span class="o">-</span> <span class="n">base</span><span class="p">),</span>
-</span><span class="line">                          <span class="n">label</span><span class="o">=</span><span class="s">&quot;frequency&quot;</span><span class="p">)</span>
-</span><span class="line">    <span class="c"># The accumulator is always non-negative.</span>
+</span><span class="line">                          <span class="n">label</span><span class="o">=</span><span class="s2">&quot;frequency&quot;</span><span class="p">)</span>
+</span><span class="line">    <span class="c1"># The accumulator is always non-negative.</span>
 </span><span class="line">    <span class="n">encoded</span> <span class="o">=</span> <span class="n">encode</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">)</span>
 </span><span class="line">    <span class="k">assert</span> <span class="n">encoded</span> <span class="o">&gt;=</span> <span class="mi">0</span>
 </span><span class="line">    <span class="n">extracted</span> <span class="o">=</span> <span class="n">extract_symbol</span><span class="p">(</span><span class="n">encoded</span><span class="p">,</span> <span class="n">denominator</span><span class="p">)</span>
-</span><span class="line">    <span class="c"># extract_symbol gives us something in [base, base + frequency).</span>
+</span><span class="line">    <span class="c1"># extract_symbol gives us something in [base, base + frequency).</span>
 </span><span class="line">    <span class="k">assert</span> <span class="n">base</span> <span class="o">&lt;=</span> <span class="n">extracted</span>
 </span><span class="line">    <span class="k">assert</span> <span class="n">extracted</span> <span class="o">&lt;</span> <span class="n">base</span> <span class="o">+</span> <span class="n">frequency</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
@@ -341,7 +341,7 @@ failure if I swap <code>+ base</code> and <code>- base</code> in <code>encode</c
 can also apply mutation testing to the assertions or the
 preconditions.  Hypothesis also finds trivial counter-examples if I
 strengthen either side of the asserted inequality, but does less well
-when I widen the data generation interval <sup id="fnref:3" role="doc-noteref"><a href="#fn:3" class="footnote">3</a></sup> for <code>frequency</code>.
+when I widen the data generation interval <sup id="fnref:3" role="doc-noteref"><a href="#fn:3" class="footnote" rel="footnote">3</a></sup> for <code>frequency</code>.
 Adding a property for <code>decode</code> should detect this erroneous precondition.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>check_roundtrip_2.py </span></figcaption>
@@ -360,19 +360,19 @@ Adding a property for <code>decode</code> should detect this erroneous precondit
 <span class="line-number">13</span>
 <span class="line-number">14</span>
 <span class="line-number">15</span>
-</pre></td><td class="code"><pre><code class="py"><span class="line"><span class="nd">@given</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span> <span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">data</span><span class="p">())</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="nd">@given</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span> <span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">data</span><span class="p">())</span>
 </span><span class="line"><span class="k">def</span> <span class="nf">encode_decode_roundtrip</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
 </span><span class="line">    <span class="n">base</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_value</span><span class="o">=</span><span class="n">denominator</span> <span class="o">-</span> <span class="mi">1</span><span class="p">),</span>
-</span><span class="line">                     <span class="n">label</span><span class="o">=</span><span class="s">&quot;base&quot;</span><span class="p">)</span>
+</span><span class="line">                     <span class="n">label</span><span class="o">=</span><span class="s2">&quot;base&quot;</span><span class="p">)</span>
 </span><span class="line">    <span class="n">frequency</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="n">integers</span><span class="p">(</span><span class="n">min_value</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
 </span><span class="line">                                   <span class="n">max_value</span><span class="o">=</span><span class="n">denominator</span> <span class="o">-</span> <span class="n">base</span><span class="p">),</span>
-</span><span class="line">                          <span class="n">label</span><span class="o">=</span><span class="s">&quot;frequency&quot;</span><span class="p">)</span>
+</span><span class="line">                          <span class="n">label</span><span class="o">=</span><span class="s2">&quot;frequency&quot;</span><span class="p">)</span>
 </span><span class="line">    <span class="n">encoded</span> <span class="o">=</span> <span class="n">encode</span><span class="p">(</span><span class="n">accumulator</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">)</span>
 </span><span class="line">    <span class="k">assert</span> <span class="n">encoded</span> <span class="o">&gt;=</span> <span class="mi">0</span>
 </span><span class="line">    <span class="n">extracted</span> <span class="o">=</span> <span class="n">extract_symbol</span><span class="p">(</span><span class="n">encoded</span><span class="p">,</span> <span class="n">denominator</span><span class="p">)</span>
 </span><span class="line">    <span class="k">assert</span> <span class="n">base</span> <span class="o">&lt;=</span> <span class="n">extracted</span>
 </span><span class="line">    <span class="k">assert</span> <span class="n">extracted</span> <span class="o">&lt;</span> <span class="n">base</span> <span class="o">+</span> <span class="n">frequency</span>
-</span><span class="line">    <span class="c"># Also check that we can recover the initial accumulator.</span>
+</span><span class="line">    <span class="c1"># Also check that we can recover the initial accumulator.</span>
 </span><span class="line">    <span class="n">decoded</span> <span class="o">=</span> <span class="n">decode</span><span class="p">(</span><span class="n">encoded</span><span class="p">,</span> <span class="n">denominator</span><span class="p">,</span> <span class="n">base</span><span class="p">,</span> <span class="n">frequency</span><span class="p">)</span>
 </span><span class="line">    <span class="k">assert</span> <span class="n">decoded</span> <span class="o">==</span> <span class="n">accumulator</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>

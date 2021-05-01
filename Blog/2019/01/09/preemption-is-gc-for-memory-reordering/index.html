@@ -425,7 +425,7 @@ That question can’t be answered with the memory model, and worst-case
 execution time bounds are a joke on contemporary x86.</p>
 
 <p>I found an answer by remembering that <code>IRET</code>, the instruction used to
-return from interrupt handlers, <a href="https://www.felixcloutier.com/x86/IRET:IRETD.html">is a full barrier</a>.<sup id="fnref:model-ooe" role="doc-noteref"><a href="#fn:model-ooe" class="footnote">1</a></sup>
+return from interrupt handlers, <a href="https://www.felixcloutier.com/x86/IRET:IRETD.html">is a full barrier</a>.<sup id="fnref:model-ooe" role="doc-noteref"><a href="#fn:model-ooe" class="footnote" rel="footnote">1</a></sup>
 We also know that interrupts happen at frequent and regular intervals,
 if only for the preemption timer (every 4-10ms on stock Linux/x86oid).</p>
 
@@ -735,7 +735,7 @@ observe the timestamp update from a different core than the updater,
 in which case TSO saves us, or after the handler has returned with a
 serialising IRET.</p>
 
-<p>We can bundle all that logic in a <a href="https://github.com/pkhuong/barrierd/blob/master/signal.ebpf.inc">short eBPF program</a>.<sup id="fnref:ebpf" role="doc-noteref"><a href="#fn:ebpf" class="footnote">2</a></sup>
+<p>We can bundle all that logic in a <a href="https://github.com/pkhuong/barrierd/blob/master/signal.ebpf.inc">short eBPF program</a>.<sup id="fnref:ebpf" role="doc-noteref"><a href="#fn:ebpf" class="footnote" rel="footnote">2</a></sup>
 The program has a map of thread-local arrays (of 1 CLOCK_MONOTONIC
 timestamp each), a map of perf event queues (one per CPU), and an
 array of 1 “watermark” timestamp.  Whenever the program runs, it gets
@@ -832,7 +832,7 @@ membarrier (<code>IPI</code>) is usually slightly faster than <code>mprotect</co
 <p>The performance of IPI-based barriers should be roughly independent of
 system load. However, we did observe a slowdown for expedited
 membarrier (between \(68.4-73.0\%\) of the time, 
-\(p &lt; 10\sp{-12}\) according to a binomial test<sup id="fnref:CSM" role="doc-noteref"><a href="#fn:CSM" class="footnote">3</a></sup>) on the same 
+\(p &lt; 10\sp{-12}\) according to a binomial test<sup id="fnref:CSM" role="doc-noteref"><a href="#fn:CSM" class="footnote" rel="footnote">3</a></sup>) on the same 
 4-way system, when all CPUs were running CPU-intensive code at low
 priority.  In this second experiment, we have a sample size of one
 million observations for each method, and the worst case for <code>IPI</code> via

@@ -119,7 +119,7 @@ Feb
 <div class="entry-content" style="font-family: ; font-size: "><p><small>Apologies for the failed <a href="https://www.youtube.com/watch?v=K3DRkVjuqmc">Cake reference</a>.<br />
 2020-02-02: Refer to Travis Downs’s investigation into this pathological case for forwarding.</small></p>
 
-<p>I’ve been responsible for <a href="https://backtrace.io/">Backtrace.io</a>’s crash analytic database<sup id="fnref:started-work" role="doc-noteref"><a href="#fn:started-work" class="footnote">1</a></sup> for a couple months now.
+<p>I’ve been responsible for <a href="https://backtrace.io/">Backtrace.io</a>’s crash analytic database<sup id="fnref:started-work" role="doc-noteref"><a href="#fn:started-work" class="footnote" rel="footnote">1</a></sup> for a couple months now.
 I have focused my recent efforts on improving query times for in-memory grouped aggregations, i.e.,
 the archetypal MapReduce use-case where we generate key-value pairs, and <a href="https://en.wikipedia.org/wiki/Fold_(higher-order_function)">fold</a> over the values
 for each key in some <a href="https://en.wikipedia.org/wiki/Semigroup">(semi)</a><a href="https://en.wikipedia.org/wiki/Group_(mathematics)">group</a>.
@@ -127,7 +127,7 @@ We have a cute cache-efficient data structure for this type of workload;
 the inner loop simply inserts in a small hash table with <a href="/Blog/more_numerical_experiments_in_hashing.html">Robin Hood linear probing</a>,
 in order to guarantee entries in the table are ordered by hash value.  This
 ordering lets us easily dump the entries in sorted order, and <a href="https://www2.eecs.berkeley.edu/Pubs/TechRpts/1993/6309.html">block</a> the merge loop for an arbitrary number of sorted arrays
-into a unified, larger, ordered hash table (which we can, again, dump to a sorted array).<sup id="fnref:more-later" role="doc-noteref"><a href="#fn:more-later" class="footnote">2</a></sup></p>
+into a unified, larger, ordered hash table (which we can, again, dump to a sorted array).<sup id="fnref:more-later" role="doc-noteref"><a href="#fn:more-later" class="footnote" rel="footnote">2</a></sup></p>
 
 <h1 id="observation">Observation</h1>
 
@@ -155,7 +155,7 @@ B2.
 C2.
 </code></pre>
 
-<p>and the <code>movdqu</code> happens in step C, to copy the element that step B just constructed.<sup id="fnref:dont-copy" role="doc-noteref"><a href="#fn:dont-copy" class="footnote">3</a></sup></p>
+<p>and the <code>movdqu</code> happens in step C, to copy the element that step B just constructed.<sup id="fnref:dont-copy" role="doc-noteref"><a href="#fn:dont-copy" class="footnote" rel="footnote">3</a></sup></p>
 
 <p>At this point, an important question suggests itself: does it matter?
 We could simply increase the size of the base case and speed up the rest of the bottom-up recursion… eventually, the latency for the random accesses in the initial hash table will dominate the inner loop.</p>
@@ -169,7 +169,7 @@ That’s why I wanted to make sure this hash table insertion loop worked on as w
 
 <p>Back to the original question. Why do we spend so many cycles loading data we just wrote to cache?</p>
 
-<p>The answer is in the question and in the title of this post: too little time elapses between the instructions that write data to the cache and the ones that read the same data.<sup id="fnref:but-forwarding" role="doc-noteref"><a href="#fn:but-forwarding" class="footnote">4</a></sup>
+<p>The answer is in the question and in the title of this post: too little time elapses between the instructions that write data to the cache and the ones that read the same data.<sup id="fnref:but-forwarding" role="doc-noteref"><a href="#fn:but-forwarding" class="footnote" rel="footnote">4</a></sup>
 A modern out-of-order machine (e.g., most amd64 chips) can execute multiple instructions at the same time, and will start executing instructions as soon as their operands are ready, even when earlier instructions in program order are still waiting for theirs.
 Machine code is essentially a messy way to encode a <a href="https://fgiesen.wordpress.com/2018/03/05/a-whirlwind-introduction-to-dataflow-graphs/">dataflow graph</a>, 
 which means our job as micro-optimisers is, at a high level, to avoid long dependency chains and make the dataflow graph as wide as possible.
@@ -267,7 +267,7 @@ Moreover, they come from a block of code that was pipelined in software and exec
 It doesn’t really matter if these instructions are slow: they’re still far from being on the critical path!  This last restructuring yielded a 20% speed-up on a few slow queries.</p>
 
 <p>I described two tools that I use regularly when optimising code for contemporary hardware.
-Finding ways to scatter around scheduling slack is always useful, both in software and in real life planning.<sup id="fnref:unless-people" role="doc-noteref"><a href="#fn:unless-people" class="footnote">5</a></sup>
+Finding ways to scatter around scheduling slack is always useful, both in software and in real life planning.<sup id="fnref:unless-people" role="doc-noteref"><a href="#fn:unless-people" class="footnote" rel="footnote">5</a></sup>
 One simple way to do so is to add bounded buffers, and to flush buffers as soon as they fill up (or refill when they become empty), instead of waiting until the next write to the buffer.
 However, I think the more powerful transformation is using buffering to expose bulk operations, which tends to open up more opportunities than just doing the same thing in a loop.
 In the case above, we found a 20% speed-up; for someone who visit their <a href="https://help.backtrace.io/en/articles/2765535-triage">Backtrace dashboard</a> a couple times a day, that can add up to an hour or two at the end of the year.</p>

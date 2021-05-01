@@ -265,16 +265,16 @@ is a 64 bit spinlock.</p>
 <span class="line-number">9</span>
 <span class="line-number">10</span>
 <span class="line-number">11</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">typedef</span> <span class="k">union</span> <span class="n">rlock_owner_seq</span> <span class="p">{</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">typedef</span> <span class="k">union</span> <span class="n">rlock_owner_seq</span> <span class="p">{</span>
 </span><span class="line">        <span class="kt">uint64_t</span> <span class="n">bits</span><span class="p">;</span>
 </span><span class="line">        <span class="k">struct</span> <span class="p">{</span>
 </span><span class="line">                <span class="kt">uint64_t</span> <span class="nl">sequence</span><span class="p">:</span><span class="mi">22</span><span class="p">;</span>
 </span><span class="line">                <span class="kt">uint64_t</span> <span class="nl">address</span><span class="p">:</span><span class="mi">42</span><span class="p">;</span>
 </span><span class="line">        <span class="p">};</span>
-</span><span class="line"><span class="p">}</span> <span class="kt">rlock_owner_seq_t</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span> <span class="n">rlock_owner_seq_t</span><span class="p">;</span>
 </span><span class="line">
 </span><span class="line"><span class="k">struct</span> <span class="n">rlock</span> <span class="p">{</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">owner</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">owner</span><span class="p">;</span>
 </span><span class="line"><span class="p">};</span>
 </span></code></pre></td></tr></table></div></figure></notextile></div>
 
@@ -305,9 +305,9 @@ is a 64 bit spinlock.</p>
 <span class="line-number">14</span>
 <span class="line-number">15</span>
 <span class="line-number">16</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">struct</span> <span class="n">rlock_owner</span> <span class="p">{</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">struct</span> <span class="n">rlock_owner</span> <span class="p">{</span>
 </span><span class="line">        <span class="cm">/* SPMC. */</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">;</span>
 </span><span class="line">        <span class="cm">/* MPMC: Asked to cancel up to here (inclusively). */</span>
 </span><span class="line">        <span class="kt">uint32_t</span> <span class="n">cancel_sequence</span><span class="p">;</span>
 </span><span class="line">        <span class="cm">/* MPMC: Signaled to cancel up to here (inclusively). */</span>
@@ -365,10 +365,10 @@ means making sure we observe any cancellation request.</p>
 <span class="line-number">31</span>
 <span class="line-number">32</span>
 <span class="line-number">33</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">static</span> <span class="kr">inline</span> <span class="kt">bool</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">static</span> <span class="kr">inline</span> <span class="kt">bool</span>
 </span><span class="line"><span class="nf">update_self</span><span class="p">(</span><span class="k">struct</span> <span class="n">rlock_owner</span> <span class="o">*</span><span class="n">self</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">snapshot</span> <span class="o">=</span> <span class="p">{</span> <span class="p">.</span><span class="n">bits</span> <span class="o">=</span> <span class="n">self</span><span class="o">-&gt;</span><span class="n">seq</span><span class="p">.</span><span class="n">bits</span> <span class="p">};</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">snapshot</span> <span class="o">=</span> <span class="p">{</span> <span class="p">.</span><span class="n">bits</span> <span class="o">=</span> <span class="n">self</span><span class="o">-&gt;</span><span class="n">seq</span><span class="p">.</span><span class="n">bits</span> <span class="p">};</span>
 </span><span class="line">        <span class="kt">uint32_t</span> <span class="n">cancel_sequence</span> <span class="o">=</span> <span class="n">ck_pr_load_32</span><span class="p">(</span><span class="o">&amp;</span><span class="n">self</span><span class="o">-&gt;</span><span class="n">cancel_sequence</span><span class="p">);</span>
 </span><span class="line">
 </span><span class="line">        <span class="cm">/* We&#39;ve been asked to cancel if cancel_sequence == seq.sequence. */</span>
@@ -444,11 +444,11 @@ owner/sequence descriptor.</p>
 <span class="line-number">37</span>
 <span class="line-number">38</span>
 <span class="line-number">39</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">rlock_owner_seq_t</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="n">rlock_owner_seq_t</span>
 </span><span class="line"><span class="nf">rlock_lock</span><span class="p">(</span><span class="k">struct</span> <span class="n">rlock</span> <span class="o">*</span><span class="n">lock</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="k">struct</span> <span class="n">rlock_owner</span> <span class="o">*</span><span class="n">self</span> <span class="o">=</span> <span class="n">get_self</span><span class="p">();</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">,</span> <span class="n">snapshot</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">,</span> <span class="n">snapshot</span><span class="p">;</span>
 </span><span class="line">
 </span><span class="line">        <span class="cm">/* Load the current owner. */</span>
 </span><span class="line">        <span class="n">snapshot</span><span class="p">.</span><span class="n">bits</span> <span class="o">=</span> <span class="n">ck_pr_load_64</span><span class="p">(</span><span class="o">&amp;</span><span class="n">lock</span><span class="o">-&gt;</span><span class="n">owner</span><span class="p">.</span><span class="n">bits</span><span class="p">);</span>
@@ -568,12 +568,12 @@ owner/sequence descriptor.</p>
 <span class="line-number">78</span>
 <span class="line-number">79</span>
 <span class="line-number">80</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">bool</span>
 </span><span class="line"><span class="nf">rlock_owner_cancel</span><span class="p">(</span><span class="k">union</span> <span class="n">rlock_owner_seq</span> <span class="n">owner</span><span class="p">,</span>
 </span><span class="line">    <span class="k">struct</span> <span class="n">rlock</span> <span class="o">*</span><span class="n">evict</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="k">struct</span> <span class="n">rlock_owner</span> <span class="o">*</span><span class="n">victim</span> <span class="o">=</span> <span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="p">)((</span><span class="kt">uintptr_t</span><span class="p">)</span><span class="n">owner</span><span class="p">.</span><span class="n">address</span> <span class="o">*</span> <span class="mi">64</span><span class="p">);</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">snapshot</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">snapshot</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">uint32_t</span> <span class="n">acked</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">uint32_t</span> <span class="n">sequence</span> <span class="o">=</span> <span class="n">owner</span><span class="p">.</span><span class="n">sequence</span><span class="p">;</span>
 </span><span class="line">
@@ -824,12 +824,12 @@ marks the end of the critical section.</p>
 <span class="line-number">67</span>
 <span class="line-number">68</span>
 <span class="line-number">69</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">bool</span>
-</span><span class="line"><span class="nf">rlock_store_64</span><span class="p">(</span><span class="kt">rlock_owner_seq_t</span> <span class="n">snapshot</span><span class="p">,</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">bool</span>
+</span><span class="line"><span class="nf">rlock_store_64</span><span class="p">(</span><span class="n">rlock_owner_seq_t</span> <span class="n">snapshot</span><span class="p">,</span>
 </span><span class="line">    <span class="k">struct</span> <span class="n">rlock</span> <span class="o">*</span><span class="n">lock</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">dst</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">value</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="k">struct</span> <span class="n">rlock_owner</span> <span class="o">*</span><span class="n">self</span> <span class="o">=</span> <span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="p">)((</span><span class="kt">uintptr_t</span><span class="p">)</span><span class="n">snapshot</span><span class="p">.</span><span class="n">address</span> <span class="o">*</span> <span class="mi">64</span><span class="p">);</span>
-</span><span class="line">        <span class="kt">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">;</span>
+</span><span class="line">        <span class="n">rlock_owner_seq_t</span> <span class="n">seq</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">uint32_t</span> <span class="n">op_count</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">int</span> <span class="n">status</span><span class="p">;</span>
 </span><span class="line">
@@ -842,7 +842,7 @@ marks the end of the critical section.</p>
 </span><span class="line">
 </span><span class="line">        <span class="cm">/* The handler will reset RAX to 1 on skip. */</span>
 </span><span class="line">        <span class="n">status</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
-</span><span class="line">        <span class="n">asm</span> <span class="k">volatile</span><span class="p">(</span>
+</span><span class="line">        <span class="k">asm</span> <span class="k">volatile</span><span class="p">(</span>
 </span><span class="line">            <span class="cm">/* Move the lock&#39;s address in the critical section flag. */</span>
 </span><span class="line">            <span class="s">&quot;0: movq %[lock], %[critical_section]</span><span class="se">\n\t</span><span class="s">&quot;</span>
 </span><span class="line">            <span class="cm">/* Do we still own the lock? */</span>
@@ -940,11 +940,11 @@ the thread is in a critical section, and we can skip it by overwriting
 <span class="line-number">36</span>
 <span class="line-number">37</span>
 <span class="line-number">38</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">void</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">void</span>
 </span><span class="line"><span class="nf">rlock_signal_handler</span><span class="p">(</span><span class="kt">int</span> <span class="n">signal</span><span class="p">,</span> <span class="kt">siginfo_t</span> <span class="o">*</span><span class="n">info</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">arg</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
-</span><span class="line">        <span class="kt">ucontext_t</span> <span class="o">*</span><span class="n">ctx</span> <span class="o">=</span> <span class="n">arg</span><span class="p">;</span>
-</span><span class="line">        <span class="kt">mcontext_t</span> <span class="o">*</span><span class="n">mctx</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">ctx</span><span class="o">-&gt;</span><span class="n">uc_mcontext</span><span class="p">;</span>
+</span><span class="line">        <span class="n">ucontext_t</span> <span class="o">*</span><span class="n">ctx</span> <span class="o">=</span> <span class="n">arg</span><span class="p">;</span>
+</span><span class="line">        <span class="n">mcontext_t</span> <span class="o">*</span><span class="n">mctx</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">ctx</span><span class="o">-&gt;</span><span class="n">uc_mcontext</span><span class="p">;</span>
 </span><span class="line">        <span class="k">struct</span> <span class="n">rlock_owner</span> <span class="o">*</span><span class="n">self</span> <span class="o">=</span> <span class="n">rlock_self</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">uintptr_t</span> <span class="n">rip</span><span class="p">;</span>
 </span><span class="line">        <span class="kt">size_t</span> <span class="n">nloc</span> <span class="o">=</span> <span class="n">__stop_rlock_store_list</span> <span class="o">-</span> <span class="n">__start_rlock_store_list</span><span class="p">;</span>

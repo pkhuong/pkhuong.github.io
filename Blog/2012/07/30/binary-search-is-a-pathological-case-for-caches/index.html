@@ -372,7 +372,7 @@ vector (otherwise, the first element is spuriously considered as the lower bound
 <span class="line-number">13</span>
 <span class="line-number">14</span>
 <span class="line-number">15</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="kt">size_t</span> <span class="nf">t_15</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">)</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">size_t</span> <span class="nf">t_15</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="n">key</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">vector</span><span class="p">)</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">     <span class="kt">unsigned</span> <span class="o">*</span> <span class="n">base</span> <span class="o">=</span> <span class="n">vector</span><span class="p">;</span>
 </span><span class="line">     <span class="n">TERNARY</span><span class="p">(</span><span class="mi">10923u</span><span class="p">,</span> <span class="mi">21845u</span><span class="p">);</span>       <span class="cm">/*      32768 -&gt; 10923      */</span>
@@ -402,7 +402,7 @@ branch mispredictions.</p>
 <span class="line-number">4</span>
 <span class="line-number">5</span>
 <span class="line-number">6</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define BARRIER do { __asm__ volatile(&quot;&quot; ::: &quot;memory&quot;); } while (0)</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cp">#define BARRIER do { __asm__ volatile(&quot;&quot; ::: &quot;memory&quot;); } while (0)</span>
 </span><span class="line">
 </span><span class="line"><span class="cp">#define BINARY(I) do {                                          \</span>
 </span><span class="line"><span class="cp">                base = ((base)[I] &lt;= key)?base+I:base;          \</span>
@@ -430,7 +430,7 @@ load depend on the result of the first comparison?</p>
 <span class="line-number">5</span>
 <span class="line-number">6</span>
 <span class="line-number">7</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define TERNARY(I, J) do {                                      \</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cp">#define TERNARY(I, J) do {                                      \</span>
 </span><span class="line"><span class="cp">                unsigned * b1 = base+I, *b2 = base+J;           \</span>
 </span><span class="line"><span class="cp">                unsigned mid1 = *b1, mid2 = *b2;                \</span>
 </span><span class="line"><span class="cp">                BARRIER;                                        \</span>
@@ -448,7 +448,7 @@ load depend on the result of the first comparison?</p>
 <span class="line-number">5</span>
 <span class="line-number">6</span>
 <span class="line-number">7</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define TERNARY(I, J) do {                                      \</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cp">#define TERNARY(I, J) do {                                      \</span>
 </span><span class="line"><span class="cp">                unsigned * b1 = base+I, *b2 = base+J;           \</span>
 </span><span class="line"><span class="cp">                b1 = (*b2 &lt;= key)?b2:b1;                        \</span>
 </span><span class="line"><span class="cp">                BARRIER;                                        \</span>
@@ -490,7 +490,7 @@ range is down to two elements.</p>
 <span class="line-number">20</span>
 <span class="line-number">21</span>
 <span class="line-number">22</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#define QUATERNARY(I, J, K) do {                                        \</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="cp">#define QUATERNARY(I, J, K) do {                                        \</span>
 </span><span class="line"><span class="cp">                unsigned * b1 = base+I, *b2 = base+J, *b3 = base+K;     \</span>
 </span><span class="line"><span class="cp">                unsigned mid1 = *b1, mid2 = *b2, mid3 = *b3;            \</span>
 </span><span class="line"><span class="cp">                BARRIER;                                                \</span>
@@ -694,7 +694,7 @@ probably in L1D, for the microbenchmarks used here.</p>
 <span class="line-number">22</span>
 <span class="line-number">23</span>
 <span class="line-number">24</span>
-</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">struct</span> <span class="n">hash_u32</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="k">struct</span> <span class="n">hash_u32</span>
 </span><span class="line"><span class="p">{</span>
 </span><span class="line">        <span class="kt">size_t</span> <span class="n">tables</span><span class="p">[</span><span class="mi">256</span><span class="p">][</span><span class="mi">8</span><span class="p">];</span>
 </span><span class="line">
