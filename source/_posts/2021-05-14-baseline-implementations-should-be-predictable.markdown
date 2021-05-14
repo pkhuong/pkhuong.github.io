@@ -53,7 +53,7 @@ the worst case, compared to always applying one or the other.
 Luckily,[^or-is-it]
 [all of `u64::MAX`'s factors (except 1 and `u64::MAX`) work with the "round up" approximation](https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L322)
 that doesn't increment, so the saturating increment is always safe
-when we actually want to use the second "round-down" approximation 
+when we actually want to use the second "round-down" approximation
 (unless \\(d^\prime \in \\{1, \mathtt{u64::MAX}\\}\\)).
 
 [^or-is-it]: Is it luck?  Sounds like a fun number theory puzzle.
@@ -206,9 +206,9 @@ how they will perform.  Worse, they also force you to take into
 account how often you'll switch between the different classes.
 Reciprocal does not have that problem: its hot path is the same
 regardless of the constant divisor, so it has the same predictable
-performance for all divisors[^partial],
+performance for all divisors,[^partial]
 and there's only one code path, so we don't have to worry about class
-switch.
+switches.
 
 [^partial]: ...all divisors except 1 and `u64::MAX`, which must instead [use the more general `Reciprocal` struct](https://github.com/pkhuong/reciprocal/blob/d591c59044b3a4f662112aae73c3adae9f168ea6/src/lib.rs#L176).
 
