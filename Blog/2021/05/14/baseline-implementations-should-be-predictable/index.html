@@ -128,16 +128,52 @@ need a different code path, but at least divert to a faster sequence,
 a variable right shift.</p>
 
 <p>Reciprocal instead uses the same code path to implement two similar
-expressions that only differ in the presence or absence of a
-saturating increment; rather than branching, the code
-increments by 1 or 0.  The upshot: predictable improvements
-over hardware division, even when dividing by different
-constants.</p>
+expressions: \(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\), and
+\(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\).</p>
 
-<p>Summary of the results below: on my i7 7Y75 @ 1.3 GHz, reciprocal
+<p>The first expression, \(f_{m,s}\) corresponds to the usual
+div-by-mul approximation (implemented in gcc, LLVM, libdivide, etc.)
+where the reciprocal \(1/d\) is approximated in fixed point by rounding
+\(m\) <em>up</em>, with the upward error corrected by the truncating
+multiplication at runtime.  See, for example, Granlund and
+Montgomery’s <a href="https://gmplib.org/~tege/divcnst-pldi94.pdf">Division by invariant integers using multiplication</a>.</p>
+
+<p>The second, \(g_{m^\prime,s^\prime}\), is the multiply-and-add
+scheme of described by Robison in <a href="https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.512.2627&amp;rep=rep1&amp;type=pdf">N-Bit Unsigned Division Via N-Bit Multiply-Add</a>.</p>
+
+<p>In that approximation, the reciprocal multiplier \(m^\prime\) is
+rounded <em>down</em> when converting \(1/d^\prime\) to fixed point.  At 
+run-time, we then bump the multiplicand up (by the largest value
+\(\frac{n}{2^{s^\prime}} &lt; 1/d^\prime\), i.e., \(\frac{m^\prime}{2^{s^{prime}}}\)) before dropping the low bits.</p>
+
+<p>With a bit of algebra, we see that \(m^\prime x + m^\prime = m^\prime (x + 1)\)…
+and we can use a saturating increment and avoid a 65x64 multiplication
+as long as avoid this second method for divisors
+\(d^\prime\) for which
+\(\lfloor \frac{\mathtt{u64::MAX}}{d^\prime}\rfloor \neq \lfloor \frac{\mathtt{u64::MAX} - 1}{d^\prime}\rfloor\).</p>
+
+<p>We have two approximations, one that rounds the reciprocal up to a
+fixed point value, and another that rounds down; it makes sense to
+round to nearest, which nets us one extra bit of precision in the
+worst case, compared to always applying one or the other.  Luckily,<sup id="fnref:or-is-it" role="doc-noteref"><a href="#fn:or-is-it" class="footnote" rel="footnote">1</a></sup>
+all of <code>u64::MAX</code>’s factors (except 1 and <code>u64::MAX</code>) work with the
+“round up” approximation that doesn’t need a saturating increment,
+so the saturating increment always works when we want to use the
+second approximation
+(except when \(d^\prime \in \{1, \mathtt{u64::MAX}\}\)).</p>
+
+<p>These two expressions are the reason why Reciprocal can get away with
+64-bit multipliers.  Even better, \(f_{m,s}\) and \(g_{m^\prime,s^\prime}\)
+differ only in the absence or presence of a saturating increment.
+Rather than branching, Reciprocal executes a data-drive increment
+by 0 (for \(f_{m,s}\)) or 1 (for
+\(g_{m^\prime,s^\prime}\)).  The upshot: predictable improvements
+over hardware division, even when dividing by different constants.</p>
+
+<p>Summary of the results below: on my i7 7Y75 @ 1.3 GHz, Reciprocal
 consistently needs 1.3 ns per division, while hardware division can
-only achieve ~9.6 ns / division (reciprocal needs 13.5% as much /
-86.5% less time).  This looks comparable to the
+only achieve ~9.6 ns / division (Reciprocal needs 14% as much /
+86% less time).  This looks comparable to the
 <a href="https://ridiculousfish.com/blog/posts/benchmarking-libdivide-m1-avx512.html#:~:text=intel%20xeon%203.0%20ghz%20(8275cl)">results reported by fish for libdivide when dividing by 7</a>.
 Fish’s <a href="https://github.com/ridiculousfish/libdivide">libdivide</a> no
 doubt does better on nicer divisors, especially powers of two, but
@@ -146,7 +182,7 @@ it’s good to know that a simple implementation comes close.</p>
 <p>We’ll also see that, in Rust land, the
 <a href="https://crates.io/crates/fastdivide">fast_divide crate</a>
 is dominated by <a href="https://github.com/ejmahler/strength_reduce">strength_reduce</a>,
-and that strength_reduce is only faster than <a href="https://github.com/pkhuong/reciprocal/">reciprocal</a>
+and that strength_reduce is only faster than <a href="https://github.com/pkhuong/reciprocal/">Reciprocal</a>
 when dividing by powers of two.</p>
 
 <p>First, results for division with the same precomputed inverse.  The
@@ -157,13 +193,13 @@ timings are from
 <ul>
   <li>“Hardware” is a regular HW DIV,</li>
   <li>“compiled” lets LLVM generate specialised code,</li>
-  <li>“reciprocal” is <a href="https://github.com/pkhuong/reciprocal/blob/d591c59044b3a4f662112aae73c3adae9f168ea6/src/lib.rs#L11">PartialReciprocal</a>,<sup id="fnref:why-partial" role="doc-noteref"><a href="#fn:why-partial" class="footnote" rel="footnote">1</a></sup></li>
+  <li>“reciprocal” is <a href="https://github.com/pkhuong/reciprocal/blob/d591c59044b3a4f662112aae73c3adae9f168ea6/src/lib.rs#L11">PartialReciprocal</a>,<sup id="fnref:why-partial" role="doc-noteref"><a href="#fn:why-partial" class="footnote" rel="footnote">2</a></sup></li>
   <li>“strength_reduce” is the <a href="https://github.com/ejmahler/strength_reduce">strength_reduce crate’s u64 division</a>,</li>
   <li>and fast_divide is <a href="https://crates.io/crates/fastdivide">the fast_divide crate’s u64 division</a>.</li>
 </ul>
 
 <p>The last two options are the crates I considered before writing
-reciprocal.  The strength_reduce crate switches between a special
+Reciprocal.  The strength_reduce crate switches between a special
 case for powers of two (implemented as a bitscan and a shift), and a
 general slow path that handles everything with a 64.64 (128 bit) fixed
 point reciprocal multiplier.  fast_divide says it’s inspired by
@@ -185,7 +221,7 @@ fast_divide_u64_div_by_2
                         time:   [2.7467 us 2.7752 us 2.8025 us]
 </code></pre>
 
-<p>This is the <em>comparative</em> worst case for reciprocal: while reciprocal
+<p>This is the <em>comparative</em> worst case for Reciprocal: while Reciprocal
 always uses the same code path (1.3 ns/division), the compiler shows
 we can do much better with a right shift. Both branchy implementations
 include a special case for powers of two, and thus come close to the
@@ -205,13 +241,13 @@ fast_divide_u64_div_by_7
 <p>Division by 7 is hard for compilers that do not implement the “rounded down”
 approximation described in Robison’s
 <a href="https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.512.2627&amp;rep=rep1&amp;type=pdf">N-Bit Unsigned Division Via N-Bit Multiply-Add</a>.
-This is the comparative <em>best</em> case for reciprocal, since it always
+This is the comparative <em>best</em> case for Reciprocal, since it always
 uses the same code (1.3 ns/division), but most other implementations
-switch to a slow path (strength_reduce only implements that slow path,
-but with code that’s transparent to LLVM). Even divisions directly
-compiled with LLVM isareonly ~20% faster than reciprocal (LLVM does not
-implement Robison’s round-down scheme, so it’s a hardcoded codegen for
-a more complex sequence than reciprocal’s).</p>
+switch to a slow path (strength_reduce goes to a general case that
+is arguably more complex, but more transparent to LLVM). Even
+divisions directly compiled with LLVM are ~20% faster than Reciprocal
+(LLVM does not implement Robison’s round-down scheme, so it’s
+hardcoded codegen for a more complex sequence than Reciprocal’s).</p>
 
 <p>\(10^4\) divisions by 11 (a regular division)</p>
 
@@ -225,16 +261,16 @@ fast_divide_u64_div_by_11
                         time:   [21.731 us 21.918 us 22.138 us]
 </code></pre>
 
-<p>This is a typical result. Again, reciprocal can be trusted to work at
+<p>This is a typical result. Again, Reciprocal can be trusted to work at
 1.3 ns/division.  Regular round-up div-by-mul works fine when dividing
 by 11, so code compiled by LLVM only needs a multiplication and a shift,
-nearly twice as fast as reciprocal’s generic sequence.  The fast_divide
+nearly twice as fast as Reciprocal’s generic sequence.  The fast_divide
 crate does do better here than when dividing by 7, since it avoids the
-slowest path, but is still slower than reciprocal; simplicity helps.</p>
+slowest path, but is still slower than Reciprocal; simplicity helps.</p>
 
-<p>The three microbenchmarks above reward special casing, since we always
+<p>The three microbenchmarks above reward special-casing, since we always
 divide by the same constant in a loop, and thus always hit the same
-code path without ever mispredicting a branch.</p>
+code path without ever incurring a mispredicted branch.</p>
 
 <p>What happens when we <a href="https://github.com/pkhuong/reciprocal/blob/main/benches/div_throughput_variable.rs">pick unpredictably from four precomputed divisors</a>,
 for divisions by 2, 3, 7, or 11 (one easy, one hard, and two regular divisors)?</p>
@@ -245,7 +281,7 @@ strength_reduce_u64_div time:   [40.477 us 41.581 us 42.891 us]
 fast_divide_u64_div     time:   [69.069 us 69.562 us 70.100 us]
 </code></pre>
 
-<p>The hardware doesn’t care, and reciprocal is only a bit slower (1.8
+<p>The hardware doesn’t care, and Reciprocal is only a bit slower (1.8
 ns/division instead of 1.3 ns/division) presumably because the relevant
 <code>PartialReciprocal</code> struct must now be loaded in each iteration.</p>
 
@@ -270,7 +306,7 @@ how they will perform.  Worse, they also force you to take into
 account how often you’ll switches between the different classes.
 Reciprocal does not have that problem: its hot path is the same
 regardless of the constant divisor, so it has the same predictable
-performance for all divisors<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">2</a></sup>,
+performance for all divisors<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">3</a></sup>,
 and there’s only one code path, so we don’t have to worry about class
 switch.</p>
 
@@ -283,11 +319,14 @@ integer division by constants, it is.</p>
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
   <ol>
+    <li id="fn:or-is-it" role="doc-endnote">
+      <p>Is it luck?  Sounds like a fun number theory puzzle. <a href="#fnref:or-is-it" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
     <li id="fn:why-partial" role="doc-endnote">
-      <p>the struct is “partial” because it can’t represent divisions by 1 or <code>u64::MAX</code>. <a href="#fnref:why-partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>The struct is “partial” because it can’t represent divisions by 1 or <code>u64::MAX</code>. <a href="#fnref:why-partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:partial" role="doc-endnote">
-      <p>…all divisors except 1 and <code>u64::MAX</code>, which can instead <a href="https://github.com/pkhuong/reciprocal/blob/d591c59044b3a4f662112aae73c3adae9f168ea6/src/lib.rs#L176">use the <code>Reciprocal</code> struct</a>. <a href="#fnref:partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>…all divisors except 1 and <code>u64::MAX</code>, which must instead <a href="https://github.com/pkhuong/reciprocal/blob/d591c59044b3a4f662112aae73c3adae9f168ea6/src/lib.rs#L176">use the more general <code>Reciprocal</code> struct</a>. <a href="#fnref:partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
