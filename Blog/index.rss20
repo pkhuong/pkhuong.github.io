@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2021-05-01T15:42:17-04:00</updated>
+  <updated>2021-05-14T01:33:07-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -13,6 +13,189 @@
   <generator uri="http://octopress.org/">Octopress</generator>
 
   
+  
+  <entry>
+    <title type="html"><![CDATA[Baseline implementations should be predictable]]></title>
+    <link href="https://www.pvk.ca/Blog/2021/05/14/baseline-implementations-should-be-predictable/"/>
+    <updated>2021-05-14T00:54:23-04:00</updated>
+    <id>https://www.pvk.ca/Blog/2021/05/14/baseline-implementations-should-be-predictable</id>
+    <content type="html"><![CDATA[<p>I wrote <a href="https://crates.io/crates/reciprocal">Reciprocal</a> because I
+couldn’t find a nice implementation of div-by-mul in Rust without
+data-dependent behaviour. Why do I care?</p>
+
+<p>Like <a href="https://ridiculousfish.com/blog/posts/benchmarking-libdivide-m1-avx512.html">ridiculous fish mentions in his review of divisions on M1 and AVX 512</a>,
+certain divisors (those that lose a lot of precision when rounding up
+to a fraction of the form \(n / 2^k\)) need a different, slower,
+code path in classic implementations. Powers of two typically also
+need a different code path, but at least divert to a faster sequence,
+a variable right shift.</p>
+
+<p>Reciprocal instead uses the same code path to implement two similar
+expressions that only differ in the presence or absence of a
+saturating increment; rather than branching, the code
+increments by 1 or 0.  The upshot: predictable improvements
+over hardware division, even when dividing by different
+constants.</p>
+
+<p>Summary of the results below: on my i7 7Y75 @ 1.3 GHz, reciprocal
+consistently needs 1.3 ns per division, while hardware division can
+only achieve ~9.6 ns / division (reciprocal needs 13.5% as much /
+86.5% less time).  This looks comparable to the
+<a href="https://ridiculousfish.com/blog/posts/benchmarking-libdivide-m1-avx512.html#:~:text=intel%20xeon%203.0%20ghz%20(8275cl)">results reported by fish for libdivide when dividing by 7</a>.
+Fish’s <a href="https://github.com/ridiculousfish/libdivide">libdivide</a> no
+doubt does better on nicer divisors, especially powers of two, but
+it’s good to know that a simple implementation comes close.</p>
+
+<p>We’ll also see that, in Rust land, the
+<a href="https://crates.io/crates/fastdivide">fast_divide crate</a>
+is dominated by <a href="https://github.com/ejmahler/strength_reduce">strength_reduce</a>,
+and that strength_reduce is only faster than <a href="https://github.com/pkhuong/reciprocal/">reciprocal</a>
+when dividing by powers of two.</p>
+
+<p>First, results for division with the same precomputed inverse.  The
+timings are from
+<a href="https://github.com/bheisler/criterion.rs">criterion.rs</a>, for
+\(10^4\) divisions in a tight loop.</p>
+
+<ul>
+  <li>“Hardware” is a regular HW DIV,</li>
+  <li>“compiled” lets LLVM generate specialised code,</li>
+  <li>“reciprocal” is <a href="https://github.com/pkhuong/reciprocal/blob/d591c59044b3a4f662112aae73c3adae9f168ea6/src/lib.rs#L11">PartialReciprocal</a>,<sup id="fnref:why-partial" role="doc-noteref"><a href="#fn:why-partial" class="footnote" rel="footnote">1</a></sup></li>
+  <li>“strength_reduce” is the <a href="https://github.com/ejmahler/strength_reduce">strength_reduce crate’s u64 division</a>,</li>
+  <li>and fast_divide is <a href="https://crates.io/crates/fastdivide">the fast_divide crate’s u64 division</a>.</li>
+</ul>
+
+<p>The last two options are the crates I considered before writing
+reciprocal.  The strength_reduce crate switches between a special
+case for powers of two (implemented as a bitscan and a shift), and a
+general slow path that handles everything with a 64.64 (128 bit) fixed
+point reciprocal multiplier.  fast_divide says it’s inspired by
+libdivide, so I assume it implements the same three paths: a fast
+path for powers of two (shift right), a slow path for reciprocal
+multipliers that need one more bit than the word size (e.g, division
+by 7), and a regular round-up div-by-mul sequence.</p>
+
+<p>Let’s look at <a href="https://github.com/pkhuong/reciprocal/blob/34008e4aa1221012f82dc72b10ff1f9cbd419729/benches/div_throughput.rs">the three cases in that order</a>.</p>
+
+<p>\(10^4\) divisions by 2 (i.e., a mere shift right by 1)</p>
+
+<pre><code>hardware_u64_div_2      time:   [92.297 us 95.762 us 100.32 us]
+compiled_u64_div_by_2   time:   [2.3214 us 2.3408 us 2.3604 us]
+reciprocal_u64_div_by_2 time:   [12.667 us 12.954 us 13.261 us]
+strength_reduce_u64_div_by_2
+                        time:   [2.8679 us 2.9190 us 2.9955 us]
+fast_divide_u64_div_by_2
+                        time:   [2.7467 us 2.7752 us 2.8025 us]
+</code></pre>
+
+<p>This is the <em>comparative</em> worst case for reciprocal: while reciprocal
+always uses the same code path (1.3 ns/division), the compiler shows
+we can do much better with a right shift. Both branchy implementations
+include a special case for powers of two, and thus come close to the
+compiler, thanks a predictable branch into a right shift.</p>
+
+<p>\(10^4\) divisions by 7 (a “hard” division)</p>
+
+<pre><code>hardware_u64_div_7      time:   [95.244 us 96.096 us 97.072 us]
+compiled_u64_div_by_7   time:   [10.564 us 10.666 us 10.778 us]
+reciprocal_u64_div_by_7 time:   [12.718 us 12.846 us 12.976 us]
+strength_reduce_u64_div_by_7
+                        time:   [17.366 us 17.582 us 17.827 us]
+fast_divide_u64_div_by_7
+                        time:   [25.795 us 26.045 us 26.345 us]
+</code></pre>
+
+<p>Division by 7 is hard for compilers that do not implement the “rounded down”
+approximation described in Robison’s
+<a href="https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.512.2627&amp;rep=rep1&amp;type=pdf">N-Bit Unsigned Division Via N-Bit Multiply-Add</a>.
+This is the comparative <em>best</em> case for reciprocal, since it always
+uses the same code (1.3 ns/division), but most other implementations
+switch to a slow path (strength_reduce only implements that slow path,
+but with code that’s transparent to LLVM). Even divisions directly
+compiled with LLVM isareonly ~20% faster than reciprocal (LLVM does not
+implement Robison’s round-down scheme, so it’s a hardcoded codegen for
+a more complex sequence than reciprocal’s).</p>
+
+<p>\(10^4\) divisions by 11 (a regular division)</p>
+
+<pre><code>hardware_u64_div_11     time:   [95.199 us 95.733 us 96.213 us]
+compiled_u64_div_by_11  time:   [7.0886 us 7.1565 us 7.2309 us]
+reciprocal_u64_div_by_11
+                        time:   [12.841 us 13.171 us 13.556 us]
+strength_reduce_u64_div_by_11
+                        time:   [17.026 us 17.318 us 17.692 us]
+fast_divide_u64_div_by_11
+                        time:   [21.731 us 21.918 us 22.138 us]
+</code></pre>
+
+<p>This is a typical result. Again, reciprocal can be trusted to work at
+1.3 ns/division.  Regular round-up div-by-mul works fine when dividing
+by 11, so code compiled by LLVM only needs a multiplication and a shift,
+nearly twice as fast as reciprocal’s generic sequence.  The fast_divide
+crate does do better here than when dividing by 7, since it avoids the
+slowest path, but is still slower than reciprocal; simplicity helps.</p>
+
+<p>The three microbenchmarks above reward special casing, since we always
+divide by the same constant in a loop, and thus always hit the same
+code path without ever mispredicting a branch.</p>
+
+<p>What happens when we <a href="https://github.com/pkhuong/reciprocal/blob/main/benches/div_throughput_variable.rs">pick unpredictably from four precomputed divisors</a>,
+for divisions by 2, 3, 7, or 11?</p>
+
+<pre><code>hardware_u64_div        time:   [91.592 us 93.211 us 95.125 us]
+reciprocal_u64_div      time:   [17.436 us 17.620 us 17.828 us]
+strength_reduce_u64_div time:   [40.477 us 41.581 us 42.891 us]
+fast_divide_u64_div     time:   [69.069 us 69.562 us 70.100 us]
+</code></pre>
+
+<p>The hardware doesn’t care, and reciprocal is only a bit slower (1.8
+ns/division instead of 1.3 ns/division) presumably because the relevant
+<code>PartialReciprocal</code> struct must now be loaded in each iteration.</p>
+
+<p>The other two branchy implementations seemingly take a hit
+proportional to the number of special cases. The <code>strength_reduce</code> hot
+path only branches once, to detect divisors that are powers of two;
+its runtime goes from 0.29 - 1.8 ns/division to 4.2 ns/division (at
+least 2.4 ns slower/division).  The <code>fast_divide</code> hot path switches
+between <em>three</em> cases (like libdivide), and goes from 0.28 - 2.2
+ns/division to 7.0 ns/division (at least 4.8 ns slower/division).</p>
+
+<p>And that’s why I prefer to start with predictable baseline
+implementations: unpredictable code with special cases can easily
+perform well on benchmarks, but, early on during development, it’s
+hard to tell how the benchmarks may differ from real workloads, and
+whether the special cases “overfit” on these differences.</p>
+
+<p>With special cases for classes of divisors, most runtime div-by-mul
+implementations make you guess whether you’ll tend to divide by powers
+of two, by “regular” divisors, or by “hard” ones in order to estimate
+how they will perform.  Worse, they also force you to take into
+account how often you’ll switches between the different classes.
+Reciprocal does now have that problem: its hot path is the same
+regardless of the constant divisor, so it has the same predictable
+performance for all divisors<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">2</a></sup>,
+and there’s only one code path, so we don’t have to worry about class
+switch.</p>
+
+<p>Depending on the workload, it may make sense to divert to faster code
+paths, but it’s usually best to start without special cases when it’s
+practical to do so…  and I think
+<a href="https://crates.io/crates/reciprocal">reciprocal</a> shows that, for
+integer division by constants, it is.</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:why-partial" role="doc-endnote">
+      <p>the struct is “partial” because it can’t represent divisions by 1 or <code>u64::MAX</code>. <a href="#fnref:why-partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:partial" role="doc-endnote">
+      <p>…all divisors except 1 and <code>u64::MAX</code>, which can instead <a href="https://github.com/pkhuong/reciprocal/blob/d591c59044b3a4f662112aae73c3adae9f168ea6/src/lib.rs#L176">use the <code>Reciprocal</code> struct</a>. <a href="#fnref:partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Stuff your logs!]]></title>
@@ -3083,250 +3266,6 @@ latency from 4 membarriers to 3, and that’s not negligible when each
     </li>
     <li id="fn:did-not-randomize-codegen" role="doc-endnote">
       <p>Although I did compare several independent executions and confirmed the reported cycle counts were stable, I did not try to randomise code generation… mostly because I’m not looking for super fine differences as much as close enough runtimes.  Hopefully, aligning functions to 256 bytes leveled some bias away. <a href="#fnref:did-not-randomize-codegen" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-  </ol>
-</div>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Check for borrows in bitwise operations]]></title>
-    <link href="https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations/"/>
-    <updated>2020-05-02T17:24:39-04:00</updated>
-    <id>https://www.pvk.ca/Blog/2020/05/02/check-for-borrows-in-bitwise-operations</id>
-    <content type="html"><![CDATA[<p><small>2020-05-03: Had to add a complement step in the ULEB
-section. Seems I couldn’t actually avoid that crummy-looking
-notation. Spotted by redditor /u/Y_Less.</small></p>
-
-<p>In the <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">fourth installment of his series on sorting with AVX2</a>,
-<a href="https://twitter.com/damageboy">@damageboy</a> has a short aside where he
-tries to detect partitioning (pivot) patterns where elements less than
-and greater than or equal to the pivot are already in the correct
-order: in that case, the partitioning routine does not need to permute
-the block of values.  The practical details are irrelevant for this
-post; what matters is that we wish to quickly identify whether a byte
-value matches any of the follow nine cases:</p>
-
-<ul>
-  <li><code>0b11111111</code></li>
-  <li><code>0b11111110</code></li>
-  <li><code>0b11111100</code></li>
-  <li><code>0b11111000</code></li>
-  <li><code>0b11110000</code></li>
-  <li><code>0b11100000</code></li>
-  <li><code>0b11000000</code></li>
-  <li><code>0b10000000</code></li>
-  <li><code>0b00000000</code></li>
-</ul>
-
-<p>Looking at the bit patterns,<sup id="fnref:b-for-bit-literal" role="doc-noteref"><a href="#fn:b-for-bit-literal" class="footnote" rel="footnote">1</a></sup> the OP’s solution with <a href="https://www.felixcloutier.com/x86/popcnt">popcount</a> and <a href="https://www.felixcloutier.com/x86/bsf">bitscan</a>
-is pretty natural.  These instructions are somewhat complex (latency
-closer to 3 cycles than 1, and often port restricted),
-and it seems like the sort of problem that would have had efficient
-solutions before SSE4 finally graced x86 with a <a href="https://en.wikipedia.org/wiki/Hamming_weight">population count</a> instruction.</p>
-
-<p>In the context of a sorting library’s partition loop, <code>popcnt</code> and
-<code>bsf</code> is probably more than good enough:
-<a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">the post shows that the real issue is branch mispredictions</a>
-being slower than permuting unconditionally.
-This is just a fun challenge to think about (:</p>
-
-<h2 id="warm-up-is_power_of_two">Warm-up: <code>is_power_of_two</code></h2>
-
-<p>Detecting whether a machine integer is a power of two (or zero) is
-another task that has a straightforward solution in terms of popcount
-or bitscan.  There’s also a simpler classic solution to this problem:</p>
-
-<p><code>x == 0 || is_power_of_two(x) &lt;==&gt; (x &amp; (x - 1)) == 0</code></p>
-
-<p>How does that expression work?  Say <code>x</code> is a power of two. Its binary
-representation is <code>0b0...010...0</code>: any number of leading zeros,<sup id="fnref:big-endian" role="doc-noteref"><a href="#fn:big-endian" class="footnote" rel="footnote">2</a></sup>
-a single “1” bit, and trailing zeros (maybe none).  Let’s see what happens when
-we subtract 1 from <code>x</code>:</p>
-
-<pre><code>x           = 0b00...0010...0
-     x - 1  = 0b00...0001...1
-x &amp; (x - 1) = 0b00...0000...0
-</code></pre>
-
-<p>The subtraction triggered a chain of <a href="https://en.wikipedia.org/wiki/Carry_(arithmetic)">borrows</a>
-throughout the trailing zeros, until we finally hit that 1 bit.
-In decimal, subtracting one from <code>10...0</code> yields <code>09...9</code>;
-in binary we instead find <code>01...1</code>.
-If you ever studied the circuit depth (latency) of carry chains
-(for me, that was for circuit complexity theory), you know
-that this is difficult to do well.
-Luckily for us, <a href="https://en.wikipedia.org/wiki/Kogge%E2%80%93Stone_adder">chip makers work hard to pull it off</a>,
-and we can just use carries as a data-controlled
-primitive to efficiently flip ranges of bits.</p>
-
-<p>When <code>x</code> is a power of two, <code>x</code> and <code>x - 1</code> have no “1” bit in common,
-so taking the bitwise <code>and</code> yields zero.  That’s also true when <code>x</code> is 0,
-since <code>and</code>ing anything with 0 yields zero.  Let’s see what happens
-for non-zero, non-power-of-two values <code>x = 0bxx...xx10..0</code>,
-i.e., where <code>x</code> consists of an arbitrary non-zero sequence of bits <code>xx..xx</code>
-followed by the least set bit (there’s at least one, since <code>x</code> is neither zero nor a power of two), and the trailing zeros:</p>
-
-<pre><code>x           = 0bxx...xx10...0
-     x - 1  = 0bxx...xx01...1
-x &amp; (x - 1) = 0bxx...xx000000
-</code></pre>
-
-<p>The leading not-all-zero <code>0bxx...xx</code> is unaffected by the subtraction,
-so it passes through the bitwise <code>and</code> unscathed (<code>and</code>ing any bit with
-itself yields that same bit), and we know there’s at least one non-zero
-bit in there; our test correctly rejects it!</p>
-
-<h2 id="stretching-decoding-varints">Stretching: decoding varints</h2>
-
-<p>When decoding variable length integers in <a href="https://en.wikipedia.org/wiki/LEB128#Unsigned_LEB128">ULEB</a>
-format, e.g., for <a href="https://developers.google.com/protocol-buffers/docs/encoding">protocol buffers</a>,
-it quickly becomes clear that, in order to avoid byte-at-a-time logic,
-we must rapidly segment (<a href="https://en.wikipedia.org/wiki/Lexical_analysis">lex or tokenize</a>, in a way) our byte stream to determine where each ULEB
-ends.  Let’s focus on the fast path, when the encoded ULEB fits in a
-machine register.</p>
-
-<p>We have <code>uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...</code>:
-a sequence of bytes<sup id="fnref:remember-endianness" role="doc-noteref"><a href="#fn:remember-endianness" class="footnote" rel="footnote">3</a></sup> with the topmost bit equal to 1,
-terminated by a byte with the top bit set to 0,
-and, finally, arbitrary nuisance bytes (<code>m...m</code>, <code>n...n</code>, etc.) we wish to ignore.
-Ideally, we’d extract <code>data = 0b0000000000000000...?zzzzzzz?yyyyyyy?...</code> from <code>uleb</code>: we want to clear the
-nuisance bytes, and are fine with arbitrary values in the
-ULEB’s control bits.</p>
-
-<p>It’s much easier to find bits set to 1 than to zero, so the first thing to do is
-to complement the <code>ULEB</code> data and
-clear out everything but potential ULEB control bits (the high bit of
-each byte), with <code>c = ~uleb &amp; (128 * (WORD_MAX / 255))</code>, i.e.,
-compute the bitwise <code>and</code> of <code>~uleb</code> with a bitmask of the high bit in each byte.</p>
-
-<pre><code>   uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...
-  ~uleb = 0b̅n̅n̅n̅n̅n̅n̅n̅n̅m̅m̅m̅m̅m̅m̅m̅m̅...1z̅z̅z̅z̅z̅z̅z0y̅y̅y̅y̅y̅y̅y0...
-      c = 0b̅n̅0000000̅m̅0000000...10000000000000000...
-</code></pre>
-
-<p>We could now bitscan to find the index of the first 1 (marking the
-last ULEB byte), and then generate a mask.  However, it seems wasteful to
-generate an index with a scan, only to convert it back into bitmap
-space with a shift.  We’ll probably still want that index to know how
-far to advance the decoder’s cursor, but we can hopefully update the
-cursor in parallel with decoding the current ULEB value.</p>
-
-<p>When we were trying to detect powers of two, we subtracted <code>1</code> from
-<code>x</code>, a value kind of like <code>c</code>, in order to generate a new value
-that differed from <code>x</code> in all the bits up to and including the first
-set (equal to <code>1</code>) bit of <code>x</code>, and identical in the remaining bits.  We
-then used the fact that <code>and</code>ing a bit with itself yields that same
-bit to detect whether there was any non-zero bit in the remainder.</p>
-
-<p>Here, we wish to do something else with the remaining untouched bits, we
-wish to set them all to zero.  Another bitwise operator does
-what we want: <code>xor</code>ing a bit with itself always yields zero, while
-<code>xor</code>ing bits that differ yields <code>1</code>.  That’s the plan for ULEB. We’ll
-subtract 1 from <code>c</code> and <code>xor</code> that back with <code>c</code>.</p>
-
-<pre><code>       uleb = 0bnnnnnnnnmmmmmmmm...0zzzzzzz1yyyyyyy1...
-      ~uleb = 0b̅n̅n̅n̅n̅n̅n̅n̅n̅m̅m̅m̅m̅m̅m̅m̅m̅...1z̅z̅z̅z̅z̅z̅z0y̅y̅y̅y̅y̅y̅y0...
-c           = 0b̅n̅0000000̅m̅0000000...10000000000000000...
-     c - 1  = 0b̅n̅0000000̅m̅0000000...01111111111111111...
-c ^ (c - 1) = 0b0000000000000000...11111111111111111...
-</code></pre>
-
-<p>We now just have to bitwise <code>and</code> <code>uleb</code> with <code>c ^ (c - 1)</code>
-to obtain the bits of the first <code>ULEB</code> value in <code>uleb</code>, while
-overwriting everything else with 0.  Once we have that, we can either
-<a href="https://www.felixcloutier.com/x86/pext">extract data bits with <code>PEXT</code></a>
-on recent Intel chips, or otherwise dust off interesting stunts for <a href="https://en.wikipedia.org/wiki/SWAR">SWAR</a> shifts by variable amounts.</p>
-
-<h2 id="now-for-damageboys-problem">Now for <a href="https://bits.houmus.org/2020-02-01/this-goes-to-eleven-pt4">damageboy</a>’s problem</h2>
-
-<p>Let’s first repeat the question that motivated this post.  We want to detect when a byte <code>p</code> is one of the following nine values:</p>
-
-<ul>
-  <li><code>0b11111111</code></li>
-  <li><code>0b11111110</code></li>
-  <li><code>0b11111100</code></li>
-  <li><code>0b11111000</code></li>
-  <li><code>0b11110000</code></li>
-  <li><code>0b11100000</code></li>
-  <li><code>0b11000000</code></li>
-  <li><code>0b10000000</code></li>
-  <li><code>0b00000000</code></li>
-</ul>
-
-<p>These bit patterns feel similar to those for power of two bytes: if we
-complement the bits, these values are all 1 less than a power of two
-(or -1, one less than zero).  We already know how to detect when a
-value <code>x</code> is zero or a power of two (<code>x &amp; (x - 1) == 0</code>), so it’s easy
-to instead determine whether <code>~p</code> is one less than zero or a power of
-two: <code>(~p + 1) &amp; ~p == 0</code>.</p>
-
-<p>This is already pretty good: bitwise <code>not</code> the byte <code>p</code>,
-and check if it’s one less than zero or a power of two (three simple
-instructions on the critical path).  We can do better.</p>
-
-<p>There’s another name for <code>~p + 1</code>, i.e., for bitwise complementing a value and
-adding one: that’s simply <code>-p</code>, the additive inverse of <code>p</code> in two’s
-complement!  We can use <code>-p &amp; ~p == 0</code>.  That’s one fewer
-instruction on the critical path of our dependency graph (down to two, since we can <a href="https://www.felixcloutier.com/x86/test"><code>test</code> whether <code>and</code>ing yields zero</a>), and still only
-uses simple instructions that are unlikely to be port constrained.</p>
-
-<p>Let’s check our logic by enumerating all byte-sized values.</p>
-
-<pre><code>CL-USER&gt; (dotimes (p 256)
-           (when (zerop (logand (- p) (lognot p) 255))
-             (format t "0b~2,8,'0r~%" p)))
-0b00000000
-0b10000000
-0b11000000
-0b11100000
-0b11110000
-0b11111000
-0b11111100
-0b11111110
-0b11111111
-</code></pre>
-
-<p>These <em>are</em> the bytes we’re looking for (in ascending rather
-than descending order)!</p>
-
-<h2 id="remember-the-power-of-borrows">Remember the power of borrows</h2>
-
-<p>I hope the examples above communicated a pattern I often observe when
-mangling bits: operations that are annoying (not hard, just a bit more
-complex than we’d like) in the bitmap domain can be simpler in two’s
-complement arithmetic.  Arithmetic operations are powerful mutators
-for bitmaps, but they’re often hard to control.  Subtracting or adding
-1 are the main exceptions: it’s easy to describe their impact in terms
-of the low bits of the bitmap.  In fact, we can extend that trick to
-subtracting or adding powers of two: it’s the same carry/borrow chain effect as for 1,
-except that bits smaller than the power of two pass straight
-through…
-which might be useful when we expect a known tag followed by a ULEB value that must be decoded.</p>
-
-<p>If you find yourself wishing for a way to flip ranges of bits in a
-data-dependent fashion, it’s always worth considering the two’s
-complement representation of the problem for a couple minutes.  Adding
-or subtracting powers of two doesn’t always work, but the payoff is
-pretty good when it does.</p>
-
-<p>P.S., <a href="http://0x80.pl/notesen/2016-10-16-detecting-bit-pattern.html">Wojciech Muła offers a different 3-operation sequence with <code>-p</code></a>
-to solve damageboy’s problem.
-That’s another nice primitive to generate bitmasks dynamically.</p>
-
-<p><small>Thank you Ruchir for helping me clarify the notation around the ULEB section.</small></p>
-
-<p><hr style="width: 50%" /></p>
-<div class="footnotes" role="doc-endnotes">
-  <ol>
-    <li id="fn:b-for-bit-literal" role="doc-endnote">
-      <p>I use the <code>0b...</code> syntax throughout this post to denote bit literals, similarly to the usual <code>0x...</code> hexadecimal literals. <a href="#fnref:b-for-bit-literal" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:big-endian" role="doc-endnote">
-      <p>While I prefer to work with little-endian bytes, I find everything makes more sense with big-endian bits. <a href="#fnref:big-endian" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:remember-endianness" role="doc-endnote">
-      <p>Remember, while ULEB is little-endian, we use big bit-endianness. <a href="#fnref:remember-endianness" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
