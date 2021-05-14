@@ -164,7 +164,7 @@ the worst case, compared to always applying one or the other.</p>
 <p>Luckily,<sup id="fnref:or-is-it" role="doc-noteref"><a href="#fn:or-is-it" class="footnote" rel="footnote">1</a></sup>
 <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L322">all of <code>u64::MAX</code>’s factors (except 1 and <code>u64::MAX</code>) work with the “round up” approximation</a>
 that doesn’t increment, so the saturating increment is always safe
-when we actually want to use the second “round-down” approximation 
+when we actually want to use the second “round-down” approximation
 (unless \(d^\prime \in \{1, \mathtt{u64::MAX}\}\)).</p>
 
 <p>This duality is the reason why Reciprocal can get away with
@@ -318,9 +318,9 @@ how they will perform.  Worse, they also force you to take into
 account how often you’ll switch between the different classes.
 Reciprocal does not have that problem: its hot path is the same
 regardless of the constant divisor, so it has the same predictable
-performance for all divisors<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">3</a></sup>,
+performance for all divisors,<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">3</a></sup>
 and there’s only one code path, so we don’t have to worry about class
-switch.</p>
+switches.</p>
 
 <p>Depending on the workload, it may make sense to divert to faster code
 paths, but it’s usually best to start without special cases when it’s
