@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2021-05-14T10:09:39-04:00</updated>
+  <updated>2021-05-14T10:26:35-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -17,7 +17,7 @@
   <entry>
     <title type="html"><![CDATA[Baseline implementations should be predictable]]></title>
     <link href="https://www.pvk.ca/Blog/2021/05/14/baseline-implementations-should-be-predictable/"/>
-    <updated>2021-05-14T01:53:04-04:00</updated>
+    <updated>2021-05-14T01:53:05-04:00</updated>
     <id>https://www.pvk.ca/Blog/2021/05/14/baseline-implementations-should-be-predictable</id>
     <content type="html"><![CDATA[<p>I wrote <a href="https://crates.io/crates/reciprocal">Reciprocal</a> because I
 couldn’t find a nice implementation of div-by-mul in Rust without
@@ -30,8 +30,9 @@ code path in classic implementations. Powers of two are also typically
 different, but at least divert to a faster sequence, a variable right
 shift.</p>
 
-<p>Reciprocal instead uses a unified code path to implement two
-expressions, \(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\) and
+<p>Reciprocal instead <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L116">uses a unified code path</a>
+to implement two expressions, 
+\(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\) and
 \(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \cdot \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\),
 that are identical except for the saturating increment of \(x\) in
 \(g_{m^\prime,s^\prime}(x)\).</p>
@@ -57,10 +58,12 @@ as long as we don’t trigger this second expressions for divisors
 \(d^\prime\) for which
 \(\lfloor \frac{\mathtt{u64::MAX}}{d^\prime}\rfloor \neq \lfloor \frac{\mathtt{u64::MAX} - 1}{d^\prime}\rfloor\).</p>
 
-<p>We have a pair of dual approximations, one that rounds the reciprocal up to a
-fixed point value, and another that rounds down; it makes sense to
-round to nearest, which nets us one extra bit of precision in the
-worst case, compared to always applying one or the other.  Luckily,<sup id="fnref:or-is-it" role="doc-noteref"><a href="#fn:or-is-it" class="footnote" rel="footnote">1</a></sup>
+<p>We have a pair of dual approximations, one that rounds the reciprocal
+up to a fixed point value, and another that rounds down; it makes
+sense to round to nearest, which nets us one extra bit of precision in
+the worst case, compared to always applying one or the other.</p>
+
+<p>Luckily,<sup id="fnref:or-is-it" role="doc-noteref"><a href="#fn:or-is-it" class="footnote" rel="footnote">1</a></sup>
 <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L322">all of <code>u64::MAX</code>’s factors (except 1 and <code>u64::MAX</code>) work with the “round up” approximation</a>
 that doesn’t increment, so the saturating increment is always safe
 when we actually want to use the second approximation (unless
@@ -71,7 +74,7 @@ when we actually want to use the second approximation (unless
 
 <p>Even better, \(f_{m,s}\) and \(g_{m^\prime,s^\prime}\)
 differ only in the absence or presence of a saturating increment.
-Rather than branching, Reciprocal executes a data-driven increment
+Rather than branching, <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L116">Reciprocal executes a data-driven increment</a>
 by 0 (for \(f_{m,s}(x)\)) or by 1 (for
 \(g_{m^\prime,s^\prime}(x)\)).  The upshot: predictable improvements
 over hardware division, even when dividing by different constants.</p>
@@ -155,7 +158,8 @@ switch to a slow path (strength_reduce enters a general case that
 is arguably more complex, but more transparent to LLVM). Even
 divisions directly compiled with LLVM are ~20% faster than Reciprocal:
 LLVM does not implement Robison’s round-down scheme, so it
-hardcodes a more complex sequence than Reciprocal’s.</p>
+<a href="https://godbolt.org/z/M9s58rx3Y">hardcodes a more complex sequence</a>
+than Reciprocal’s.</p>
 
 <p>\(10^4\) divisions by 11 (a regular division)</p>
 
@@ -222,7 +226,7 @@ switch.</p>
 <p>Depending on the workload, it may make sense to divert to faster code
 paths, but it’s usually best to start without special cases when it’s
 practical to do so…  and I think
-<a href="https://crates.io/crates/reciprocal">reciprocal</a> shows that, for
+<a href="https://crates.io/crates/reciprocal">Reciprocal</a> shows that, for
 integer division by constants, it is.</p>
 
 <p><hr style="width: 50%" /></p>
