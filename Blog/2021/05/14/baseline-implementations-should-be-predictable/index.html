@@ -129,7 +129,7 @@ a variable right shift.</p>
 
 <p>Reciprocal instead uses the same code path to implement two similar
 expressions, \(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\) and
-\(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\),
+\(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \cdot \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\),
 that are identical except for the saturating increment in \(g_{m^\prime,s^\prime}(x)\).</p>
 
 <p>The first expression, \(f_{m,s}\) corresponds to the usual
@@ -148,7 +148,7 @@ run-time, we then bump the multiplicand up (by the largest value
 \(\frac{n}{2^{s^\prime}} &lt; 1/d^\prime\), i.e., \(\frac{m^\prime}{2^{s^{prime}}}\)) before dropping the low bits.</p>
 
 <p>With a bit of algebra, we see that \(m^\prime x + m^\prime = m^\prime (x + 1)\)…
-and we can use a saturating increment and avoid a 65x64 multiplication
+and we can use a saturating increment and avoid a 64x65 multiplication
 as long as avoid this second method for divisors
 \(d^\prime\) for which
 \(\lfloor \frac{\mathtt{u64::MAX}}{d^\prime}\rfloor \neq \lfloor \frac{\mathtt{u64::MAX} - 1}{d^\prime}\rfloor\).</p>
