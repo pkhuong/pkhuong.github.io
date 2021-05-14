@@ -269,7 +269,7 @@ implementations make you guess whether you’ll tend to divide by powers
 of two, by “regular” divisors, or by “hard” ones in order to estimate
 how they will perform.  Worse, they also force you to take into
 account how often you’ll switches between the different classes.
-Reciprocal does now have that problem: its hot path is the same
+Reciprocal does not have that problem: its hot path is the same
 regardless of the constant divisor, so it has the same predictable
 performance for all divisors<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">2</a></sup>,
 and there’s only one code path, so we don’t have to worry about class
