@@ -176,4 +176,191 @@ TL;DR: we can implement plain physical replication in a VFS, and have
 sqlite inform the VFS of transaction boundaries instead of wasting IO
 on journaling.
 
+Simplifications: "All writes to the database file are an integer number of pages and are page-aligned." https://sqlite.org/lpc2019/doc/trunk/briefing.md
+
+Ref https://www.sqlite.org/src/doc/trunk/src/test_demovfs.c
+
+Locking: I think/hope we can avoid the complexity of sqlite's file locks
+with open file description (OFD) locks.
+
+Test plan
+---------
+
+We'll add our VFS file(s) to the amalgamated source, by:
+
+1. copying the file(s) to the build directory's `tsrc/` subdir
+2. `sed -e 's|   stmt\.c|   stmt.c replvfs.c|' -i ../tool/mksqlite3c.tcl`
+3. `make OPTS="-DSQLITE_EXTRA_INIT=sqlite3_replvfs_init" test`.
+4. Configure without WAL or mmap.
+
+See main.c for the meaning of `SQLITE_EXTRA_INIT`.  We'll use that to
+register our VFS as the new default.  We can also name it "unix" to
+shadow the regular system "unix" VFS (some tests refer to it by name).
+
+Representation of streamed updates
+----------------------------------
+
+We'll track changes with aligned 64KB pages.  The replication data
+will live in two buckets:
+
+1. a content-addressed bucket, where all writes are blind overwrites.
+2. a location-addressed bucket, with names that correspond to hosts & dbs
+
+The bulk of the data will live in the content-addressed bucket, which
+should probably have a retention policy setup.  The name of each blob
+in this content-addressed bucket is the hex representation of the 128-bit
+umash fingerprint of the blob's uncompressed contents.  The contents
+stored in S3 are zstd-compressed.
+
+The location-addressed bucket will contain little data, and should
+probably be versioned.  Each location-addressed blob is named after a
+machine and database, and only contains references to blobs in the
+content-addressed bucket.  Location-addressed blobs will be
+overwritten in-place, so the bucket should probably be versioned (with
+a retention policy on the versions).
+
+Our 64 KB tracking granularity is independent from the DB's page size
+(B-tree node size).  However, it would be ideal to set the page size
+to 64KB or more.  For journalled (non-WAL) DBs, the page size can be
+overridden with [a pragma](https://www.sqlite.org/pragma.html#pragma_page_size)
+followed by a vacuum.
+
+Defining `SQLITE_FAST_SECURE_DELETE` at build-time should also improve
+compressibility without affecting the size of changes sent to s3.
+
+Hooking into sqlite
+-------------------
+
+We want to make sure the streaming replication doesn't make things
+worse, and we currently don't have any problem with write latency.
+Our databases also top out at < 1MB.
+
+When a file acquires the write lock, we will execute writes directly.
+However, we will also log these writes to the replication queue as
+they come.  Before releasing the write lock, we will signal a publish
+barrier to the queue: only then is it safe to update the replicated
+file.
+
+When the database's page size is smaller than our 64 KB tracking
+granularity, we will have to backfill surrounding bytes.  We'll do
+so by waiting until the end of the transaction to read from the
+actual file.  Of course, it's preferable to avoid this extra I/O,
+so setting the DB's page size to 64 KB is best.
+
+We'll also want to make sqlite use a growth "chunk" size of ~1MB.
+That's roughly the size of our prod DBs, results in a negligible
+16 extra pages of metadata, and should help FSes do something smart.
+
+We will also want to publish full snapshots from time to time...  but
+we only want to do so once any hot journal has been rolled back.
+That's why we must wait for a write lock to be downgraded, or a shared
+lock to be released: sqlite always checks for hot journals when
+opening a shared lock, so once the shared lock is released, any hot
+journal must have been applied (or there was nothing to apply).  If
+there is a hot journal, it will be applied with the write lock taken,
+so everything must be good to go once the write lock is downgraded.
+
+We also don't want to do this too frequently.  I think it makes sense
+to try and publish a full snapshot at most once per connection, and
+only if the db hasn't been snapshotted in more than, e.g., one hour
+(track that with an xattr).  We should also add a free snapshot per
+boot, in order to catch OS crashes (again, xattr, this time on linux
+bootid / mtime of pid1, salted + hashed).
+
+Note that we will also want to build an internal snapshot around our
+first write to the DB.  This snapshot doesn't have to be published to
+S3, but it is needed for the replication subsystem to construct a 
+correct map of the file.  We can do that with the reader lock held.
+It's OK, if not ideal, if multiple threads feed snapshots to the
+replication subsystem: since they hold the reader lock, the snapshots
+must be identical, so we don't have to worry about ordering.
+
+When the file does change, the writer will first acquire the write lock,
+so no snapshot will be in progress.
+
+Replication subsystem
+---------------------
+
+Each writer is responsible for sending its write transaction as it
+goes, and for signaling the end of the transaction.  The data in the
+replication queue still makes sense, because writers exclude each
+other.
+
+Naively, the replication subsystem can send each page to the
+content-addressed bucket as it reads them from the queue, and update
+its internal mapping.  When it sees a publish/end of transaction
+record, it can send the updated mapping to the location-addressed
+bucket.
+
+The content-addressed blobs will be named after a umash fingerprint
+of their data, and will contain a zstd-compressed version of these
+data.  We will also set the [content type](https://tools.ietf.org/id/draft-kucherawy-dispatch-zstd-00.html#rfc.section.3.1)
+accordingly.
+
+The location-addressed blobs will contain a protobuf-encoded
+directory.  At first, I'm thinking a proto with a size field and 
+a raw "bytes" field.  The second field contains the directory
+as a flat array of concatenated 16-byte chunk ids.  These blobs
+too will be zstd-compressed.
+
+While the above works, it can result in more S3 operations than we
+would like.
+
+We will try to buffer writes, until we run into an internal memory
+allocation limit: we expect repeated writes to, e.g., btree root
+pages, so we will buffer writes for up to, e.g., 5 minutes after the
+corresponding publish fence, and never publish overwritten pages to S3.
+
+Internal buffering works with a mapping from page id to content.
+
+The content will always include the umash fingerprint of the page, and
+may include buffered contents, not yet sent to S3.  It will also
+include a flag to denote whether the contents have made it to S3 or
+not.
+
+The mapping will always contain a consistent (safely published) view;
+in-flight updates will be buffered in a separate identical data
+structure until we see a barrier.
+
+Overwriting the consistent view will naturally drop overwritten
+buffered writes.
+
+Since we don't assume that updates are buffered, and the
+content-addressed bucket can contain arbitrary blobs, we
+also get to flush buffered pages whenever we want.
+
+We simply have to make sure all the pages have been flushed to S3
+before uploading the new location-addressed mapping blob.
+
+We will also only attempt to flush the current mapping once it has
+been more than k (e.g., 5) minutes since an update.  As a special
+case, we will also publish snapshots (with page contents sync'ed to
+S3) immediately.
+
+We'll have a single replication subsystem for all file objects, and
+for all database files.  File objects will send refcount updates, and
+everything will be keyed on normalised file paths (or a fingerprint
+thereof).
+
+HA
+--
+
+Once we have logging, let's add an option to reconstruct a file from
+scratch.  We'll be able to test the logic by snapshotting a file,
+constructing a copy, and looking for differences.
+
+After that, we'll want to allow read-only connections that poll S3 for
+new mapping files regularly, whenever sqlite acquires the read lock.
+
+The chunks downloaded from S3 can first live in memory, and later in a
+cache directory (nuked after every reboot).
+
+Much like the write end, the mapping doesn't have to assume chunks are
+available: in the worst case, we'll fetch missing chunks from S3.
+
+We may also want to improve latency by letting clients directly
+request the latest map file sent to S3.  This will let clients hit
+coronerd more frequently than we'd like to hit S3 (remember, costs are
+per API call).
+
 <p><hr style="width: 50%" /></p>
