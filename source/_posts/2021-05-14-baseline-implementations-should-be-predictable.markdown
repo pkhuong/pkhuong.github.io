@@ -202,7 +202,7 @@ With special cases for classes of divisors, most runtime div-by-mul
 implementations make you guess whether you'll tend to divide by powers
 of two, by "regular" divisors, or by "hard" ones in order to estimate
 how they will perform.  Worse, they also force you to take into
-account how often you'll switches between the different classes.
+account how often you'll switch between the different classes.
 Reciprocal does not have that problem: its hot path is the same
 regardless of the constant divisor, so it has the same predictable
 performance for all divisors[^partial],
