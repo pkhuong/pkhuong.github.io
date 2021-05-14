@@ -18,8 +18,9 @@ need a different code path, but at least divert to a faster sequence,
 a variable right shift.
 
 Reciprocal instead uses the same code path to implement two similar
-expressions: \\(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\\), and
-\\(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\\).
+expressions, \\(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\\) and
+\\(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\\),
+that are identical except for the saturating increment in \\(g_{m^\prime,s^\prime}(x)\\).
 
 The first expression, \\(f_{m,s}\\) corresponds to the usual
 div-by-mul approximation (implemented in gcc, LLVM, libdivide, etc.)
