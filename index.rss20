@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2021-05-14T09:01:06-04:00</updated>
+  <updated>2021-05-14T09:05:15-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -31,8 +31,9 @@ need a different code path, but at least divert to a faster sequence,
 a variable right shift.</p>
 
 <p>Reciprocal instead uses the same code path to implement two similar
-expressions: \(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\), and
-\(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\).</p>
+expressions, \(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\) and
+\(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\),
+that are identical except for the saturating increment in \(g_{m^\prime,s^\prime}(x)\).</p>
 
 <p>The first expression, \(f_{m,s}\) corresponds to the usual
 div-by-mul approximation (implemented in gcc, LLVM, libdivide, etc.)
