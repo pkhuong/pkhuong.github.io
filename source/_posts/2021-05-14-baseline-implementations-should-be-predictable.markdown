@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Baseline implementations should be predictable"
-date: 2021-05-14 01:53:04 -0400
+date: 2021-05-14 01:53:05 -0400
 comments: true
 categories: 
 ---
@@ -17,8 +17,9 @@ code path in classic implementations. Powers of two are also typically
 different, but at least divert to a faster sequence, a variable right
 shift.
 
-Reciprocal instead uses a unified code path to implement two
-expressions, \\(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\\) and
+Reciprocal instead [uses a unified code path](https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L116)
+to implement two expressions, 
+\\(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\\) and
 \\(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \cdot \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\\),
 that are identical except for the saturating increment of \\(x\\) in
 \\(g_{m^\prime,s^\prime}(x)\\).
@@ -44,10 +45,12 @@ as long as we don't trigger this second expressions for divisors
 \\(d^\prime\\) for which
 \\(\lfloor \frac{\mathtt{u64::MAX}}{d^\prime}\rfloor \neq \lfloor \frac{\mathtt{u64::MAX} - 1}{d^\prime}\rfloor\\).
 
-We have a pair of dual approximations, one that rounds the reciprocal up to a
-fixed point value, and another that rounds down; it makes sense to
-round to nearest, which nets us one extra bit of precision in the
-worst case, compared to always applying one or the other.  Luckily,[^or-is-it]
+We have a pair of dual approximations, one that rounds the reciprocal
+up to a fixed point value, and another that rounds down; it makes
+sense to round to nearest, which nets us one extra bit of precision in
+the worst case, compared to always applying one or the other.
+
+Luckily,[^or-is-it]
 [all of `u64::MAX`'s factors (except 1 and `u64::MAX`) work with the "round up" approximation](https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L322)
 that doesn't increment, so the saturating increment is always safe
 when we actually want to use the second approximation (unless
@@ -60,7 +63,7 @@ This duality is the reason why Reciprocal can get away with
 
 Even better, \\(f_{m,s}\\) and \\(g_{m^\prime,s^\prime}\\)
 differ only in the absence or presence of a saturating increment.
-Rather than branching, Reciprocal executes a data-driven increment
+Rather than branching, [Reciprocal executes a data-driven increment](https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L116)
 by 0 (for \\(f_{m,s}(x)\\)) or by 1 (for
 \\(g_{m^\prime,s^\prime}(x)\\)).  The upshot: predictable improvements
 over hardware division, even when dividing by different constants.
@@ -143,7 +146,8 @@ switch to a slow path (strength\_reduce enters a general case that
 is arguably more complex, but more transparent to LLVM). Even
 divisions directly compiled with LLVM are ~20% faster than Reciprocal:
 LLVM does not implement Robison's round-down scheme, so it
-hardcodes a more complex sequence than Reciprocal's.
+[hardcodes a more complex sequence](https://godbolt.org/z/M9s58rx3Y)
+than Reciprocal's.
 
 \\(10^4\\) divisions by 11 (a regular division)
 
@@ -210,7 +214,7 @@ switch.
 Depending on the workload, it may make sense to divert to faster code
 paths, but it's usually best to start without special cases when it's
 practical to do so...  and I think
-[reciprocal](https://crates.io/crates/reciprocal) shows that, for
+[Reciprocal](https://crates.io/crates/reciprocal) shows that, for
 integer division by constants, it is.
 
 <p><hr style="width: 50%" /></p>
