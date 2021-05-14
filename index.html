@@ -138,7 +138,7 @@ that are identical except for the saturating increment of \(x\) in
 <p>The first expression, \(f_{m,s}(x)\) corresponds to the usual
 div-by-mul approximation (implemented in gcc, LLVM, libdivide, etc.)
 where the reciprocal \(1/d\) is approximated in fixed point by rounding
-\(m\) <em>up</em>, with the upward error corrected by the truncating
+\(m\) <em>up</em>, with the upward error compensated by the truncating
 multiplication at runtime.  See, for example, Granlund and
 Montgomery’s <a href="https://gmplib.org/~tege/divcnst-pldi94.pdf">Division by invariant integers using multiplication</a>.</p>
 
@@ -148,13 +148,13 @@ scheme of described by Robison in <a href="https://citeseerx.ist.psu.edu/viewdoc
 <p>In that approximation, the reciprocal multiplier \(m^\prime\) is
 rounded <em>down</em> when converting \(1/d^\prime\) to fixed point.  At 
 runtime, we then bump the product up (by the largest value
-\(\frac{n}{2^{s^\prime}} &lt; 1/d^\prime\), i.e., \(\frac{m^\prime}{2^{s^{prime}}}\)) before dropping the low bits.</p>
+\(\frac{n}{2^{s^\prime}} &lt; 1/d^\prime\), i.e., \(\frac{m^\prime}{2^{s^\prime}}\)) before dropping the low bits.</p>
 
 <p>With a bit of algebra, we see that \(m^\prime x + m^\prime = m^\prime (x + 1)\)…
 and we can use a saturating increment to avoid a 64x65 multiplication
-as long as we don’t trigger this second expressions for divisors
+as long as we don’t trigger this second expression for divisors
 \(d^\prime\) for which
-\(\lfloor \frac{\mathtt{u64::MAX}}{d^\prime}\rfloor \neq \lfloor \frac{\mathtt{u64::MAX} - 1}{d^\prime}\rfloor\).</p>
+\(\left\lfloor \frac{\mathtt{u64::MAX}}{d^\prime}\right\rfloor \neq \left\lfloor \frac{\mathtt{u64::MAX} - 1}{d^\prime}\right\rfloor\).</p>
 
 <p>We have a pair of dual approximations, one that rounds the reciprocal
 up to a fixed point value, and another that rounds down; it makes
@@ -164,8 +164,8 @@ the worst case, compared to always applying one or the other.</p>
 <p>Luckily,<sup id="fnref:or-is-it" role="doc-noteref"><a href="#fn:or-is-it" class="footnote" rel="footnote">1</a></sup>
 <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L322">all of <code>u64::MAX</code>’s factors (except 1 and <code>u64::MAX</code>) work with the “round up” approximation</a>
 that doesn’t increment, so the saturating increment is always safe
-when we actually want to use the second approximation (unless
-\(d^\prime \in \{1, \mathtt{u64::MAX}\}\)).</p>
+when we actually want to use the second “round-down” approximation 
+(unless \(d^\prime \in \{1, \mathtt{u64::MAX}\}\)).</p>
 
 <p>This duality is the reason why Reciprocal can get away with
 64-bit multipliers.</p>
@@ -173,9 +173,10 @@ when we actually want to use the second approximation (unless
 <p>Even better, \(f_{m,s}\) and \(g_{m^\prime,s^\prime}\)
 differ only in the absence or presence of a saturating increment.
 Rather than branching, <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L116">Reciprocal executes a data-driven increment</a>
-by 0 (for \(f_{m,s}(x)\)) or by 1 (for
-\(g_{m^\prime,s^\prime}(x)\)).  The upshot: predictable improvements
-over hardware division, even when dividing by different constants.</p>
+by 0 or 1,
+for \(f_{m,s}(x)\) or \(g_{m^\prime,s^\prime}(x)\) respectively.
+The upshot: predictable improvements over hardware division, even when
+dividing by different constants.</p>
 
 <p>Summary of the results below: when measuring the throughput of
 independent divisions on my i7 7Y75 @ 1.3 GHz, Reciprocal consistently
