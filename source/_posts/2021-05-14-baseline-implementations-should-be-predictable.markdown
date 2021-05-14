@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Baseline implementations should be predictable"
-date: 2021-05-14 00:54:23 -0400
+date: 2021-05-14 01:53:01 -0400
 comments: true
 categories: 
 ---
@@ -125,7 +125,7 @@ divide by the same constant in a loop, and thus always hit the same
 code path without ever mispredicting a branch.
 
 What happens when we [pick unpredictably from four precomputed divisors](https://github.com/pkhuong/reciprocal/blob/main/benches/div_throughput_variable.rs),
-for divisions by 2, 3, 7, or 11?
+for divisions by 2, 3, 7, or 11 (one easy, one hard, and two regular divisors)?
 
     hardware_u64_div        time:   [91.592 us 93.211 us 95.125 us]
     reciprocal_u64_div      time:   [17.436 us 17.620 us 17.828 us]
