@@ -147,7 +147,7 @@ switch to a slow path (strength\_reduce enters a general case that
 is arguably more complex, but more transparent to LLVM). Even
 divisions directly compiled with LLVM are ~20% faster than Reciprocal:
 LLVM does not implement Robison's round-down scheme, so it
-[hardcodes a more complex sequence](https://godbolt.org/z/M9s58rx3Y)
+[hardcodes a more complex sequence](https://godbolt.org/z/Wvn3hhahd)
 than Reciprocal's.
 
 \\(10^4\\) divisions by 11 (a regular division)
