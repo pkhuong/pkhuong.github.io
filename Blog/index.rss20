@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2021-05-14T01:33:07-04:00</updated>
+  <updated>2021-05-14T01:53:24-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -17,7 +17,7 @@
   <entry>
     <title type="html"><![CDATA[Baseline implementations should be predictable]]></title>
     <link href="https://www.pvk.ca/Blog/2021/05/14/baseline-implementations-should-be-predictable/"/>
-    <updated>2021-05-14T00:54:23-04:00</updated>
+    <updated>2021-05-14T01:53:01-04:00</updated>
     <id>https://www.pvk.ca/Blog/2021/05/14/baseline-implementations-should-be-predictable</id>
     <content type="html"><![CDATA[<p>I wrote <a href="https://crates.io/crates/reciprocal">Reciprocal</a> because I
 couldn’t find a nice implementation of div-by-mul in Rust without
@@ -140,7 +140,7 @@ divide by the same constant in a loop, and thus always hit the same
 code path without ever mispredicting a branch.</p>
 
 <p>What happens when we <a href="https://github.com/pkhuong/reciprocal/blob/main/benches/div_throughput_variable.rs">pick unpredictably from four precomputed divisors</a>,
-for divisions by 2, 3, 7, or 11?</p>
+for divisions by 2, 3, 7, or 11 (one easy, one hard, and two regular divisors)?</p>
 
 <pre><code>hardware_u64_div        time:   [91.592 us 93.211 us 95.125 us]
 reciprocal_u64_div      time:   [17.436 us 17.620 us 17.828 us]

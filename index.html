@@ -238,7 +238,7 @@ divide by the same constant in a loop, and thus always hit the same
 code path without ever mispredicting a branch.</p>
 
 <p>What happens when we <a href="https://github.com/pkhuong/reciprocal/blob/main/benches/div_throughput_variable.rs">pick unpredictably from four precomputed divisors</a>,
-for divisions by 2, 3, 7, or 11?</p>
+for divisions by 2, 3, 7, or 11 (one easy, one hard, and two regular divisors)?</p>
 
 <pre><code>hardware_u64_div        time:   [91.592 us 93.211 us 95.125 us]
 reciprocal_u64_div      time:   [17.436 us 17.620 us 17.828 us]
