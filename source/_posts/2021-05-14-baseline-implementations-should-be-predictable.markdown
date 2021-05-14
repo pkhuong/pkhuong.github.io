@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Baseline implementations should be predictable"
-date: 2021-05-14 01:53:01 -0400
+date: 2021-05-14 01:53:02 -0400
 comments: true
 categories: 
 ---
@@ -155,7 +155,7 @@ implementations make you guess whether you'll tend to divide by powers
 of two, by "regular" divisors, or by "hard" ones in order to estimate
 how they will perform.  Worse, they also force you to take into
 account how often you'll switches between the different classes.
-Reciprocal does now have that problem: its hot path is the same
+Reciprocal does not have that problem: its hot path is the same
 regardless of the constant divisor, so it has the same predictable
 performance for all divisors[^partial],
 and there's only one code path, so we don't have to worry about class
