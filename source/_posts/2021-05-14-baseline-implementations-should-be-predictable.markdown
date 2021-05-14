@@ -210,7 +210,7 @@ performance for all divisors,[^partial]
 and there's only one code path, so we don't have to worry about class
 switches.
 
-[^partial]: ...all divisors except 1 and `u64::MAX`, which must instead [use the more general `Reciprocal` struct](https://github.com/pkhuong/reciprocal/blob/d591c59044b3a4f662112aae73c3adae9f168ea6/src/lib.rs#L176).
+[^partial]: ...all divisors except 1 and `u64::MAX`, which must instead [use the more general `Reciprocal` struct](https://github.com/pkhuong/reciprocal/blob/b2f1fa0093a3fbfb2758c434aba700bf852b4b30/src/lib.rs#L196).
 
 Depending on the workload, it may make sense to divert to faster code
 paths, but it's usually best to start without special cases when it's
