@@ -212,8 +212,9 @@ make the core allocation logic slighly faster, and immediately
 turn around and spend that efficiency on safety, debuggability or,
 eventually, observability.  For a lot of code, performance is a
 constraint to satisfy, not a goal to maximise; once we're close to
-good enough, it makes sense to trade performance
-away.[^even-works-for-perf]
+good enough, it makes sense to trade performance away.[^even-works-for-perf]
+I also believe that there are [lower hanging fruit in memory placement](https://research.google/pubs/pub50370/)
+than shaving a couple ns from the allocation path itself.
 
 [^even-works-for-perf]: And not just for safety or productivity features!  I find it often makes sense to give up on small performance wins (e.g., aggressive autovectorisation or link-time optimisation) when they would make future performance investigations harder.  The latter are higher risk, and only potential benefits, but their upside (order of magnitude improvements) dwarf guaranteed small wins that freeze the code in time.
 
