@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "Slitter: a less footgunny slab allocator"
+title: "Slitter: Doveryai, no proveryai for your allocator"
 date: 2021-08-01 17:26:04 -0400
 hidden: true
 draft: true
@@ -108,7 +108,7 @@ branch is trivially predictable (the tag always matches), so we can
 hope that wide out-of-order CPUs will hide most of the checking
 code, if it's simple enough.
 
-This concern (simple access to metadata) combined with our goal of
+This concern (access to metadata in few instructions) combined with our goal of
 avoiding in-band metadata lead to a
 [simple layout for each chunk's data and metadata](https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/mill.rs#L6-L19).
 
@@ -207,16 +207,28 @@ that's why we rely on locks when refilling bump allocation regions.
 Come waste performance on safety!
 ---------------------------------
 
-A recurring theme in the design of Slitter is that we find ways to
-make the core (de)allocation logic slighly faster, and immediately
-spend that efficiency on safety, debuggability or,
-eventually, observability.  For a lot of code, performance is a
+A recurring theme in the design of [Slitter](https://github.com/backtrace-labs/slitter)
+is that we find ways to make the core (de)allocation logic slighly
+faster, and immediately spend that efficiency on safety, debuggability
+or, eventually, observability.  For a lot of code, performance is a
 constraint to satisfy, not a goal to maximise; once we're close to
-good enough, it makes sense to trade performance away.[^even-works-for-perf]
-I also believe that there are [lower hanging fruit in memory placement](https://research.google/pubs/pub50370/)
+good enough, it makes sense to trade performance
+away.[^even-works-for-perf] I also believe that there are
+[lower hanging fruit in memory placement](https://research.google/pubs/pub50370/)
 than shaving a couple nanos from the allocation path.
 
 [^even-works-for-perf]: And not just for safety or productivity features!  I find it often makes sense to give up on small performance wins (e.g., aggressive autovectorisation or link-time optimisation) when they would make future performance investigations harder.  The latter are higher risk, and only potential benefits, but their upside (order of magnitude improvements) dwarfs guaranteed small wins that freeze the code in time.
+
+[Slitter](https://crates.io/crates/slitter) also focuses on
+instrumentation and debugging features that are always running, even in
+production, instead of leaving that to development tools, or to logic
+that must be explicily enabled.  In a SaaS world, development and
+debugging is never done.  Opt-in tools are definitely useful, but
+always-on features are much more likely to help developers to catch
+the rarely occurring bugs on which they tend to spend an inordinate
+amount of investigation effort (and if some debugging feature can be
+enabled in production at a large scale, why not leave it enabled
+forever?).
 
 If that sounds like an interesting philosophy for a slab allocator, 
 [come hack on Slitter](https://github.com/backtrace-labs/slitter)!
