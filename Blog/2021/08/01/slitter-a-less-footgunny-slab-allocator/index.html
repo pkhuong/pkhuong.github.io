@@ -313,8 +313,9 @@ make the core allocation logic slighly faster, and immediately
 turn around and spend that efficiency on safety, debuggability or,
 eventually, observability.  For a lot of code, performance is a
 constraint to satisfy, not a goal to maximise; once we’re close to
-good enough, it makes sense to trade performance
-away.<sup id="fnref:even-works-for-perf" role="doc-noteref"><a href="#fn:even-works-for-perf" class="footnote" rel="footnote">7</a></sup></p>
+good enough, it makes sense to trade performance away.<sup id="fnref:even-works-for-perf" role="doc-noteref"><a href="#fn:even-works-for-perf" class="footnote" rel="footnote">7</a></sup>
+I also believe that there are <a href="https://research.google/pubs/pub50370/">lower hanging fruit in memory placement</a>
+than shaving a couple ns from the allocation path itself.</p>
 
 <p>If that sounds like an interesting philosophy for a slab allocator, 
 <a href="https://github.com/backtrace-labs/slitter">come hack on Slitter</a>!
