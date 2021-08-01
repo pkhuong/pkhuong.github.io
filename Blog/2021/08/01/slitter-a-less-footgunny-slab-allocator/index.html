@@ -1,0 +1,461 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Slitter: a less footgunny slab allocator - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2021/08/01/slitter-a-less-footgunny-slab-allocator/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Slitter: a less footgunny slab allocator</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Aug
+  
+1st, 
+2021
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2021/08/01/slitter-a-less-footgunny-slab-allocator/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p><a href="https://github.com/backtrace-labs/slitter">Slitter</a> is Backtrace’s
+deliberately middle-of-the-line
+<a href="https://www.usenix.org/legacy/publications/library/proceedings/usenix01/full_papers/bonwick/bonwick.pdf">thread-caching</a>
+<a href="https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S13/hand-outs/bonwick_slab.pdf">slab allocator</a>,
+with <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/include/slitter.h#L7-L44">explicit allocation class tags</a>
+(rather than derived from the object’s size class).  The design is
+about as standard as it gets: we hope to dedicate the project’s
+complexity budget to always-on “observability” and safety features.
+We don’t wish to detect all or even most memory management errors, but
+we should statistically catch a small fraction (enough to help
+pinpoint production issues) of such bugs, and <em>always</em> constrain their
+scope to the mismanaged allocation class.<sup id="fnref:blast-radius" role="doc-noteref"><a href="#fn:blast-radius" class="footnote" rel="footnote">1</a></sup></p>
+
+<p>We have been running <a href="https://crates.io/crates/slitter">Slitter</a> in production for over two months, and rely on it to:</p>
+
+<ul>
+  <li>detect when an allocation is freed with the wrong allocation class
+tag (i.e., detect type confusion on free)</li>
+  <li>avoid any in-band metadata: there are guard pages between
+allocations and allocator metadata, and no intrusive freelist for
+use-after-free to stomp over</li>
+  <li>guarantee <a href="https://www.usenix.org/legacy/publications/library/proceedings/osdi96/full_papers/greenwald/node2.html">type stable allocations</a>: once an address has been used
+to fulfill a request for a certain allocation class, it will only
+be used for that class.  Slitter doesn’t overlay intrusive lists on
+top of freed allocations, so the data always reflects what the
+application last stored there.  This lets application rely on
+benign use-after-free in non-blocking algorithms.  Type stability
+also means that double-frees or actually detrimental
+use-after-frees only affect the faulty allocation class.</li>
+  <li>let each allocation class specify how its backing memory should
+be mapped in (e.g., plain 4 KB pages, file-backed swappable pages,
+huge pages, or gigantic pages)</li>
+</ul>
+
+<p>Thanks to extensive contracts and a mix of hardcoded and random tests,
+we encountered only two issues during initial the rollout, both in the
+small amount of lock-free C code that is hard to test.<sup id="fnref:legacy-gcc" role="doc-noteref"><a href="#fn:legacy-gcc" class="footnote" rel="footnote">2</a></sup>
+In the future, we hope to also:</p>
+
+<ul>
+  <li>detect when an interior pointer is freed</li>
+  <li>detect simple<sup id="fnref:jump" role="doc-noteref"><a href="#fn:jump" class="footnote" rel="footnote">3</a></sup> buffer overflows that cross allocation classes, with guard pages</li>
+  <li>always detect frees of addresses Slitter does not manage</li>
+  <li>detect most back-to-back double-frees</li>
+  <li>detect a random fraction of buffer overflows, with a sampling <a href="https://en.wikipedia.org/wiki/Electric_Fence">eFence</a></li>
+</ul>
+
+<p>In addition to these safety features, we plan to have the allocator
+improve the observability of the calling program, and wish to:</p>
+
+<ul>
+  <li>track the number of objects allocated and recycled in each
+allocation class</li>
+  <li>sample the call stack when the heap grows</li>
+  <li>track allocation and release call stacks for a small fraction of objects</li>
+</ul>
+
+<p>Here’s how it currently works, and why we decided the world needs yet
+another memory allocator.</p>
+
+<h2 id="the-high-level-design-of-slitter">The high level design of Slitter</h2>
+
+<p>At a <a href="https://github.com/backtrace-labs/slitter/blob/fa8629989cb63ca5a4acdc2d26741bccda79aac0/doc/design.md">high level</a>,
+Slitter</p>
+
+<ol>
+  <li>reserves shared 1 GB <code>Chunk</code>s of memory via the <a href="https://github.com/backtrace-labs/slitter/blob/fa8629989cb63ca5a4acdc2d26741bccda79aac0/src/mapper.rs"><code>Mapper</code> trait</a></li>
+  <li>carves out smaller type-specific <code>Span</code>s from each chunk with <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/mill.rs"><code>Mill</code> objects</a></li>
+  <li>bump-allocates objects from <code>Span</code>s with <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/press.rs"><code>Press</code> objects</a>, into <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/magazine.rs">allocation <code>Magazines</code></a></li>
+  <li>pushes and pops objects into/from <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/c/cache.c">thread-local magazines</a></li>
+  <li>caches populated magazines in global <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/class.rs#L62-L67">type-specific lock-free stacks</a></li>
+  <li>manages empty magazines with a global <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/rack.rs">mostly lock-free <code>Rack</code></a></li>
+</ol>
+
+<p>Many general purpose memory allocators implement strategies similarly
+inspired by <a href="https://www.usenix.org/legacy/publications/library/proceedings/usenix01/full_papers/bonwick/bonwick.pdf">Bonwick’s slab allocator</a>,
+and time-tested mallocs may well provide better performance
+and lower fragmentation than Slitter.<sup id="fnref:type-stable" role="doc-noteref"><a href="#fn:type-stable" class="footnote" rel="footnote">4</a></sup>
+The primary motivation for designing Slitter is that having explicit
+allocation classes in the API makes it easier for the allocator to
+improve the debuggability and resilience of the calling program.
+For example, most allocators can tell you the size of your program’s
+heap, but that data is much more useful when broken down by struct
+type or program module.</p>
+
+<p>Most allocators try to avoid accessing the metadata associated with
+allocations.  In fact, that’s often seen as a strength of the slab
+interface: the allocator can just rely on the caller to pass the
+correct allocation class tag, instead of hitting metadata to figure
+out there the freed address should go.</p>
+
+<p>We went in the opposite direction with Slitter.  We still rely on the
+allocation class tag for speed, but also actively look for mismatches
+before returning from deallocation calls. Nothing depends on
+values computed by the mismatch detection logic, and the resulting
+branch is trivially predictable (the tag always matches), so we can
+hope that wide out-of-order CPUs will hide most of the checking
+code, if it’s simple enough.</p>
+
+<p>This concern (simple access to metadata) combined with our goal of
+avoiding in-band metadata lead to a
+<a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/mill.rs#L6-L19">simple layout for each chunk’s data and metadata</a>.</p>
+
+<pre><code>.-------.------.-------|---------------.-------.
+| guard | meta | guard | data ... data | guard |
+'-------'------'-------|---------------'-------'
+  2 MB    2 MB   2 MB  |      1 GB        2 MB
+                       v
+               Aligned to 1 GB
+</code></pre>
+
+<p>A chunk’s data is always a 1 GB address range, aligned to 1 GB: the
+underlying mapper doesn’t have to immediately back that with memory,
+but it certainly can, e.g., in order to use gigantic pages.  The chunk
+is preceded and followed by 2 MB guard pages.  The metadata for the
+chunk’s data lives in a 2 MB range, just before the preceding guard
+page (i.e., 4 MB to 2 MB before the beginning of the aligned 1 GB
+range).  Finally, the 2 MB metadata range is itself preceded by a 2MB
+guard page.</p>
+
+<p>Each chunk is statically divided in 65536 spans of 16 KB each.  We can
+thus map a span to its slot in the metadata block with a couple shift,
+masks, and some address arithmetic.  <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/mill.rs">Mill</a>s
+don’t have to hand out individual 16 KB spans at a time, they simply
+have to make sure to work with multiples of 16 KB, and never split
+a span in two.</p>
+
+<h2 id="why-we-wrote-slitter">Why we wrote Slitter</h2>
+
+<p>We decided to actually code up Slitter last April, when we noticed
+that we would immediately benefit from backing allocation with
+temporary file mappings: the bulk of our data is directly mapped from
+persistent data files, but we also regenerate some cold metadata
+during startup, and accesses to that metadata have amazing locality,
+both temporal and spatial (assuming bump allocation).  We don’t the OS
+to swap out all the heap–that way lie <a href="https://blog.acolyer.org/2017/06/15/gray-failure-the-achilles-heel-of-cloud-scale-systems/">grey failures</a>–so
+we opt specific allocation classes into it.</p>
+
+<p>By itself, this isn’t a reason to write a slab allocator: we could
+easily have configured <a href="http://jemalloc.net/jemalloc.3.html#arena.i.extent_hooks">specialised arenas in jemalloc</a>,
+for example.  However, we also had eyes on longer term improvements to
+observability and debugging/mitigation of memory management errors in
+production, and those could only be unlocked by switching to an
+interface with explicit allocation classes (types).</p>
+
+<p>Slab allocators tend to focus exclusively on speed.  <a href="https://github.com/omniti-labs/portableumem">Forks of libumem</a>
+may be the exception, when they inherit Solaris’s culture of pervasive
+hooking.  However, the design of umem reflects priorities from its
+birth in the early 00s: threads share caches, and the allocator tries
+to reuse address space, while Slitter assumes memory is plentiful
+enough for thread-local caches and type-stable allocations.</p>
+
+<h2 id="why-we-mostly-wrote-slitter-in-rust">Why we (mostly) wrote Slitter in Rust</h2>
+
+<p>We call Slitter from C, but wrote it in Rust, despite the
+more painful build<sup id="fnref:uber-crate" role="doc-noteref"><a href="#fn:uber-crate" class="footnote" rel="footnote">5</a></sup> process: that pain isn’t going
+anywhere, since we expect our backend to be in a mix of C, C++, and
+Rust for a long time.  We also sprinkled in some C when the
+alternative would have been to pull in a crate just to make a couple
+syscalls, or to enable unstable Rust features: we’re not
+“rewrite-it-in-Rust” absolutists, and merely wish to use Rust for its
+strengths (control over data layout, support for domain-specific
+invariants, large ecosystem for less performance critical logic, ability to
+lie to the compiler where necessary, …), while avoiding its
+weaknesses (interacting with Linux interfaces defined by C headers or
+fine-tuning code generation).</p>
+
+<p>The majority of allocations only interact with the thread-local
+magazines.  That’s why we <a href="https://github.com/backtrace-labs/slitter/blob/main/c/cache.c">wrote that code in C</a>:
+stable Rust doesn’t (yet) let us access <a href="https://doc.rust-lang.org/std/intrinsics/fn.likely.html">likely/unlikely annotations</a>,
+nor <a href="https://www.akkadia.org/drepper/tls.pdf#page=35">fast “initial-exec”</a> <a href="https://github.com/rust-lang/rust/issues/29594">thread-local storage</a>.
+Of course, allocation and deallocation are the main entry points into
+a memory allocation library, so this creates a bit of friction with
+Rust’s linking process.<sup id="fnref:bad-linker" role="doc-noteref"><a href="#fn:bad-linker" class="footnote" rel="footnote">6</a></sup></p>
+
+<p>We also had to implement our <a href="https://github.com/backtrace-labs/slitter/blob/main/c/stack.c">lock-free multi-popper Treiber stack</a>
+in C: x86-64 doesn’t have anything like LL/SC, so we instead pair
+the top-of-stack pointer with a generation counter… and 
+<a href="https://github.com/rust-lang/rust/issues/32976#issuecomment-641360955">Rust hasn’t stabilised 128-bit atomics</a> yet.</p>
+
+<p>We chose to use atomic in C instead of a simple lock in Rust because
+the lock-free stack (and the bump pointer, which Rust handles fine)
+are important for our use case: when we rehydrate cold metadata at
+startup, we do so from multiple I/O-bound threads, and we have
+observed hiccups due to lock contention in malloc.  At some point,
+lock acquisitions are rare enough that contention isn’t an issue;
+that’s why we rely on locks when refilling bump allocation regions.</p>
+
+<h2 id="come-waste-performance-on-safety">Come waste performance on safety!</h2>
+
+<p>A recurring theme in the design of Slitter is that we find ways to
+make the core allocation logic slighly faster, and immediately
+turn around and spend that efficiency on safety, debuggability or,
+eventually, observability.  For a lot of code, performance is a
+constraint to satisfy, not a goal to maximise; once we’re close to
+good enough, it makes sense to trade performance
+away.<sup id="fnref:even-works-for-perf" role="doc-noteref"><a href="#fn:even-works-for-perf" class="footnote" rel="footnote">7</a></sup></p>
+
+<p>If that sounds like an interesting philosophy for a slab allocator, 
+<a href="https://github.com/backtrace-labs/slitter">come hack on Slitter</a>!
+It’s MIT-licensed, has decent test coverage, and we try to write
+straightforward code.</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:blast-radius" role="doc-endnote">
+      <p>In my experience, their unlimited blast radius is what makes memory management bugs so frustrating to track down.  The design goals of generic memory allocators (e.g., recycling memory quickly) and some implementation strategies (e.g., <a href="http://phrack.org/issues/57/9.html#article">in-band metadata</a>) make it easy for bugs in one module to show up as broken invariants in a completely unrelated one that happened to share allocation addresses with the former.  <a href="http://phrack.org/issues/57/8.html#article">Adversarial thinkers</a> will even exploit the absence of isolation to <a href="https://www.openwall.com/articles/JPEG-COM-Marker-Vulnerability">amplify small programming errors into arbitrary code execution</a>.  Of course, one should simply not write bugs, but when they do happen, it’s nice to know that the broken code most likely hit itself and its neighbours in the callgraph, and not unrelated code that also uses the same memory allocator. <a href="#fnref:blast-radius" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:legacy-gcc" role="doc-endnote">
+      <p>It would be easy to blame the complexity of lock-free code, but the initial version, with C11 atomics, was correct.  Unfortunately, gcc backs C11 atomic <code>uint128_t</code> with locks, so we had to switch to the legacy interface, and that’s where the errors crept in. <a href="#fnref:legacy-gcc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:jump" role="doc-endnote">
+      <p>There isn’t much the allocator can do if an application writes to a wild address megabytes away from the base object. <a href="#fnref:jump" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:type-stable" role="doc-endnote">
+      <p>In fact, Slitter actively worsens external fragmentation to guarantee type-stable allocations, and thus control the blast radius of use-after-free and double-free. <a href="#fnref:type-stable" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:uber-crate" role="doc-endnote">
+      <p>We re-export our dependencies from an uber-crate, and let our outer <a href="https://mesonbuild.com/">meson</a> build invoke cargo to generate a static library for that facade uber-crate. <a href="#fnref:uber-crate" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:bad-linker" role="doc-endnote">
+      <p><a href="https://github.com/rust-lang/rfcs/issues/2771">Rust automatically hides foreign symbols when linking <code>cdylib</code>s</a>.  We worked around that with static linking, but statically linked rust libraries are mutually incompatible, hence the uber-crate. <a href="#fnref:bad-linker" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:even-works-for-perf" role="doc-endnote">
+      <p>And not just for safety or productivity features!  I find it often makes sense to give up on small performance wins (e.g., aggressive autovectorisation or link-time optimisation) when they would make future performance investigations harder.  The latter are higher risk, and only potential benefits, but their upside (order of magnitude improvements) dwarf guaranteed small wins that freeze the code in time. <a href="#fnref:even-works-for-perf" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Aug
+  
+1st, 
+2021
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2021/06/07/entomological-solutions/" title="Previous Post: Entomological solutions">&laquo; Entomological solutions</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2021 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2021/08/01/slitter-a-less-footgunny-slab-allocator/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2021/08/01/slitter-a-less-footgunny-slab-allocator/';
+      this.page.title = 'Slitter: a less footgunny slab allocator';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>
