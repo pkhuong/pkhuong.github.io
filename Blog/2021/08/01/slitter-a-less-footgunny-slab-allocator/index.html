@@ -252,7 +252,7 @@ that we would immediately benefit from backing allocation with
 temporary file mappings: the bulk of our data is directly mapped from
 persistent data files, but we also regenerate some cold metadata
 during startup, and accesses to that metadata have amazing locality,
-both temporal and spatial (assuming bump allocation).  We don’t the OS
+both temporal and spatial (assuming bump allocation).  We don’t want the OS
 to swap out all the heap–that way lie <a href="https://blog.acolyer.org/2017/06/15/gray-failure-the-achilles-heel-of-cloud-scale-systems/">grey failures</a>–so
 we opt specific allocation classes into it.</p>
 
@@ -309,18 +309,23 @@ that’s why we rely on locks when refilling bump allocation regions.</p>
 <h2 id="come-waste-performance-on-safety">Come waste performance on safety!</h2>
 
 <p>A recurring theme in the design of Slitter is that we find ways to
-make the core allocation logic slighly faster, and immediately
-turn around and spend that efficiency on safety, debuggability or,
+make the core (de)allocation logic slighly faster, and immediately
+spend that efficiency on safety, debuggability or,
 eventually, observability.  For a lot of code, performance is a
 constraint to satisfy, not a goal to maximise; once we’re close to
 good enough, it makes sense to trade performance away.<sup id="fnref:even-works-for-perf" role="doc-noteref"><a href="#fn:even-works-for-perf" class="footnote" rel="footnote">7</a></sup>
 I also believe that there are <a href="https://research.google/pubs/pub50370/">lower hanging fruit in memory placement</a>
-than shaving a couple ns from the allocation path itself.</p>
+than shaving a couple nanos from the allocation path.</p>
 
 <p>If that sounds like an interesting philosophy for a slab allocator, 
 <a href="https://github.com/backtrace-labs/slitter">come hack on Slitter</a>!
 It’s MIT-licensed, has decent test coverage, and we try to write
 straightforward code.</p>
+
+<p>Admittedly, the value of Slitter isn’t as clear for pure Rust hackers
+as it is for those of us who mix C and Rust, but per-class allocation
+statistics and placement decisions should be useful, even in safe
+Rust, especially for larger programs with long runtimes.</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
@@ -329,7 +334,7 @@ straightforward code.</p>
       <p>In my experience, their unlimited blast radius is what makes memory management bugs so frustrating to track down.  The design goals of generic memory allocators (e.g., recycling memory quickly) and some implementation strategies (e.g., <a href="http://phrack.org/issues/57/9.html#article">in-band metadata</a>) make it easy for bugs in one module to show up as broken invariants in a completely unrelated one that happened to share allocation addresses with the former.  <a href="http://phrack.org/issues/57/8.html#article">Adversarial thinkers</a> will even exploit the absence of isolation to <a href="https://www.openwall.com/articles/JPEG-COM-Marker-Vulnerability">amplify small programming errors into arbitrary code execution</a>.  Of course, one should simply not write bugs, but when they do happen, it’s nice to know that the broken code most likely hit itself and its neighbours in the callgraph, and not unrelated code that also uses the same memory allocator. <a href="#fnref:blast-radius" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:legacy-gcc" role="doc-endnote">
-      <p>It would be easy to blame the complexity of lock-free code, but the initial version, with C11 atomics, was correct.  Unfortunately, gcc backs C11 atomic <code>uint128_t</code> with locks, so we had to switch to the legacy interface, and that’s where the errors crept in. <a href="#fnref:legacy-gcc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>It would be easy to blame the complexity of lock-free code, but the initial version, with C11 atomics, was correct.  Unfortunately, gcc backs C11 atomic <code>uint128_t</code> with locks, so we had to switch to the legacy interface, and that’s when the errors crept in. <a href="#fnref:legacy-gcc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:jump" role="doc-endnote">
       <p>There isn’t much the allocator can do if an application writes to a wild address megabytes away from the base object. <a href="#fnref:jump" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
@@ -344,7 +349,7 @@ straightforward code.</p>
       <p><a href="https://github.com/rust-lang/rfcs/issues/2771">Rust automatically hides foreign symbols when linking <code>cdylib</code>s</a>.  We worked around that with static linking, but statically linked rust libraries are mutually incompatible, hence the uber-crate. <a href="#fnref:bad-linker" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:even-works-for-perf" role="doc-endnote">
-      <p>And not just for safety or productivity features!  I find it often makes sense to give up on small performance wins (e.g., aggressive autovectorisation or link-time optimisation) when they would make future performance investigations harder.  The latter are higher risk, and only potential benefits, but their upside (order of magnitude improvements) dwarf guaranteed small wins that freeze the code in time. <a href="#fnref:even-works-for-perf" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>And not just for safety or productivity features!  I find it often makes sense to give up on small performance wins (e.g., aggressive autovectorisation or link-time optimisation) when they would make future performance investigations harder.  The latter are higher risk, and only potential benefits, but their upside (order of magnitude improvements) dwarfs guaranteed small wins that freeze the code in time. <a href="#fnref:even-works-for-perf" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
