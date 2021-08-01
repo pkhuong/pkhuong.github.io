@@ -47,7 +47,7 @@ we encountered only two issues during initial the rollout, both in the
 small amount of lock-free C code that is hard to test.[^legacy-gcc]
 In the future, we hope to also:
 
-[^legacy-gcc]: It would be easy to blame the complexity of lock-free code, but the initial version, with C11 atomics, was correct.  Unfortunately, gcc backs C11 atomic `uint128_t` with locks, so we had to switch to the legacy interface, and that's where the errors crept in.
+[^legacy-gcc]: It would be easy to blame the complexity of lock-free code, but the initial version, with C11 atomics, was correct.  Unfortunately, gcc backs C11 atomic `uint128_t`s with locks, so we had to switch to the legacy interface, and that's when the errors crept in.
 
 - detect when an interior pointer is freed
 - detect simple[^jump] buffer overflows that cross allocation classes, with guard pages
@@ -145,7 +145,7 @@ that we would immediately benefit from backing allocation with
 temporary file mappings: the bulk of our data is directly mapped from
 persistent data files, but we also regenerate some cold metadata
 during startup, and accesses to that metadata have amazing locality,
-both temporal and spatial (assuming bump allocation).  We don't the OS
+both temporal and spatial (assuming bump allocation).  We don't want the OS
 to swap out all the heap--that way lie [grey failures](https://blog.acolyer.org/2017/06/15/gray-failure-the-achilles-heel-of-cloud-scale-systems/)--so
 we opt specific allocation classes into it.
 
@@ -208,19 +208,24 @@ Come waste performance on safety!
 ---------------------------------
 
 A recurring theme in the design of Slitter is that we find ways to
-make the core allocation logic slighly faster, and immediately
-turn around and spend that efficiency on safety, debuggability or,
+make the core (de)allocation logic slighly faster, and immediately
+spend that efficiency on safety, debuggability or,
 eventually, observability.  For a lot of code, performance is a
 constraint to satisfy, not a goal to maximise; once we're close to
 good enough, it makes sense to trade performance away.[^even-works-for-perf]
 I also believe that there are [lower hanging fruit in memory placement](https://research.google/pubs/pub50370/)
-than shaving a couple ns from the allocation path itself.
+than shaving a couple nanos from the allocation path.
 
-[^even-works-for-perf]: And not just for safety or productivity features!  I find it often makes sense to give up on small performance wins (e.g., aggressive autovectorisation or link-time optimisation) when they would make future performance investigations harder.  The latter are higher risk, and only potential benefits, but their upside (order of magnitude improvements) dwarf guaranteed small wins that freeze the code in time.
+[^even-works-for-perf]: And not just for safety or productivity features!  I find it often makes sense to give up on small performance wins (e.g., aggressive autovectorisation or link-time optimisation) when they would make future performance investigations harder.  The latter are higher risk, and only potential benefits, but their upside (order of magnitude improvements) dwarfs guaranteed small wins that freeze the code in time.
 
 If that sounds like an interesting philosophy for a slab allocator, 
 [come hack on Slitter](https://github.com/backtrace-labs/slitter)!
 It's MIT-licensed, has decent test coverage, and we try to write
 straightforward code.
+
+Admittedly, the value of Slitter isn't as clear for pure Rust hackers
+as it is for those of us who mix C and Rust, but per-class allocation
+statistics and placement decisions should be useful, even in safe
+Rust, especially for larger programs with long runtimes.
 
 <p><hr style="width: 50%"></p>
