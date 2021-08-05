@@ -10,64 +10,138 @@ categories:
 ---
 
 [Slitter](https://github.com/backtrace-labs/slitter) is Backtrace's
-deliberately middle-of-the-line
+deliberately middle-of-the-road
 [thread-caching](https://www.usenix.org/legacy/publications/library/proceedings/usenix01/full_papers/bonwick/bonwick.pdf)
 [slab allocator](https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S13/hand-outs/bonwick_slab.pdf),
 with [explicit allocation class tags](https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/include/slitter.h#L7-L44)
-(rather than derived from the object's size class).  The design is
-about as standard as it gets: we hope to dedicate the project's
-complexity budget to always-on "observability" and safety features.
-We don't wish to detect all or even most memory management errors, but
-we should statistically catch a small fraction (enough to help
-pinpoint production issues) of such bugs, and *always* constrain their
-scope to the mismanaged allocation class.[^blast-radius]
+(rather than derived from the object's size class).
+It's mostly written in Rust, and we use it in our C backend server.
 
-[^blast-radius]: In my experience, their unlimited blast radius is what makes memory management bugs so frustrating to track down.  The design goals of generic memory allocators (e.g., recycling memory quickly) and some implementation strategies (e.g., [in-band metadata](http://phrack.org/issues/57/9.html#article)) make it easy for bugs in one module to show up as broken invariants in a completely unrelated one that happened to share allocation addresses with the former.  [Adversarial thinkers](http://phrack.org/issues/57/8.html#article) will even exploit the absence of isolation to [amplify small programming errors into arbitrary code execution](https://www.openwall.com/articles/JPEG-COM-Marker-Vulnerability).  Of course, one should simply not write bugs, but when they do happen, it's nice to know that the broken code most likely hit itself and its neighbours in the callgraph, and not unrelated code that also uses the same memory allocator (something windows got right with private heaps).
+[Slitter](https://crates.io/crates/slitter)'s design is about as
+standard as it gets: we hope to dedicate the project's complexity
+budget to always-on "observability" and safety features.  We don't
+wish to detect all or even most memory management errors, but we
+should statistically catch a small fraction (enough to help pinpoint
+production issues) of such bugs, and *always* constrain their scope to
+the mismanaged allocation class.[^blast-radius]
 
-We have been running [Slitter](https://crates.io/crates/slitter) in production for over two months, and rely on it to:
+[^blast-radius]: In my experience, their unlimited blast radius is what makes memory management bugs so frustrating to track down.  The design goals of generic memory allocators (e.g., recycling memory quickly) and some implementation strategies (e.g., [in-band metadata](http://phrack.org/issues/57/9.html#article)) make it easy for bugs in one module to show up as broken invariants in a completely unrelated one that happened to share allocation addresses with the former.  [Adversarial thinkers](http://phrack.org/issues/57/8.html#article) will even exploit the absence of isolation to [amplify small programming errors into arbitrary code execution](https://www.openwall.com/articles/JPEG-COM-Marker-Vulnerability).  Of course, one should simply not write bugs, but when they do happen, it's nice to know that the broken code most likely hit itself and its neighbours in the callgraph, and not unrelated code that also uses the same memory allocator (something Windows got right with private heaps).
+
+We decided to code up Slitter last April, when we noticed
+that we would immediately benefit from backing allocation with
+temporary file mappings:[^when-does-it-flush]
+the bulk of our data is mapped from
+persistent data files, but we also regenerate some cold metadata
+during startup, and accesses to that metadata have amazing locality,
+both temporal and spatial (assuming bump allocation).  We don't want the OS
+to swap out all the heap--that way lie [grey failures](https://blog.acolyer.org/2017/06/15/gray-failure-the-achilles-heel-of-cloud-scale-systems/)--so
+we opt specific allocation classes into it.
+
+[^when-does-it-flush]: Linux does not have anything like the [BSD's `MAP_NOSYNC` mmap flag](https://www.freebsd.org/cgi/man.cgi?query=mmap&sektion=2&format=html#:~:text=a%20core%20file.-,MAP_NOSYNC,-Causes%20data%20dirtied).  This has historically created problems for [heavy mmap users like LMDB](https://lkml.org/lkml/2013/9/7/135).  Empirically, Linux's flushing behaviour is much more reasonable these days, especially when dirty pages are a small fraction of physical RAM, as it is for us: in a well configured installation of our backend server, most of the RAM goes to clean file mappings, so only the [`dirty_expire_centisec` timer](https://www.kernel.org/doc/Documentation/sysctl/vm.txt) triggers write-outs, and we haven't been growing the file-backed heap fast enough for the time-based flusher to thrash too much.
+
+By itself, this isn't a reason to write a slab allocator: we could
+easily have configured [specialised arenas in jemalloc](http://jemalloc.net/jemalloc.3.html#arena.i.extent_hooks),
+for example.  However, we also had eyes on longer term improvements to
+observability and debugging or mitigation of memory management errors in
+production, and those could only be unlocked by migrating to an
+interface with explicit tags for each allocation class (type).
+
+Classic mallocs like [jemalloc](https://github.com/jemalloc/jemalloc)
+and [tcmalloc](https://github.com/google/tcmalloc) are fundamentally
+unable to match that level of integration: we can't tell `malloc(3)`
+what we're trying to allocate (e.g., a `struct request` in the HTTP
+module), only its size.  It's still possible to wrap malloc in a richer
+interface, and, e.g., track heap consumption by tag.  Unfortunately,
+the result is slower than a native solution, and, without help from
+the underlying allocator, it's easy to incorrectly match tags between
+`malloc` and `free` calls.  In my experience, this frequently leads to
+useless allocation statistics, usually around the very faulty code
+paths one is attempting to debug.
+
+Even once we have built detailed statistics on top of a regular
+malloc, it's hard to convince the underlying allocator to only recycle
+allocations within an object class: not only do mallocs eagerly
+recycle allocations of similar sizes regardless of their type, but
+they will also release unused runs of address space, or repurpose them
+for totally different size classes.  That's what mallocs are supposed
+to do...  it just happens to also make debugging a lot harder when
+things inevitably go wrong.[^ub]
+
+[^ub]: There are obvious parallels with undefined behaviour in C and C++...
+
+Slab allocators work with semantically richer allocation tags: an
+allocation tag describes its objects' size, but can also specify how
+to initialise, recycle, or deinitialise them.  The problem is that
+slab allocators tend to focus exclusively on speed.
+
+[Forks of libumem](https://github.com/omniti-labs/portableumem)
+may be the exception, thanks to the Solaris culture of pervasive
+hooking.  However, `umem`'s design reflects the sensibilities of the
+00s, when it was written: threads share a few caches, and the
+allocator tries to reuse address space.  In contrast, Slitter assumes memory
+is plentiful enough for thread-local caches and type-stable
+allocations.[^not-as-configurable]
+
+[^not-as-configurable]: umem also takes a performance hit in order to let object classes define callbacks for object initialisation, recycling, and destruction.  It makes sense to let the allocator do some pre-allocation work: if you're going to incur a cache miss for the first write to an allocation, it's preferable to do so before you immediately want that newly allocated object (yes, profiles will show more cycles in the allocators, but you're just shifting work around, hopefully farther from the critical path). Slitter only supports the bare minimum: objects are either always zero-initialised, or initially zero-filled and later left untouched.  That covers the most common cases, without incurring too many branch mispredictions.
+
+Our experience so far
+---------------------
+
+We have been running [Slitter](https://crates.io/crates/slitter) in
+production for over two months, and rely on it to:
 
 -  detect when an allocation is freed with the wrong allocation class
    tag (i.e., detect type confusion on free).
 -  avoid any in-band metadata: there are guard pages between
    allocations and allocator metadata, and no intrusive freelist for
    use-after-frees to stomp over.
--  guarantee [type stable allocations](https://www.usenix.org/legacy/publications/library/proceedings/osdi96/full_papers/greenwald/node2.html): once an address has been used
-   to fulfill a request for a certain allocation class, it will only
-   be used for that class.  Slitter doesn't overlay intrusive lists on
-   top of freed allocations, so the data always reflects what the
-   application last stored there.  This lets application rely on
-   benign use-after-free in non-blocking algorithms.  Type stability
-   also means that double-frees or actually detrimental
-   use-after-frees only affect the faulty allocation class.
+-  guarantee [type stable allocations](https://www.usenix.org/legacy/publications/library/proceedings/osdi96/full_papers/greenwald/node2.html):
+   once an address has been used to fulfill a request for a certain
+   allocation class, it will only be used for that class.  Slitter
+   doesn't overlay intrusive lists on top of freed allocations, so the
+   data always reflects what the application last stored there.  This
+   means that double-frees and use-after-frees only affect the faulty
+   allocation class.  An application could even rely on
+   read-after-free being benign to simplify non-blocking algorithms.[^but-we-dont-depend-on-it-too-much]
 -  let each allocation class specify how its backing memory should
-   be mapped in (e.g., plain 4 KB pages, file-backed swappable pages,
-   huge pages, or gigantic pages).
-   
+   be mapped in (e.g., plain 4 KB pages or file-backed swappable pages).
+
+[^but-we-dont-depend-on-it-too-much]: One could be tempted to really rely on it not just for isolation and resilience, but during normal operations.  That sounds like a bad idea (we certainly haven't taken that leap), at least until [Slitter works with Valgrind/ASan/LSan](https://github.com/backtrace-labs/slitter/issues/11): it's easier to debug easily reproducible issues when one can just slot in calls to regular malloc/calloc/free with a dedicated heap debugger.
+
 Thanks to extensive contracts and a mix of hardcoded and random tests,
-we encountered only two issues during initial the rollout, both in the
+we encountered only two issues during the initial rollout, both in the
 small amount of lock-free C code that is hard to test.[^legacy-gcc]
-In the future, we hope to also:
 
 [^legacy-gcc]: It would be easy to blame the complexity of lock-free code, but the initial version, with C11 atomics, was correct.  Unfortunately, gcc backs C11 atomic `uint128_t`s with locks, so we had to switch to the legacy interface, and that's when the errors crept in.
 
+Type stability exerts a heavy influence all over Slitter's design, and
+has obvious downsides.  For example, a short-lived application that
+progresses through a pipeline of stages, where each stage allocates
+different types, would definitely waste memory if it were to replace a
+regular malloc with a type-stable allocator like Slitter.  We believe
+the isolation benefits are more than worth the trouble, at least for
+long-lived servers that quickly enter a steady state.
+
+In the future, we hope to also:
+
 - detect when an interior pointer is freed.
-- detect simple[^jump] buffer overflows that cross allocation classes, with guard pages.
+- detect simple[^jump] buffer overflows that cross allocation classes, by inserting guard pages.
 - always detect frees of addresses Slitter does not manage.
 - detect most back-to-back double-frees.
 - detect a random fraction of buffer overflows, with a sampling [eFence](https://en.wikipedia.org/wiki/Electric_Fence).
 
-[^jump]: There isn't much the allocator can do if an application writes to a wild address megabytes away from the base object.
+[^jump]: There isn't much the allocator can do if an application writes to a wild address megabytes away from the base object.  Thankfully, buffer overflows tend to proceed linearly from the actual end of the undersized object.
 
-In addition to these safety features, we plan to have the allocator
-improve the observability of the calling program, and wish to:
+In addition to these safety features, we plan to rely on the allocator
+to improve observability into the calling program, and wish to:
 
 - track the number of objects allocated and recycled in each
   allocation class.
 - sample the call stack when the heap grows.
 - track allocation and release call stacks for a small fraction of objects.
 
-Here's how it currently works, and why we decided the world needs yet
-another memory allocator.
+Here's how it currently works, and why we wrote it in Rust, with dash
+of C.
 
 The high level design of Slitter
 --------------------------------
@@ -88,14 +162,16 @@ and time-tested mallocs may well provide better performance
 and lower fragmentation than Slitter.[^type-stable]
 The primary motivation for designing Slitter is that having explicit
 allocation classes in the API makes it easier for the allocator to
-improve the debuggability and resilience of the calling program.
+improve the debuggability and resilience of the calling program.[^also-good-for-perf]
 For example, most allocators can tell you the size of your program's
 heap, but that data is much more useful when broken down by struct
 type or program module.
 
-[^type-stable]: In fact, Slitter actively worsens external fragmentation to guarantee type-stable allocations, and thus control the blast radius of use-after-frees and double-frees.
+[^type-stable]: In fact, Slitter actively worsens external fragmentation to guarantee type-stable allocations. We think it's reasonable to sacrifice heap footprint in order to control the blast radius of use-after-frees and double-frees.
 
-Most allocators try to avoid accessing the metadata associated with
+[^also-good-for-perf]: That's why we're interested in allocation class tags, but they can also help application and malloc performance.  Some malloc developers are looking into tags for placement (should the allocation be backed by memory local to the NUMA node, with huge pages, ...?) or lifetime (is the allocation immortal, short-lived, or tied to a request?) hints.
+
+Most allocators try to minimise accesses to the metadata associated with
 allocations.  In fact, that's often seen as a strength of the slab
 interface: the allocator can just rely on the caller to pass the
 correct allocation class tag, instead of hitting metadata to figure
@@ -109,8 +185,8 @@ branch is trivially predictable (the tag always matches), so we can
 hope that wide out-of-order CPUs will hide most of the checking
 code, if it's simple enough.
 
-This concern (access to metadata in few instructions) combined with our goal of
-avoiding in-band metadata lead to a
+This concern (access to metadata in few instructions) combined with
+our goal of avoiding in-band metadata lead to a
 [simple layout for each chunk's data and metadata](https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/mill.rs#L6-L19).
 
 ```
@@ -132,41 +208,13 @@ range).  Finally, the 2 MB metadata range is itself preceded by a 2MB
 guard page.
 
 Each chunk is statically divided in 65536 spans of 16 KB each.  We can
-thus map a span to its slot in the metadata block with a couple shift,
+thus map a span to its slot in the metadata block with a shifts,
 masks, and some address arithmetic.  [Mill](https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/mill.rs)s
 don't have to hand out individual 16 KB spans at a time, they simply
-have to make sure to work with multiples of 16 KB, and never split
-a span in two.
+have to work in multiples of 16 KB, and never split a span in two.
 
-Why we wrote Slitter
---------------------
-
-We decided to actually code up Slitter last April, when we noticed
-that we would immediately benefit from backing allocation with
-temporary file mappings: the bulk of our data is directly mapped from
-persistent data files, but we also regenerate some cold metadata
-during startup, and accesses to that metadata have amazing locality,
-both temporal and spatial (assuming bump allocation).  We don't want the OS
-to swap out all the heap--that way lie [grey failures](https://blog.acolyer.org/2017/06/15/gray-failure-the-achilles-heel-of-cloud-scale-systems/)--so
-we opt specific allocation classes into it.
-
-By itself, this isn't a reason to write a slab allocator: we could
-easily have configured [specialised arenas in jemalloc](http://jemalloc.net/jemalloc.3.html#arena.i.extent_hooks),
-for example.  However, we also had eyes on longer term improvements to
-observability and debugging/mitigation of memory management errors in
-production, and those could only be unlocked by switching to an
-interface with explicit allocation classes (types).
-
-Slab allocators tend to focus exclusively on speed.  [Forks of libumem](https://github.com/omniti-labs/portableumem)
-may be the exception, when they inherit Solaris's culture of pervasive
-hooking.  However, `umem`'s design reflects the sensibilities of the
-00s, when it was written: threads share a few caches, and the
-allocator tries to reuse address space, while Slitter assumes memory
-is plentiful enough for thread-local caches and type-stable
-allocations.
-
-Why we (mostly) wrote Slitter in Rust
--------------------------------------
+Why we wrote Slitter in Rust and C
+----------------------------------
 
 We call Slitter from C, but wrote it in Rust, despite the
 more painful build[^uber-crate] process: that pain isn't going
@@ -176,9 +224,9 @@ alternative would have been to pull in a crate just to make a couple
 syscalls, or to enable unstable Rust features: we're not
 "rewrite-it-in-Rust" absolutists, and merely wish to use Rust for its
 strengths (control over data layout, support for domain-specific
-invariants, large ecosystem for less performance critical logic, ability to
+invariants, large ecosystem for less performance-sensitive logic, ability to
 lie to the compiler where necessary, ...), while avoiding its
-weaknesses (interacting with Linux interfaces defined by C headers or
+weaknesses (interacting with Linux interfaces defined by C headers, or
 fine-tuning code generation).
 
 [^uber-crate]: We re-export our dependencies from an uber-crate, and let our outer [meson](https://mesonbuild.com/) build invoke `cargo` to generate a static library for that facade uber-crate.
@@ -198,44 +246,45 @@ in C: x86-64 doesn't have anything like LL/SC, so we instead pair
 the top-of-stack pointer with a generation counter... and 
 [Rust hasn't stabilised 128-bit atomics](https://github.com/rust-lang/rust/issues/32976#issuecomment-641360955) yet.
 
-We chose to use atomic in C instead of a simple lock in Rust because
-the lock-free stack (and the bump pointer, which Rust handles fine)
-are important for our use case: when we rehydrate cold metadata at
-startup, we do so from multiple I/O-bound threads, and we have
+We chose to use atomics in C instead of a simple lock in Rust because
+the lock-free stack (and the atomic bump pointer, which Rust handles
+fine) are important for our use case: when we rehydrate cold metadata
+at startup, we do so from multiple I/O-bound threads, and we have
 observed hiccups due to lock contention in malloc.  At some point,
 lock acquisitions are rare enough that contention isn't an issue;
-that's why we rely on locks when refilling bump allocation regions.
+that's why we're comfortable with locks when refilling bump allocation
+regions.
 
 Come waste performance on safety!
 ---------------------------------
 
 A recurring theme in the design of [Slitter](https://github.com/backtrace-labs/slitter)
-is that we find ways to make the core (de)allocation logic slighly
+is that we find ways to make the core (de)allocation logic slightly
 faster, and immediately spend that efficiency on safety, debuggability
 or, eventually, observability.  For a lot of code, performance is a
 constraint to satisfy, not a goal to maximise; once we're close to
 good enough, it makes sense to trade performance
 away.[^even-works-for-perf] I also believe that there are
-[lower hanging fruit in memory placement](https://research.google/pubs/pub50370/)
-than shaving a couple nanos from the allocation path.
+[lower hanging fruits in memory placement](https://research.google/pubs/pub50370/)
+than shaving a few nanoseconds from the allocation path.
 
 [^even-works-for-perf]: And not just for safety or productivity features!  I find it often makes sense to give up on small performance wins (e.g., aggressive autovectorisation or link-time optimisation) when they would make future performance investigations harder.  The latter are higher risk, and only potential benefits, but their upside (order of magnitude improvements) dwarfs guaranteed small wins that freeze the code in time.
 
 [Slitter](https://crates.io/crates/slitter) also focuses on
-instrumentation and debugging features that are always running, even in
+instrumentation and debugging features that are always active, even in
 production, instead of leaving that to development tools, or to logic
-that must be explicily enabled.  In a SaaS world, development and
+that must be explicitly enabled.  In a SaaS world, development and
 debugging is never done.  Opt-in tools are definitely useful, but
-always-on features are much more likely to help developers to catch
+always-on features are much more likely to help developers catch
 the rarely occurring bugs on which they tend to spend an inordinate
 amount of investigation effort (and if a debugging feature can be
-enabled in production at a large scale, why not leave it enabled
-forever?).
+safely enabled in production at a large scale, why not leave it
+enabled forever?).
 
 If that sounds like an interesting philosophy for a slab allocator,
 [come hack on Slitter](https://github.com/backtrace-labs/slitter)!
 Admittedly, the value of Slitter isn't as clear for pure Rust hackers
-as it is for those of us who mix C and Rust, but per-class allocation
+as it is for those of us who blend C and Rust, but per-class allocation
 statistics and placement decisions should be useful, even in safe
 Rust, especially for larger programs with long runtimes.
 
@@ -243,5 +292,8 @@ Our [MIT-licensed code is on github](https://github.com/backtrace-labs/slitter),
 there are [plenty of small improvements to work on](https://github.com/backtrace-labs/slitter/issues),
 and, while we still have to re-review the documentation, it has decent
 test coverage, and we try to write straightforward code.
+
+<small>This post was much improved by feedback from my beta readers, Barkley, David,
+Eloise, Mark, Per, Phil, Ruchir, and Samy.</small>
 
 <p><hr style="width: 50%"></p>
