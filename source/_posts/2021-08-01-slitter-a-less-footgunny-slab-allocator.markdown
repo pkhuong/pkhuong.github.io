@@ -1,10 +1,7 @@
 ---
 layout: post
 title: "Slitter: a slab allocator that trusts, but verifies"
-foo: "Doveryai, no proveryai for your allocator"
 date: 2021-08-01 17:26:04 -0400
-hidden: true
-draft: true
 comments: true
 categories: 
 ---
