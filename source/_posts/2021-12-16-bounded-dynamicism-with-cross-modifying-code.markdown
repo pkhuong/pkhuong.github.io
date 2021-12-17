@@ -122,10 +122,15 @@ set `request->tracing_mode = true` in its internal request object when
 it accepts such a request. In environments where only one request in a
 million enables tracing, we can easily spend more aggregate time
 checking whether `request->tracing_mode == true` than in the tracing
-logic itself.
+logic itself.  One could try to reduce the overhead by coalescing the
+trace code in fewer conditional blocks, but that tends to put more
+distance between the traced logic and the tracing code that's supposed
+to record what the former is doing, so the two tend to desync, adding
+to development friction.
 
-It's tempting to use a dynamic flag that is enabled whenever at least
-one in-flight request has opted into tracing. That's why 
+It's tempting to instead optimise frequent checks for the common case
+(no tracing) with a dynamic flag that is enabled whenever at least one
+in-flight request has opted into tracing. That's why
 [the `DF_OPT` (for opt-in logic) macro](https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L141-L155) exists.
 
 <iframe width="800px" height="400px" src="https://godbolt.org/e#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:1,endLineNumber:10,positionColumn:1,positionLineNumber:10,selectionStartColumn:1,selectionStartLineNumber:10,startColumn:1,startLineNumber:10),source:'%23include+%3Cstdbool.h%3E%0A%23include+%3Cstdio.h%3E%0A%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Astruct+request+%7B%0A++++bool+tracing_mode%3B%0A%7D%3B%0A%0Avoid+trace_request(struct+request+*req,+const+char+*func)%3B%0A%0Avoid+foo(struct+request+*req)%0A%7B%0A++++if+(DF_OPT(request_tracing,+check)+%26%26+req-%3Etracing_mode)%0A++++++++trace_request(req,+__FUNCTION__)%3B%0A++++%0A++++return%3B%0A%7D%0A'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cg112,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:1,endLineNumber:1,positionColumn:1,positionLineNumber:1,selectionStartColumn:1,selectionStartLineNumber:1,startColumn:1,startLineNumber:1),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+gcc+11.2+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4"></iframe>
