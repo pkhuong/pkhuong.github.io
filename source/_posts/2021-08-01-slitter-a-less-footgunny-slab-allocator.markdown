@@ -6,6 +6,8 @@ comments: true
 categories: 
 ---
 
+<small>Originally posted on the [Backtrace I/O tech blog](https://engineering.backtrace.io/2021-08-04-slitter-a-slab-allocator-that-trusts-but-verifies/).</small>
+
 [Slitter](https://github.com/backtrace-labs/slitter) is Backtrace's
 deliberately middle-of-the-road
 [thread-caching](https://www.usenix.org/legacy/publications/library/proceedings/usenix01/full_papers/bonwick/bonwick.pdf)
