@@ -16,7 +16,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   
-  <link rel="canonical" href="https://www.pvk.ca/Blog/2021/12/16/bounded-dynamicism-with-cross-modifying-code/">
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2021/12/19/bounded-dynamicism-with-cross-modifying-code/">
   <link href="/favicon.png" rel="icon">
   <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
   <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
@@ -98,7 +98,7 @@
 
 Dec
   
-16th, 
+19th, 
 2021
 
 
@@ -106,7 +106,7 @@ Dec
 
         
          | <a href="#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2021/12/16/bounded-dynamicism-with-cross-modifying-code/"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2021/12/19/bounded-dynamicism-with-cross-modifying-code/"
 	      >Comments</a>
         
         
@@ -118,8 +118,11 @@ Dec
 <p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
 
 
-<div class="entry-content" style="font-family: ; font-size: "><p>All long-lived programs are either implemented in dynamic languages,<sup id="fnref:images" role="doc-noteref"><a href="#fn:images" class="footnote" rel="footnote">1</a></sup>
-or eventually Greenspun themselves into subverting static programming
+<div class="entry-content" style="font-family: ; font-size: "><p><small>Originally posted on the <a href="https://engineering.backtrace.io/2021-12-19-bounded-dynamicism-with-cross-modifying-code/">Backtrace I/O tech blog</a>.</small></p>
+
+<p>All long-lived programs are either implemented in <a href="https://wiki.c2.com/?DynamicLanguage">dynamic languages</a>,<sup id="fnref:images" role="doc-noteref"><a href="#fn:images" class="footnote" rel="footnote">1</a></sup>
+or eventually <a href="https://en.wikipedia.org/wiki/Greenspun%27s_tenth_rule">Greenspun</a>
+themselves into subverting static programming
 languages to create a dynamic system (e.g., Unix process trees). The
 latter approach isn’t a bad idea, but it’s easy to introduce more
 flexibility than intended (e.g.,
@@ -130,97 +133,91 @@ modification language.</p>
 
 <p>At Backtrace, we mostly implement late (re)binding by isolating subtle
 logic in dedicated executables with short process lifetimes: we can
-replace executables on disk atomically, and their next invocation will
+replace binaries on disk atomically, and their next invocation will
 automatically pick up the change. In a pinch, we sometimes edit
 template or Lua source files and hot reload them in <a href="http://openresty.org/en/">nginx</a>.
-We prefer that to first-class programmatic support for runtime
+We prefer this to first-class programmatic support for runtime
 modification because Unix has a well understood permission model
-around files, and it’s harder to make code accidentally overwrite a
-file when it doesn’t perform any disk I/O.</p>
+around files, and it’s harder to bamboozzle code into overwriting
+files when that code doesn’t perform any disk I/O.</p>
 
 <p>However, these patterns aren’t always sufficient. For example, we
 sometimes wish to toggle code that’s deep in performance-sensitive
 query processing loops, or tightly coupled with such logic. That’s
-when we resort to <a href="https://github.com/backtrace-labs/dynamic_flag">our <code>dynamic_flag</code> library</a>.
-It restricts runtime modifications to boolean values (a flag can
-only be enabled or disabled), so hopefully isn’t party to
-any unexpected compounding complexity.</p>
+when we rely on <a href="https://github.com/backtrace-labs/dynamic_flag">our <code>dynamic_flag</code> library</a>.</p>
 
-<p><a href="https://github.com/backtrace-labs/dynamic_flag">The <code>dynamic_flag</code> library</a>
-is an <a href="https://github.com/backtrace-labs/dynamic_flag/blob/main/LICENSE">Apache-licensed</a>
-“C” library that offers efficient biased conditionals for statically
-linked Linux/x86-64 executables: taking the “likely” path doesn’t
-access memory or evaluate any jump condition,<sup id="fnref:second-order" role="doc-noteref"><a href="#fn:second-order" class="footnote" rel="footnote">2</a></sup> 
-<a href="https://godbolt.org/#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:8,endLineNumber:4,positionColumn:8,positionLineNumber:4,selectionStartColumn:8,selectionStartLineNumber:4,startColumn:8,startLineNumber:4),source:'%23include+%3Cstdio.h%3E%0A%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Aint+foo()%0A%7B%0A++++if+(DF_FEATURE(flag_kind,+flag_name))+%7B%0A++++++++printf(%22unlikely+path%5Cn%22)%3B%0A++++++++return+1%3B%0A++++%7D%0A%0A++++return+0%3B%0A%7D'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cg112,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:1,endLineNumber:1,positionColumn:1,positionLineNumber:1,selectionStartColumn:1,selectionStartLineNumber:1,startColumn:1,startLineNumber:1),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+gcc+11.2+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4">but merely executes a <code>test eax</code> instruction that clobbers flags without any dependent instruction</a>.</p>
-
-<p>We write “C” in scare quotes because the code relies on
-<a href="https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html#:~:text=6.47.2.7%20Goto%20Labels">inline <code>asm goto</code></a>,
-<a href="https://gcc.gnu.org/legacy-ml/gcc-patches/2009-07/msg01556.html">an extension introduced in GCC 4.5</a>
-and <a href="https://reviews.llvm.org/D69876">adopted by clang 9</a>,
-and emits literal x86-64 machine code bytes.  There are fallback
-implementations, but they’re primarily
-<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L62">meant for static analysers</a>,
-or <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L61">to fuse flags in safe states, at compile-time</a>.</p>
-
-<p>The library can be used for feature flags. However, its minimal
-runtime overhead coupled with the ability to flip flags at runtime
-opens up additional use cases, like disabling mutual exclusion logic
-during single-threaded startup or toggling log statements. It’s also
-proved invaluable for crisis management, since we can leave flags
-(enabled by default) in well-trodden pieces of code without agonising
-over their impact on application performance. These flags can serve as
-ad hoc circuit breakers around complete features or specific pieces of
-code (e.g., disabling a destructor to convert use-after-frees into 
-resource leaks) when new inputs tickle old latent bugs.</p>
+<p>This library lets us tweak flags at runtime, but flags can only take
+boolean values (enabled or disabled), so the dynamicism it introduces
+is hopefully bounded enough to avoid unexpected emergent
+complexity.  The functionality looks like classic feature flags,
+but thanks to the flags’ minimal runtime overhead coupled with the
+ability to flip them at runtime, there are additional use cases, such
+as disabling mutual exclusion logic during single-threaded startup or
+toggling log statements. The library has also proved invaluable for crisis
+management, since we can leave flags (enabled by default) in
+well-trodden pieces of code without agonising over their impact on
+application performance. These flags can serve as ad hoc circuit
+breakers around complete features or specific pieces of code when new
+inputs tickle old latent bugs.</p>
 
 <p>The secret behind this minimal overhead? Cross-modifying machine code!</p>
 
+<p>Intel tells us we’re not supposed to do that, at least not without
+pausing threads… yet the core of <a href="https://github.com/backtrace-labs/dynamic_flag">the <code>dynamic_flag</code> C library</a>
+has been toggling branches on thousands of machines for years, without
+any issue.  It’s available under the
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/main/LICENSE">Apache license</a>
+for other adventurous folks.</p>
+
 <h2 id="overhead-matters">Overhead matters</h2>
 
-<p>Runtime efficiency is an essential feature in <code>dynamic_flag</code>–enough
-to justify mutating machine code while it’s executing on other
-cores–not only because it unlocks additional use cases, but, more
+<p>Runtime efficiency is an essential feature in <code>dynamic_flag</code>—
+enough to justify mutating machine code while it’s executing on other
+cores
+—not only because it unlocks additional use cases, but, more
 importantly, because it frees programmers from worrying about the
 performance impact of branching on a flag in the most obvious
-location, even if, e.g., that’s in the middle of an inner loop.</p>
+location, even if that’s in the middle of a hot inner loop.</p>
 
-<p>We designed <code>dynamic_flag</code> to minimise the amount of friction and
-mental overhead when adding a new feature flag in order to encourage
-programmers to spontaneously protect code with flag checks, without
-prodding during design or code review. That’s why we care so much
-about all forms of overhead, not just execution time. For
-example, there’s no need to break one’s flow and register flags
-separately from their use points. Adding a feature flag must not
-become associated with painful memories.</p>
+<p>With the aim of encouraging programmers to spontaneously protect code
+with flag checks, without prodding during design or code review, we
+designed <code>dynamic_flag</code> to minimise the amount of friction and mental
+overhead of adding a new feature flag. That’s why we care so much
+about all forms of overhead, not just execution time. For example,
+there’s no need to break one’s flow and register flags separately from
+their use points. Adding a feature flag should not feel like a chore.</p>
 
 <p>However, we’re also aware that feature flags tend to stick around
 forever. We try to counteract this inertia with static registration:
-all the <code>DF_*</code> expansions in an executable appear in 
+all the <code>DF_*</code> expansions in an executable appear in
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L458-L466">its <code>dynamic_flag_list</code> section</a>, and
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L247-L277">the <code>dynamic_flag_list_state</code> function</a>
-enumerates them at runtime. A periodic audit will reveal flags that
-have become irrelevant, and each flag’s full name includes its source
-location.</p>
+enumerates them at runtime. Periodic audits will reveal flags that
+have become obsolete, and flags are easy to find:
+each flag’s full name includes its location in the source code.</p>
 
 <p>We find value in <code>dynamic_flag</code> because its runtime overhead is
 negligible for all but the most demanding
-code,<sup id="fnref:macro-writers-bill-of-rights" role="doc-noteref"><a href="#fn:macro-writers-bill-of-rights" class="footnote" rel="footnote">3</a></sup> while the interface makes it easy
-to make chunks of code togglable at runtime without having to worry
+code,<sup id="fnref:macro-writers-bill-of-rights" role="doc-noteref"><a href="#fn:macro-writers-bill-of-rights" class="footnote" rel="footnote">2</a></sup> while the interface lets us easily
+make chunks of code toggleable at runtime without having to worry
 about things like “where am I supposed to register this new option?”
 The same system is efficient <em>and</em> ergonomic enough for all teams in
-all contexts, avoids contention in the source code, and guarantees
+all contexts, avoids contention in our source tree, and guarantees
 discoverability for whoever happens to be on call.</p>
 
 <h2 id="how-to-use-dynamic_flag">How to use <code>dynamic_flag</code></h2>
 
-<p>All dynamic flags have a “kind” (namespace) string, and a name. A
-dynamic flag can be disabled by default (like a feature flag), or
-enabled by default. Using a feature flag implicitly defines and
-registers it.</p>
+<p>All dynamic flags have a “kind” (namespace) string, and a name. We
+often group all flags related to an experimental module or feature in
+the same “kind,” and use the name to describe the specific functionality
+in the feature guarded by the flag. A dynamic flag can be disabled by
+default (like a feature flag), or enabled by default, and evaluating a
+dynamic flag’s value implicitly defines and registers it with the
+<code>dynamic_flag</code> library.</p>
 
 <p>A dynamic flag introduced with <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L98-L110">the <code>DF_FEATURE</code> macro</a>,
 as in the code snippet below, is disabled (evaluates to false) by
-default, and is optimised for that default value.</p>
+default, and instructs the compiler to optimise for that default value.</p>
 
 <iframe width="800px" height="400px" src="https://godbolt.org/e#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:16,endLineNumber:12,positionColumn:16,positionLineNumber:12,selectionStartColumn:16,selectionStartLineNumber:12,startColumn:16,startLineNumber:12),source:'%23include+%3Cstdio.h%3E%0A%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Aint+new_feature(void)%3B%0A%0Aint+foo(void)%0A%7B%0A%0A++++/*+...+preexisting+code...+*/%0A++++printf(%22preexisting+prologue%5Cn%22)%3B%0A%0A++++if+(DF_FEATURE(my_module,+flag_name))+%7B%0A++++++++new_feature()%3B%0A++++%7D%0A%0A++++/*+Old+feature+code+*/%0A++++printf(%22preexisting+epilogue%5Cn%22)%3B%0A++++return+1%3B%0A%7D%0A'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cg112,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:1,endLineNumber:1,positionColumn:1,positionLineNumber:1,selectionStartColumn:1,selectionStartLineNumber:1,startColumn:1,startLineNumber:1),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+gcc+11.2+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4"></iframe>
 
@@ -230,45 +227,47 @@ flag is enabled with <a href="https://github.com/backtrace-labs/dynamic_flag/blo
 <iframe width="800px" height="400px" src="https://godbolt.org/e#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:13,endLineNumber:12,positionColumn:13,positionLineNumber:12,selectionStartColumn:13,selectionStartLineNumber:12,startColumn:13,startLineNumber:12),source:'%23include+%3Cstdio.h%3E%0A%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Aint+now_old_feature(void)%3B%0A%0Aint+foo(void)%0A%7B%0A%0A++++/*+...+preexisting+code...+*/%0A++++printf(%22preexisting+prologue%5Cn%22)%3B%0A%0A++++if+(DF_DEFAULT(my_module,+flag_name))+%7B%0A++++++++now_old_feature()%3B%0A++++%7D%0A%0A++++/*+Old+feature+code+*/%0A++++printf(%22preexisting+epilogue%5Cn%22)%3B%0A++++return+1%3B%0A%7D%0A'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cg112,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:1,endLineNumber:1,positionColumn:1,positionLineNumber:1,selectionStartColumn:1,selectionStartLineNumber:1,startColumn:1,startLineNumber:1),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+gcc+11.2+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4"></iframe>
 
 <p>Each <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L98-L155"><code>DF_*</code> condition</a>
-in the source is actually its own feature flag:
-the full flag name is <code>kind:name@source_file:line_number</code> (e.g.,
+in the source is actually its own flag;
+a flag’s full name looks like <code>kind:name@source_file:line_number</code> (e.g.,
 <code>my_module:flag_name@&lt;stdin&gt;:15</code>), and each condition has its own
-state record. It’s thus safe, if potentially confusing, to define flag
+state record. It’s thus safe, if potentially confusing, to define flags
 of different types (feature or default) with the same kind and
 name. These macros may appear in <a href="https://godbolt.org/#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:1,endLineNumber:17,positionColumn:1,positionLineNumber:17,selectionStartColumn:1,selectionStartLineNumber:17,startColumn:1,startLineNumber:17),source:'%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Aint+old_feature(void)%3B%0A%0Aextern+inline+int+foo(void)%0A%7B%0A%0A++++/*+...+preexisting+code...+*/%0A%0A++++if+(DF_DEFAULT(my_module,+flag_name))+%7B%0A++++++++return+old_feature()%3B%0A++++%7D%0A%0A++++/*+Old+feature+code+*/%0A++++return+0%3B%0A%7D%0A'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cclang1300,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:9,endLineNumber:5,positionColumn:9,positionLineNumber:5,selectionStartColumn:9,selectionStartLineNumber:5,startColumn:9,startLineNumber:5),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+clang+13.0.0+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4">inline</a>
 or
 <a href="https://godbolt.org/#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:18,endLineNumber:21,positionColumn:18,positionLineNumber:21,selectionStartColumn:18,selectionStartLineNumber:21,startColumn:18,startLineNumber:21),source:'%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Aint+old_feature(void)%3B%0A%0Astatic+inline+int+foo(void)%0A%7B%0A%0A++++/*+...+preexisting+code...+*/%0A%0A++++if+(DF_DEFAULT(my_module,+flag_name))+%7B%0A++++++++return+old_feature()%3B%0A++++%7D%0A%0A++++/*+Old+feature+code+*/%0A++++return+0%3B%0A%7D%0A%0Aint+bar(void)%0A%7B%0A%0A++++return+foo()%3B%0A%7D'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cg112,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:9,endLineNumber:5,positionColumn:9,positionLineNumber:5,selectionStartColumn:9,selectionStartLineNumber:5,startColumn:9,startLineNumber:5),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+gcc+11.2+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4">static inline</a>
 functions: each instantiation will get its own metadata block, and an
-arbitrary number of blocks can share the same name.</p>
+arbitrary number of blocks can share the same full name.</p>
 
-<p>Applications must <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L291">call <code>dynamic_flag_init_lib</code> early during startup</a> to
-initialise the library’s state.
-Interactive or configuration-driven usage tends to activate or
-deactivate flags by regex on the full name, 
-<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L220-L230">with <code>dynamic_flag_activate</code> and <code>dynamic_flag_deactivate</code></a>.</p>
+<p>Before manipulating these dynamic flags,
+applications must <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L291">call <code>dynamic_flag_init_lib</code> to initialise the library’s state</a>.
+Once the library is initialised, interactive or configuration-driven
+usage typically toggles flags by calling
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L220-L230"><code>dynamic_flag_activate</code> and <code>dynamic_flag_deactivate</code></a> with POSIX extended regexes that match
+the flags’ full names.</p>
 
 <h2 id="using-dynamic_flag-programmatically">Using <code>dynamic_flag</code> programmatically</h2>
 
 <p>The <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L98-L124"><code>DF_FEATURE</code> and <code>DF_DEFAULT</code> macros</a>
 directly map to classic feature flags, but the
-<code>dynamic_flag</code> library is much more powerful. Applications can
+<code>dynamic_flag</code> library still has more to offer. Applications can
 programmatically enable and disable blocks of code to implement a
-restricted form of <a href="https://en.wikipedia.org/wiki/Aspect-oriented_programming">aspect oriented programming</a>: 
+restricted form of <a href="https://en.wikipedia.org/wiki/Aspect-oriented_programming">aspect oriented programming</a>:
 <a href="https://en.wikipedia.org/wiki/Advice_(programming)">“advice”</a> cannot
 be inserted post hoc, and must instead be defined inline in the
 source, but may be toggled at runtime by unrelated code.</p>
 
-<p>For example, an application could let individual HTTP requests opt into
-detailed tracing with a query string parameter <code>?tracing=1</code>, and set
-<code>request-&gt;tracing_mode = true</code> in its internal request object when it
-accepts such a request. In environments where fewer than one request
-in a million enables tracing, we can easily spend more aggregate time
-looking at <code>request-&gt;tracing_mode</code> than in the tracing logic itself.
+<p>For example, an application could let individual HTTP requests opt
+into detailed tracing with a query string parameter <code>?tracing=1</code>, and
+set <code>request-&gt;tracing_mode = true</code> in its internal request object when
+it accepts such a request. Environments where fewer than one request
+in a million enables tracing could easily spend more aggregate time
+evaluating <code>if (request-&gt;tracing_mode == true)</code> than they do in the
+tracing logic itself.
 One could try to reduce the overhead by coalescing the trace code in
-fewer conditional blocks, but that tends to put more distance between
-the traced logic and the tracing code that’s supposed to record what
-the former is doing, so the two tend to desynchronize, adding to
-development friction.</p>
+fewer conditional blocks, but that puts more distance between the
+tracing code and the traced logic it’s supposed to record, which
+tends to cause the two to desynchronise and adds to development
+friction.</p>
 
 <p>It’s tempting to instead optimise frequent checks for the common case
 (no tracing) with a dynamic flag that is enabled whenever at least one
@@ -280,9 +279,9 @@ in-flight request has opted into tracing. That’s why
 <p>The
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L141-L155"><code>DF_OPT</code> macro</a>
 instructs the compiler to assume the flag is disabled, but leaves the
-flag enabled (i.e., the conditional always looks at
+flag enabled (i.e., the conditional always evaluates
 <code>request-&gt;tracing_mode</code>) until the library is initialised with
-<code>dynamic_flag_init_lib</code>;<sup id="fnref:unreachable" role="doc-noteref"><a href="#fn:unreachable" class="footnote" rel="footnote">4</a></sup> after that initialisation call,
+<code>dynamic_flag_init_lib</code>.<sup id="fnref:unreachable" role="doc-noteref"><a href="#fn:unreachable" class="footnote" rel="footnote">3</a></sup> After initialisation,
 the flag acts like a <code>DF_FEATURE</code> (i.e., the overhead is a <code>test eax</code>
 instruction that falls through without any conditional branching)
 until it is explicitly enabled again.</p>
@@ -296,73 +295,76 @@ disable <code>request_tracing</code> flags and not even look at the request
 object’s <code>tracing_mode</code> field.</p>
 
 <p>Whenever the application receives a request that opts into tracing, it
-can enable all flags with kind <code>request_tracing</code> by 
+can enable all flags with kind <code>request_tracing</code> by
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L189-L205">executing <code>dynamic_flag_activate_kind(request_tracing, NULL)</code></a>.
 When that same request leaves the system (e.g., when the application
-has fully sent a response back), the application 
+has fully sent a response back), the application
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L207-L218">undoes the activation with <code>dynamic_flag_deactivate_kind(request_tracing, NULL)</code></a>.</p>
 
-<p>Activation and deactivation calls actually increment and decrement 
-<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/src/dynamic_flag.c#L99-L110">counters associated with each instance of a <code>DF_...</code> macro</a>, so this scheme even works when
+<p>Activation and deactivation calls actually increment and decrement
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/src/dynamic_flag.c#L99-L110">counters associated with each instance of a <code>DF_...</code> macro</a>, so this scheme works correctly when
 multiple requests with overlapping lifetimes opt into tracing:
-tracing-only blocks will enter the “slow” path (check whether
-<code>request-&gt;tracing_mode == true</code>) when at least one in-flight request
-has <code>tracing_mode == true</code>, and revert to the fast path as soon as no
-such request exists.</p>
+tracing blocks will check whether <code>request-&gt;tracing_mode == true</code>
+whenever at least one in-flight request has <code>tracing_mode == true</code>, and
+skip these conditionals as soon as no such request exists.</p>
 
 <h2 id="practical-considerations-for-programmatic-manipulation">Practical considerations for programmatic manipulation</h2>
 
-<p>Confirming that a flag is at its expected value (disabled for
-<code>DF_FEATURE</code> and <code>DF_OPT</code>, enabled for <code>DF_DEFAULT</code>) is fast… 
+<p>Confirming that a flag is set to its expected value (disabled for
+<code>DF_FEATURE</code> and <code>DF_OPT</code>, enabled for <code>DF_DEFAULT</code>) is fast…
 because we shifted all the complexity to the flag flipping
 code. Changing the value for a set of flags is extremely slow
-(milliseconds of runtime and several <a href="https://en.wikipedia.org/wiki/Inter-processor_interrupt">IPIs</a> for 
+(milliseconds of runtime and several <a href="https://en.wikipedia.org/wiki/Inter-processor_interrupt">IPIs</a> for
 <a href="https://man7.org/linux/man-pages/man2/mprotect.2.html">multiple <code>mprotect(2)</code> calls</a>), so it only makes sense to use dynamic flags when they are
-rarely activated or deactivated (e.g., less than once a minute or even
-less than once an hour).</p>
+rarely activated or deactivated (e.g., less often than once a minute
+or even less often than once an hour).</p>
 
 <p>We have found programmatic flag manipulation to be useful not just for
 opt-in request tracing or to enable log statements, but also to
-minimise the impact of slow paths during program phases that do not
-require them. For example, mutual exclusion and 
+minimise the impact of complex logic on program phases that do not
+require them. For example, mutual exclusion and
 <a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">safe memory reclamation deferral (PDF)</a>
 may be redundant while a program is in a single-threaded
-startup mode: we can guard such code behind <code>DF_OPT(steady_state, ...)</code>,
-and enable it just before spawning worker threads.</p>
+startup mode; we can guard such code behind <code>DF_OPT(steady_state, ...)</code>
+to accelerate startup,
+and enable <code>steady_state</code> flags just before spawning worker threads.</p>
 
-<p>When the program only enters slow phases every few minutes, <code>DF_OPT</code>
-is also a good option. That was the case for a 
+<p>It can also make sense to guard slow paths with <code>DF_OPT</code> when
+a program only enters phases that needs this slow path logic every few minutes. That was the case for a
 <a href="https://www.youtube.com/watch?v=hZDr4pfz0Nc">software transactional memory system with batched updates</a>.
 Most of the time, no update is in flight, so readers never have to
-check for a slow path, and all these checks can be guarded with
-<code>DF_OPT(stm, ...)</code> conditions. The program only has to enable <code>stm</code>
-flags around a batch of updates.  Enabling and disabling all these
+check for concurrent writes.  These checks can be guarded with
+<code>DF_OPT(stm, ...)</code> conditions., as long as the program enables <code>stm</code>
+flags around batches of updates.  Enabling and disabling all these
 flags can take a while (milliseconds), but, as long as updates are
 infrequent enough, the improved common case (getting rid of a memory
 load and a conditional jump for a read barrier) means the tradeoff
-makes sense.</p>
+is favourable.</p>
 
-<p>When flags are enabled programmatically, it can be useful to work
-around bugs by forcing a subset of flags to remain enabled or disabled.</p>
+<p>Even when flags are controlled programmatically, it can be useful to
+work around bugs by manually forcing some flags to remain enabled or
+disabled.  In the tracing example above, we could find a crash in one
+of the tracing blocks, and wish to prevent <code>request-&gt;tracing_mode</code> from
+exercising that block of code.</p>
 
-<p>It’s easy to force a flag in an active state: flag activations
+<p>It’s easy to force a flag into an active state: flag activations
 are counted, so it suffices to <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L220-L224">activate it</a>
-manually, once. However, activation counts don’t go negative, to make it safe
-to <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L226-L230">issue ad hoc <code>dynamic_flag_deactivate</code> calls</a>
-without wedging the system in a weird state, so we can’t use deactivation
+manually, once. However, we want it to be safe <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L226-L230">issue ad hoc <code>dynamic_flag_deactivate</code> calls</a>
+without wedging the system in a weird state, so activation counts don’t go negative.
+Unfortunately, this means we can’t use deactivations
 to prevent, e.g., a crashy request tracing block from being
 activated.</p>
 
-<p>Flags can instead be “unhooked” dynamically; while unhooked,
+<p>Flags can instead be “unhooked” dynamically.  While unhooked,
 increments to a flag’s activation count are silently disregarded.
 The <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L232-L239"><code>dynamic_flag_unhook</code> function</a>
-unhooks <code>DF_*</code> conditions by regex on their full name.
-While a condition has been
+unhooks <code>DF_*</code> conditions when their full name matches the extended POSIX regular expression it received as an argument.
+When a flag has been
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L232-L239">“unhook”ed</a>
-more often than it has been 
+more often than it has been
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L241-L245">“rehook”ed</a>,
 attempts to activate it will
-silently no-op. Once a flag has been unhooked, we can 
+silently no-op. Once a flag has been unhooked, we can
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L226-L230">issue <code>dynamic_flag_deactivate</code> calls</a>
 until <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/src/dynamic_flag.c#L99-L110">its activation count reaches 0</a>.
 At that point, the flag is disabled, and will remain disabled
@@ -372,23 +374,23 @@ until rehooked.</p>
 
 <p>The <a href="https://gcc.gnu.org/legacy-ml/gcc-patches/2009-07/msg01556.html">introduction of <code>asm goto</code> in GCC 4.5</a>
 made it possible to <a href="https://lwn.net/Articles/350714/">implement control operators in inline assembly</a>.
- When the condition actually varies at runtime, it usually
+When the condition actually varies at runtime, it usually
 makes more sense to <a href="https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html#:~:text=6.47.2.4%20Flag%20Output%20Operands">set an output variable with a condition code</a>,
 but <code>dynamic_flag</code> conditions are actually static in machine code:
-each <code>DF_*</code> macro expands to <em>one</em> 5-byte instruction, 
+each <code>DF_*</code> macro expands to <em>one</em> 5-byte instruction,
 <a href="https://c9x.me/x86/html/file_module_x86_id_315.html">a <code>test eax, imm32</code> instruction</a>
 that falls through to the common case when that’s the flag’s value
 (i.e., enabled for <code>DF_DEFAULT</code>, disabled for <code>DF_FEATURE</code> and
 <code>DF_OPT</code>), and a <a href="https://c9x.me/x86/html/file_module_x86_id_147.html">32-bit relative <code>jmp rel32</code> to the unexpected path</a>
 (disabled for <code>DF_DEFAULT</code>, enabled for <code>DF_FEATURE</code> and <code>DF_OPT</code>)
-otherwise. Activating and deactivating dynamic flags patches the
+otherwise. Activating and deactivating dynamic flags toggles the
 corresponding target instructions between <code>test imm32</code> (0xA9) and <code>jmp rel32</code> (0xE9).</p>
 
-<p>The <code>DF_...</code> macros expand into a 
+<p>The <code>DF_...</code> macros expand into a
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L443-L478">lot more inline assembly than just that one instruction</a>;
- the rest of the expansion is a lot of noise to
+the rest of the expansion is a lot of noise to
 register everything with structs and pointers in dedicated
-sections. The static registration is somewhat orthogonal to the
+sections. Automatic static registration is mostly orthogonal to the
 performance goals, but is key to the (lazy-)programmer-friendly
 interface.</p>
 
@@ -399,41 +401,43 @@ the jump offset at assembly-time, and flip between falling through to
 the common path (<code>test</code>) and jumping to the unexpected path (<code>jmp</code>) by
 overwriting the opcode byte (0xA9 for <code>test</code>, 0xE9 for <code>jmp</code>).</p>
 
-<p>We update a single byte for each dynamic flag to avoid questions
+<p>Updating a single byte for each dynamic flag avoids questions
 around the correct order for writes.  This single-byte
 cross-modification (we overwrite instruction bytes while other threads
 may be executing the mutated machine code) also doesn’t affect the
-size of the instruction (both <code>test eax</code> and <code>jmp rel</code> span 5 bytes);
-that should hopefully suffice to avoid sharp edges around instruction
-decoding in hardware, despite disregarding
-<a href="https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf#page=260">Intel’s recommendations for cross-modifying code in Section 8.1.3 of the SDM (Volume 3A)</a>.<sup id="fnref:cpu-millenia" role="doc-noteref"><a href="#fn:cpu-millenia" class="footnote" rel="footnote">5</a></sup> The library
-<a href="https://man7.org/linux/man-pages/man2/mprotect.2.html">relaxes and reinstates page protection with <code>mprotect(2)</code></a>) around
-all cross modification writes, and <code>mprotect</code>-ing from
-Read-Write-eXecute permissions to Read-eXecute acts as a
-<a href="https://lwn.net/Articles/728795/#:~:text=These%20users%20have%20found%20a%20trick%20to%20get%20the%20desired%20behavior%20without%20calling%20membarrier()%3A%20they%20make%20a%20call%20to%20either%20mprotect()%20or%20munmap()%20instead">membarrier (issues IPIs) on Linux/x86-64</a>;
-we can thus know that the updated code is globally visible by the time
-a <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L189-L230">call to <code>dynamic_flag_activate</code>, etc.</a> returns.</p>
+size of the instruction (both <code>test eax</code> and <code>jmp rel</code> span 5 bytes),
+which should hopefully suffice to avoid sharp edges around instruction
+decoding in hardware, despite our disregard for
+<a href="https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf#page=260">Intel’s recommendations regarding cross-modifying code in Section 8.1.3 of the SDM</a>.<sup id="fnref:cpu-millenia" role="doc-noteref"><a href="#fn:cpu-millenia" class="footnote" rel="footnote">4</a></sup></p>
 
-<p>It’s not practical to flip page protection for <em>each</em> <code>DF_</code> expansion,
+<p>The library does try to protect against code execution exploits by
+<a href="https://man7.org/linux/man-pages/man2/mprotect.2.html">relaxing and reinstating page protection with <code>mprotect(2)</code></a>) around
+all cross modification writes.  Since <code>mprotect</code>-ing from
+Read-Write-eXecute permissions to Read-eXecute acts as a
+<a href="https://lwn.net/Articles/728795/#:~:text=These%20users%20have%20found%20a%20trick%20to%20get%20the%20desired%20behavior%20without%20calling%20membarrier()%3A%20they%20make%20a%20call%20to%20either%20mprotect()%20or%20munmap()%20instead"><code>membarrier</code> (issues IPIs) on Linux/x86-64</a>,
+we can also know that the updated code is globally visible by the time
+a <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L189-L230">call to <code>dynamic_flag_activate</code>, etc.,</a> returns.</p>
+
+<p>It’s not practical to bounce page protection for <em>each</em> <code>DF_</code> expansion,
 especially with inlining (some users have hundreds of inlined calls to
 flagged functions, e.g., to temporarily paper over
 use-after-frees by nopping out a few calls to <code>free(2)</code>). Most of the
-complexity in <code>dynamic_flag.c</code> is simply in 
+complexity in <code>dynamic_flag.c</code> is simply in
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/src/dynamic_flag.c#L474-L529">gathering metadata records for all <code>DF_</code> sites that should be activated or deactivated</a>, and in
 <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/src/dynamic_flag.c#L390-L449">amortising <code>mprotect</code> calls for stretches of <code>DF_</code> sites on contiguous pages</a>.</p>
 
 <h2 id="sometimes-code-is-just-done">Sometimes, code is just done</h2>
 
 <p>The <a href="https://github.com/backtrace-labs/dynamic_flag"><code>dynamic_flag</code> library</a>
-is an updated interface for the core implementation of the 
+is an updated interface for the core implementation of the
 <a href="https://github.com/appnexus/acf/blob/master/common/an_hook.h">6-year old <code>an_hook</code></a>,
 and reflects years of experience with that functionality. We’re happy
 to share it, but aren’t looking for feature requests or contributions.</p>
 
 <p>There might be some small clean-ups as we add support for ARM or RISC
-V, or let the library can interoperate with a Rust implementation.
-However, we don’t expect changes to the interface (the <code>DF_</code> macros
-and the activation/deactivation functions), nor to its core structure,
+V, or let the library interoperate with a Rust implementation.
+However, we don’t expect changes to the interface, i.e., the <code>DF_</code> macros
+and the activation/deactivation functions, nor to its core structure,
 especially given the contemporary tastes for hardening (for example,
 the cross-modification approach is completely incompatible with
 OpenBSD’s and OS X’s strict <code>W^X</code> policies). The library works for our
@@ -445,7 +449,7 @@ so anyone can fork the library and twist it beyond
 recognition. However, if you’re interested in powerful patching
 capabilities, dynamic languages (e.g., Erlang, Common Lisp, or even
 Python and Ruby), or tools like <a href="https://liveplusplus.tech">Live++</a>
-and <a href="https://www.indefiant.com/">Recode</a> may be more appropriate.<sup id="fnref:ask-games" role="doc-noteref"><a href="#fn:ask-games" class="footnote" rel="footnote">6</a></sup>
+and <a href="https://www.indefiant.com/">Recode</a> may be more appropriate.<sup id="fnref:ask-games" role="doc-noteref"><a href="#fn:ask-games" class="footnote" rel="footnote">5</a></sup>
 We want <code>dynamic_flag</code> to remain simple and just barely flexible
 enough for our usage patterns.</p>
 
@@ -458,11 +462,8 @@ versions.</small></p>
     <li id="fn:images" role="doc-endnote">
       <p>It’s no accident that canonical dynamic languages like Smalltalk, Forth, and Lisp are all image-based: how would an image-based system even work if it were impossible to redefine functions or types? <a href="#fnref:images" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:second-order" role="doc-endnote">
-      <p>The compiler must still consider the slow/unlikely path as reachable, so the second order impact on compiler optimisations often dominates the effect of this additional instruction. <a href="#fnref:second-order" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
     <li id="fn:macro-writers-bill-of-rights" role="doc-endnote">
-      <p>Like <a href="https://www.youtube.com/watch?v=LIEX3tUliHw">guaranteed optimisations in Lisps</a>, the predictable performance impact isn’t important because all code is performance sensitive, but because performance is a cross-cutting concern, and a predictably negligible overhead makes it easier to implement new abstractions, especially with the few tools available in C. <a href="#fnref:macro-writers-bill-of-rights" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>Like <a href="https://www.youtube.com/watch?v=LIEX3tUliHw">guaranteed optimisations in Lisps</a>, the predictable performance impact isn’t important because all code is performance sensitive, but because performance is a cross-cutting concern, and a predictably negligible overhead makes it easier to implement new abstractions, especially with the few tools available in C.  In practice, the impact of considering a code path reachable in case a flag is flipped from its expected value usually dwarfs that of the single <code>test</code> instruction generated for the dynamic flag itself. <a href="#fnref:macro-writers-bill-of-rights" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:unreachable" role="doc-endnote">
       <p>Or if the <code>dynamic_flag</code> library isn’t aware of that <code>DF_OPT</code>, maybe because the function surrounding that <code>DF_OPT</code> conditional was loaded dynamically. <a href="#fnref:unreachable" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
@@ -492,7 +493,7 @@ versions.</small></p>
 
 Dec
   
-16th, 
+19th, 
 2021
 
 
@@ -547,8 +548,8 @@ Dec
   
 <script type="text/javascript">
   var disqus_config = function () {
-      this.page.url = 'https://www.pvk.ca/Blog/2021/12/16/bounded-dynamicism-with-cross-modifying-code/';
-      this.page.identifier = 'https://www.pvk.ca/Blog/2021/12/16/bounded-dynamicism-with-cross-modifying-code/';
+      this.page.url = 'https://www.pvk.ca/Blog/2021/12/19/bounded-dynamicism-with-cross-modifying-code/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2021/12/19/bounded-dynamicism-with-cross-modifying-code/';
       this.page.title = 'Bounded dynamicism with cross-modifying code';
   };
 
