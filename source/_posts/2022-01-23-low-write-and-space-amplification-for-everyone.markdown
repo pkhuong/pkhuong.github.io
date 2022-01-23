@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Low write and space amplification for everyone"
-date: 2022-01-23 14:58:21 -0500
+date: 2022-01-23 14:58:22 -0500
 draft: true
 hidden: true
 comments: true
@@ -9,6 +9,10 @@ categories:
 ---
 
 Or minmaxing the LSM I/O model.
+
+Summary: anything can have LSM-like space and write amplification, as
+long as they're afforded the same cache:data ratio (\\(10\%\\)) and
+can take a CPU-usage hit on reads.
 
 [Log-structured merge trees (LSM trees)](https://www.cs.umb.edu/~poneil/lsmtree.pdf)
 are reputed to offer [lower write and space amplification than B-trees](http://smalldatum.blogspot.com/2015/11/read-write-space-amplification-b-tree.html),
