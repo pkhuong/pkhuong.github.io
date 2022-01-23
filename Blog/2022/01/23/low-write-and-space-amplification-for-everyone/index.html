@@ -1,0 +1,442 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Low write and space amplification for everyone - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2022/01/23/low-write-and-space-amplification-for-everyone/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Low write and space amplification for everyone</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Jan
+  
+23rd, 
+2022
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2022/01/23/low-write-and-space-amplification-for-everyone/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>Or minmaxing the LSM I/O model.</p>
+
+<p><a href="https://www.cs.umb.edu/~poneil/lsmtree.pdf">Log-structured merge trees (LSM trees)</a>
+are reputed to offer <a href="http://smalldatum.blogspot.com/2015/11/read-write-space-amplification-b-tree.html">lower write and space amplification than B-trees</a>,
+since B-Trees must rewrite full pages (either in-place or Copy-on-Write).</p>
+
+<p>The argument also goes that read amplification for LSMs is negligible
+because all but the bottom-most level is cached in RAM: this lets LSMs
+pay for \(\mathcal{O}(1)\) I/O, for the bottom level, regardless of
+fragmentation in the higher levels (closer to the L0 memtable).  In
+order to achieve interesting space amplification bounds, LSMs must
+have a \(\approx 10\times\) growth factor between the bottom level and
+the next level. In other words, LSMs assume they can cache \(10\%\)
+of the data, and even a bit more for metadata on the bottom level.</p>
+
+<p>Comparisons between B-Trees and LSMs tend to give a similar advantage
+to B-Trees: assume all internal nodes are cached.  However, given the
+high branching factor of B-Trees (e.g., \(\approx 30\) records per
+leaf node), internal nodes add up to much less than \(10\%\) of the data
+(on the order of \(3-4\%\)).</p>
+
+<p>Here’s my unsurprising claim: if we assume that accesses to a buffer
+of capacity equal to \(10%\) of the base data cost us 0 I/O, we can
+recover similar space and write amplification bounds for B-Trees (or
+any other data structure constructed on top of large variable-length
+pages), without worsening the number of read IOps.  Much like LSMs, the
+price is CPU time during reads.</p>
+
+<h2 id="a-log-structured-page-manager">A log-structured page manager</h2>
+
+<p>We will achieve this bound by mediating all page accesses through a
+page manager built on top of a write-optimised table designed for
+small keys (e.g., 128-bit uuids) and large (tens of kilobytes) values.
+We assume the manager can maintain an in-memory hash table with
+constant-space descriptors for each key-value pair.  That’s reasonable
+because each value is a page (multiple kilobytes), and the manager is
+responsible for bounding write amplification, regardless of page size.
+We can thus assume pages are at least, e.g., \(1000\times\) as large
+as their descriptors.</p>
+
+<p>We will fully exploit the “free” buffer for \(10\%\) of the data set
+size with a two-level structure: a flat log of complete pages, and a
+buffer that’s initially empty.  When the buffer is empty, the flat log
+contains no redundant pages (i.e., it is fully garbage collected),
+with no space amplification except for what’s already incurred by the
+B-Tree (which shouldn’t be much because the manager allows
+variable-length pages).</p>
+
+<p>Each page is described by a
+<a href="https://en.wikipedia.org/wiki/Cons">cons-list</a> (LIFO single-linked
+list) of deltas that terminate either with <code>NIL</code> (for an empty initial
+page), or a base page.  Each delta starts with a “next” pointer, a
+locator (e.g., segment file id, offset, and size hint) for the next
+oldest element in the cons list.  This structure is similar to the
+approach taken by <a href="https://arxiv.org/abs/1805.09423">Conway et al for external hashing</a>,
+but simpler because we can assume values are much larger than
+keys.</p>
+
+<p>The in-memory hash table maps 128-bit page uuids to locators for the
+head of each page’s cons list of deltas and base page.</p>
+
+<p>When reading from a page, the manager will find the locator for the
+list head for that page, and walk the list to fetch more deltas until
+it reaches the end (<code>NIL</code> or a base page).  The application is
+responsible for interpreting the deltas and the list (e.g., it could
+replay the edits on a copy of the page).</p>
+
+<p>As long as deltas are only in the buffer (\(10\%\) of the dataset
+size), this adds up to 1 read I/O for the base page, or less.</p>
+
+<p>Writes to a page are exactly what you expect: log the delta (along
+with a locator for the old list head) in the buffer, and update the
+in-memory hash table to point to the new delta for that page.  This
+log of delta can also serve as a WAL, and there is thus marginal write
+amplification (assume no amplification, 1x).</p>
+
+<p>Eventually, the buffer will grow to \(10\%\) of the data set size,
+and will have to be flushed.  We do so by fully scanning the flat log
+of pages, and applying all changes to that log; new pages go in fresh
+log segments.  The details don’t really matter, as long as each byte
+in the flat log is rewritten at most once.  This flush amortises to a
+\(10\times\) write amplification factor.</p>
+
+<p>Write amplification in the append-only buffer is negligible, and
+flushes are triggered by size in bytes rather than number of logical
+changes.  This lets the page manager achieve its write and space
+amplification bounds regardless of page size; pages can even have
+different sizes, as long as they’re large enough to dominate their
+entry in the in-memory hash table.</p>
+
+<p>Combine all that together, and we find a page manager that achieves a
+total of \(11\times\) write amplification, at most \(10\%\) space
+amplification, and no read amplification compared to the base data
+structure (B-Trees), as long as that data structure also has its
+separate cache.  We assumed B-Trees cache \(3-4\%\) of the total
+data size; combined with the page manager, that’s \(14\%\).  We
+could of course lower the buffer’s RAM footprint, e.g., \(6\%\) at
+the price of an \(18\times\) write amplification factor (and
+\(6\%\) space amplification).  However, the page manager decouples
+write amplification from the page size, so we could simply increase
+the size of B-Tree leaf pages and reduce the internal node footprint
+to \(\approx 1\%\) of the data set size.</p>
+
+<h2 id="making-this-a-little-bit-more-practical">Making this a little bit more practical</h2>
+
+<p>LSMs proponent might model accesses to \(10\%\) of the data set as
+“free,” but I think everyone can agree that’s not really the case.</p>
+
+<p>We probably want to structure the buffer like a size-tiered level:
+each level has at most one entry for each page, except for the
+\(L_0\) log, which is fully time-ordered.  When the \(L_0\) log
+grows to \(1\%\) of the dataset size, it’s shuffled to create a new
+intermediate log in \(L_1\).  When we have \(10\) such \(L_1\)
+logs, we can flush them to the final base log.</p>
+
+<p>Size-tiered promotions cost us very little write amplification
+(\(1\) per level), so we’re still doing great on that front.  In
+fact, we can add more levels to increase the growth factor from
+\(L_0\) to the total data set size.  However, given the size of our
+values, the benefits aren’t as clear as with LSMs.  If we do that,
+we’ll need per-level directories (that still fit comfortably in RAM,
+and with linked list locators that tell us which directories to skip).</p>
+
+<p>We can also incrementalise flushes over time by, e.g., GCing
+\(10\%\) of base logs whenever we we add one more tier (with a
+footprint equal to \(1\%\) of the whole dataset).  If we do that, we
+will also want to version fully materialised pages, to know what
+deltas to disregard.</p>
+
+<p>Append-only workloads can also do a lot better: we only need to GC old
+pages when they have been mutated or deleted.  We could amortise GC
+scans independently of flattening fresh data into new segments in the
+base log.  Write amplification is then only an issue for mutations,
+while appends only pay for copies from \(L_0\) to \(L_1\) and
+\(L_1\) to a fresh segment in the final base log.</p>
+
+<p>In all cases, freer-form restructuring comes at the expense of
+more directories (hash table from page uuid to location) for each
+level that may be restructured independently of more recent data.</p>
+
+<p>Another problem with the linked list structure is the way it fully
+serialises I/O.  We can instead store multiple locators (e.g., up to
+one per tier) directly in the in-memory hash table.  This both allows
+parallel I/O, and makes it easier to restructure old data without
+rewriting younger changes that refer to that old data.</p>
+
+<p>With such an approach, we could flatten changes to new log segments,
+and then scan older segments only to delete useless records.</p>
+
+<p>Lifetime and locality hints would also make sense.  For example,
+internal B-Tree nodes are longer lived than leaves, so we probably
+want to store internal nodes and leaves in different log segment
+files.  That doesn’t change the worst-case bounds, but increases the
+practical probability that we will scan a segment and find there’s
+nothing to do (we can also decline to rewrite a segment when the
+wasted space is \(&lt;2\%\), to heuristically waste a bit more space
+and reduce write I/O).</p>
+
+<h2 id="thats-just-an-lsm">That’s just an LSM!</h2>
+
+<p>Well yes… but really specialised for the lookups performed by the
+page manager: only point lookups for short keys, where the records
+associated with each key add up to tens of kilobytes.</p>
+
+<p>The lower bound on the footprint of each key is essential to the
+strategy of just storing every key in an in-memory data structure.</p>
+
+<p>Combined with the knowledge that we only care about point lookups,
+we can also implement a trivial version of fractional cascading.</p>
+
+<p>I think this adventure in storage system entomology is useful, because
+it shows how we can decouple the write amplification properties of
+LSMs from the specific associative data structure implemented with
+LSMs… and how the fundamental tradeoff is additional CPU time to
+interpret deltas in read operations.</p>
+
+<h2 id="how-do-you-recover-from-crashes">How do you recover from crashes?</h2>
+
+<p>That’s a fair question, and probably boils down to journaling updates
+to the in-memory hash table, with periodic snapshots.  However, I
+think it’s important to treat the two concerns (persistence because
+data doesn’t fit in RAM and durability) separately: LSMs solve both
+problems at once, and it’s good to explore how we can scale or relax
+each concern independently.  The in-memory hash table is also known to
+be much smaller than the data itself (e.g., we can assumes pages are
+large enough for the hash table to be \(&lt;0.1\%\) of the data), so
+that’s a simple problem.</p>
+
+<p>Should the hash table updates be journaled in the data (page/delta)
+log or separately?  Probably in the same \(L_0\) segment, then
+separately as we restructure segments: entries in the hash table
+journal has a much shorter lifetime than the data.  Each segment or
+level can also include its own directory to speed up recovery.  The
+directory won’t necessarily be much smaller than the deltas, but can
+instead be amortised against the page itself (there’s a bounded number
+of levels in the system, and each page appears a bounded amount of
+time in each level).</p>
+
+<h2 id="what-other-data-structures-can-we-implement">What other data structures can we implement?</h2>
+
+<p>This post uses B-Trees with large pages as a running example for the
+page manager’s consumer.  However, we could also use the same manager
+to back persistent hash tables (e.g., with
+<a href="https://en.wikipedia.org/wiki/Extendible_hashing">extendible hashing</a>) or
+<a href="https://arxiv.org/abs/cs/0210006">exponential search trees</a>.
+The freedom to vary the page size and the ability to rely on the page
+manager to control write and space amplification feels like a huge
+simplifier for persistent and transactional data structures.
+The fact that pages can be identified by name (e.g., a crypto hash of
+their logical path from the root) rather than by index is just gravy.</p>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Jan
+  
+23rd, 
+2022
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2021/08/01/slitter-a-less-footgunny-slab-allocator/" title="Previous Post: Slitter: a slab allocator that trusts, but verifies">&laquo; Slitter: a slab allocator that trusts, but verifies</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2022 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2022/01/23/low-write-and-space-amplification-for-everyone/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2022/01/23/low-write-and-space-amplification-for-everyone/';
+      this.page.title = 'Low write and space amplification for everyone';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>
