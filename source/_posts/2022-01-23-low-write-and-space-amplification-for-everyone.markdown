@@ -11,8 +11,8 @@ categories:
 Or minmaxing the LSM I/O model.
 
 Summary: anything can have LSM-like space and write amplification, as
-long as they're afforded the same cache:data ratio (\\(10\%\\)) and
-can take a CPU-usage hit on reads.
+long as it's afforded the same cache size and allowed a similar hit on
+CPU usage.
 
 [Log-structured merge trees (LSM trees)](https://www.cs.umb.edu/~poneil/lsmtree.pdf)
 are reputed to offer [lower write and space amplification than B-trees](http://smalldatum.blogspot.com/2015/11/read-write-space-amplification-b-tree.html),
@@ -34,11 +34,11 @@ leaf node), internal nodes add up to much less than \\(10\%\\) of the data
 (on the order of \\(3-4\%\\)).
 
 Here's my unsurprising claim: if we assume that accesses to a buffer
-of capacity equal to \\(10%\\) of the base data cost us 0 I/O, we can
+of capacity equal to \\(10\%\\) of the base data cost us 0 I/O, we can
 recover similar space and write amplification bounds for B-Trees (or
 any other data structure constructed on top of large variable-length
 pages), without worsening the number of read IOps.  Much like LSMs, the
-price is CPU time during reads.
+price is additional CPU time.
 
 A log-structured page manager
 -----------------------------
