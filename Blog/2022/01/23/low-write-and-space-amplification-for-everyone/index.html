@@ -120,6 +120,10 @@ Jan
 
 <div class="entry-content" style="font-family: ; font-size: "><p>Or minmaxing the LSM I/O model.</p>
 
+<p>Summary: anything can have LSM-like space and write amplification, as
+long as they’re afforded the same cache:data ratio (\(10\%\)) and
+can take a CPU-usage hit on reads.</p>
+
 <p><a href="https://www.cs.umb.edu/~poneil/lsmtree.pdf">Log-structured merge trees (LSM trees)</a>
 are reputed to offer <a href="http://smalldatum.blogspot.com/2015/11/read-write-space-amplification-b-tree.html">lower write and space amplification than B-trees</a>,
 since B-Trees must rewrite full pages (either in-place or Copy-on-Write).</p>
