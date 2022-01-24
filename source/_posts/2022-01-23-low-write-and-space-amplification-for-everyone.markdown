@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Low write and space amplification for everyone"
-date: 2022-01-23 14:58:22 -0500
+date: 2022-01-23 14:58:23 -0500
 draft: true
 hidden: true
 comments: true
@@ -19,13 +19,28 @@ are reputed to offer [lower write and space amplification than B-trees](http://s
 since B-Trees must rewrite full pages (either in-place or Copy-on-Write).
 
 The argument also goes that read amplification for LSMs is negligible
-because all but the bottom-most level is cached in RAM: this lets LSMs
-pay for \\(\mathcal{O}(1)\\) I/O, for the bottom level, regardless of
-fragmentation in the higher levels (closer to the L0 memtable).  In
-order to achieve interesting space amplification bounds, LSMs must
-have a \\(\approx 10\times\\) growth factor between the bottom level and
-the next level. In other words, LSMs assume they can cache \\(10\%\\)
-of the data, and even a bit more for metadata on the bottom level.
+because all but the bottom-most layer is cached in RAM: this lets LSMs
+pay for \\(\mathcal{O}(1)\\) I/O, for the bottom layer, regardless of
+fragmentation in the higher layers (closer to the L0 memtable).
+
+There are multiple constraints on the penultimate and bottom layers.
+They all conspire to demand a leveled compaction strategy for the
+bottom layer, and to prevent the fanout between the two layers from
+growing much wider than \\(10\times\\).  If we want the LSM to pay for
+at most 1 I/O for the bottom layer, we can't use size-tiered
+compaction for that layer; size-tiered compaction would also incur a
+lot of space amplification for that last layer.  With leveled
+compaction, the worst-case write amplification when promoting from the
+penultimate to the bottom layer is equal to the fanout, so can't be
+much higher than \\(\approx 10\times\\).  In other words, assuming
+that LSMs can cache all but the the bottom layer is equivalent to
+assuming they can cache \\(\approx 10\%\\) of the data, and even a bit
+more for metadata regarding the bottom layer.  There is a direct
+inverse relationship between the layer of write amplification when
+promoting to the bottom layer and the amount of data above the bottom
+layer, i.e., to the cache size.  Reducing the cache to \\(5\%\\) would
+incur a \\(20\times\\) write amplification factor in the final
+promotion.
 
 Comparisons between B-Trees and LSMs tend to give a similar advantage
 to B-Trees: assume all internal nodes are cached.  However, given the
@@ -122,19 +137,19 @@ Making this a little bit more practical
 LSMs proponent might model accesses to \\(10\%\\) of the data set as
 "free," but I think everyone can agree that's not really the case.
 
-We probably want to structure the buffer like a size-tiered level:
-each level has at most one entry for each page, except for the
+We probably want to structure the buffer like a size-tiered layer:
+each layer has at most one entry for each page, except for the
 \\(L_0\\) log, which is fully time-ordered.  When the \\(L_0\\) log
 grows to \\(1\%\\) of the dataset size, it's shuffled to create a new
 intermediate log in \\(L_1\\).  When we have \\(10\\) such \\(L_1\\)
 logs, we can flush them to the final base log.
 
 Size-tiered promotions cost us very little write amplification
-(\\(1\\) per level), so we're still doing great on that front.  In
-fact, we can add more levels to increase the growth factor from
+(\\(1\\) per layer), so we're still doing great on that front.  In
+fact, we can add more layers to increase the growth factor from
 \\(L_0\\) to the total data set size.  However, given the size of our
 values, the benefits aren't as clear as with LSMs.  If we do that,
-we'll need per-level directories (that still fit comfortably in RAM,
+we'll need per-layer directories (that still fit comfortably in RAM,
 and with linked list locators that tell us which directories to skip).
 
 We can also incrementalise flushes over time by, e.g., GCing
@@ -152,7 +167,7 @@ while appends only pay for copies from \\(L_0\\) to \\(L_1\\) and
 
 In all cases, freer-form restructuring comes at the expense of
 more directories (hash table from page uuid to location) for each
-level that may be restructured independently of more recent data.
+layer that may be restructured independently of more recent data.
 
 Another problem with the linked list structure is the way it fully
 serialises I/O.  We can instead store multiple locators (e.g., up to
@@ -208,11 +223,11 @@ Should the hash table updates be journaled in the data (page/delta)
 log or separately?  Probably in the same \\(L_0\\) segment, then
 separately as we restructure segments: entries in the hash table
 journal has a much shorter lifetime than the data.  Each segment or
-level can also include its own directory to speed up recovery.  The
+layer can also include its own directory to speed up recovery.  The
 directory won't necessarily be much smaller than the deltas, but can
 instead be amortised against the page itself (there's a bounded number
-of levels in the system, and each page appears a bounded amount of
-time in each level).
+of layers in the system, and each page appears a bounded amount of
+time in each layer).
 
 What other data structures can we implement?
 --------------------------------------------
