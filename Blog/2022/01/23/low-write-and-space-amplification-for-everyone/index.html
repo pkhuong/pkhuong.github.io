@@ -125,93 +125,99 @@ long as it’s afforded the same cache size and allowed a similar hit on
 CPU usage.</p>
 
 <p><a href="https://www.cs.umb.edu/~poneil/lsmtree.pdf">Log-structured merge trees (LSM trees)</a>
-are reputed to offer <a href="http://smalldatum.blogspot.com/2015/11/read-write-space-amplification-b-tree.html">lower write and space amplification than B-trees</a>,
-since B-Trees must rewrite full pages (either in-place or Copy-on-Write).</p>
+are reputed to offer <a href="http://smalldatum.blogspot.com/2015/11/read-write-space-amplification-b-tree.html">lower write and space amplification than B-Trees</a>,
+because B-Trees must rewrite full pages (either in-place or Copy-on-Write)
+regardless of how few records they modified.</p>
 
-<p>The argument also goes that read amplification for LSMs is negligible
-because all but the bottom-most layer is cached in RAM: this lets LSMs
-pay for \(\mathcal{O}(1)\) I/O, for the bottom layer, regardless of
-fragmentation in the higher layers (closer to the L0 memtable).</p>
+<p>The argument also goes that read amplification for LSMs is actually
+negligible because all but the largest layer is cached in RAM.
+This lets LSMs pay \(\mathcal{O}(1)\) I/O, only for the largest layer,
+regardless of fragmentation in the remaining layers closer to the
+\(L_0\) memtable.</p>
 
-<p>There are multiple constraints on the penultimate and bottom layers.
+<p>There are multiple constraints on the penultimate and largest layers.
 They all conspire to demand a leveled compaction strategy for the
-bottom layer, and to prevent the fanout between the two layers from
+largest layer, and to prevent the fanout between the two layers from
 growing much wider than \(10\times\).  If we want the LSM to pay for
-at most 1 I/O for the bottom layer, we can’t use size-tiered
+at most 1 I/O for the largest layer, we can’t use size-tiered
 compaction for that layer; size-tiered compaction would also incur a
 lot of space amplification for that last layer.  With leveled
 compaction, the worst-case write amplification when promoting from the
-penultimate to the bottom layer is equal to the fanout, so can’t be
-much higher than \(\approx 10\times\).  In other words, assuming
-that LSMs can cache all but the the bottom layer is equivalent to
+penultimate to the largest layer is equal to the fanout, so can’t be
+much higher than \(10\times\).  In other words, assuming
+that LSMs can cache all but the largest layer is equivalent to
 assuming they can cache \(\approx 10\%\) of the data, and even a bit
-more for metadata regarding the bottom layer.  There is a direct
-inverse relationship between the layer of write amplification when
-promoting to the bottom layer and the amount of data above the bottom
+more for metadata regarding the largest layer.  There is a direct
+inverse relationship between the level of write amplification when
+promoting to the largest layer and the amount of data above the largest
 layer, i.e., to the cache size.  Reducing the cache to \(5\%\) would
 incur a \(20\times\) write amplification factor in the final
 promotion.</p>
 
 <p>Comparisons between B-Trees and LSMs tend to give a similar advantage
 to B-Trees: assume all internal nodes are cached.  However, given the
-high branching factor of B-Trees (e.g., \(\approx 30\) records per
-leaf node), internal nodes add up to much less than \(10\%\) of the data
-(on the order of \(3-4\%\)).</p>
+high branching factor of B-Trees (e.g., \(30\) 128-byte records per
+small 4K leaf page), internal nodes add up to maybe \(3-4\%\) of
+the data, much less than \(10\%\).</p>
 
-<p>Here’s my unsurprising claim: if we assume that accesses to a buffer
-of capacity equal to \(10\%\) of the base data cost us 0 I/O, we can
-recover similar space and write amplification bounds for B-Trees (or
-any other data structure constructed on top of large variable-length
-pages), without worsening the number of read IOps.  Much like LSMs, the
-price is additional CPU time.</p>
+<p>Here’s my unsurprising claim: if we can stage writes in a buffer large
+as LSMs’ (up to \(10\%\) of the total data), and assume that reads
+in that buffer cost us 0 I/O, we can recover similar space and write
+amplification bounds for B-Trees (or any other data structure
+constructed on top of large variable-length pages), without worsening
+the number of read IOps.  Much like LSMs, the price is additional CPU
+time.</p>
 
 <h2 id="a-log-structured-page-manager">A log-structured page manager</h2>
 
-<p>We will achieve this bound by mediating all page accesses through a
-page manager built on top of a write-optimised table designed for
-small keys (e.g., 128-bit uuids) and large (tens of kilobytes) values.
-We assume the manager can maintain an in-memory hash table with
-constant-space descriptors for each key-value pair.  That’s reasonable
-because each value is a page (multiple kilobytes), and the manager is
-responsible for bounding write amplification, regardless of page size.
-We can thus assume pages are at least, e.g., \(1000\times\) as large
-as their descriptors.</p>
+<p>We will achieve these bounds by mediating all page accesses through a
+page manager built like a write-optimised key-value store designed for
+small page id keys (e.g., dense linearly allocated indices) and large
+(multiple kilobytes) page values.  We assume the manager can maintain an
+in-memory dictionary<sup id="fnref:array" role="doc-noteref"><a href="#fn:array" class="footnote" rel="footnote">1</a></sup> with constant-space descriptors for each
+page.  That’s reasonable because each page is large enough to dominate
+its descriptor (e.g., \(200\times\) as large), and the manager is
+responsible for bounding space and write amplification, regardless of
+page size.</p>
 
-<p>We will fully exploit the “free” buffer for \(10\%\) of the data set
+<p>We fully exploit the “free” buffer for \(10\%\) of the data set
 size with a two-level structure: a flat log of complete pages, and a
-buffer that’s initially empty.  When the buffer is empty, the flat log
-contains no redundant pages (i.e., it is fully garbage collected),
-with no space amplification except for what’s already incurred by the
-B-Tree (which shouldn’t be much because the manager allows
-variable-length pages).</p>
+buffer of deltas and pages that’s initially empty.  When the buffer is
+empty, the flat log contains no redundant pages (i.e., it is fully
+garbage collected), with no space amplification except for what’s
+already incurred by the data structure built on top of the pages
+(which shouldn’t be much because the manager allows variable-length
+pages).  Unlike LSM runs, the log’s contents aren’t ordered: we assume
+each access costs a full random I/O, and an in-memory dictionary tells us
+what bytes to read.  Fully utilising each access falls on the data
+structure built on top of the page manager, e.g., a B-Tree.</p>
 
 <p>Each page is described by a
 <a href="https://en.wikipedia.org/wiki/Cons">cons-list</a> (LIFO single-linked
 list) of deltas that terminate either with <code>NIL</code> (for an empty initial
-page), or a base page.  Each delta starts with a “next” pointer, a
-locator (e.g., segment file id, offset, and size hint) for the next
-oldest element in the cons list.  This structure is similar to the
-approach taken by <a href="https://arxiv.org/abs/1805.09423">Conway et al for external hashing</a>,
-but simpler because we can assume values are much larger than
-keys.</p>
+page), or a base page.  Each delta starts with a locator (e.g.,
+segment file id, offset, and size hint) for the next oldest element in
+the cons list.  This structure is reminiscent of 
+<a href="https://arxiv.org/abs/1805.09423">Conway et al’s take on external hashing</a>,
+but simpler because we can assume values are much larger than keys.</p>
 
-<p>The in-memory hash table maps 128-bit page uuids to locators for the
+<p>The in-memory dictionary maps page ids to locators for the
 head of each page’s cons list of deltas and base page.</p>
 
 <p>When reading from a page, the manager will find the locator for the
 list head for that page, and walk the list to fetch more deltas until
 it reaches the end (<code>NIL</code> or a base page).  The application is
-responsible for interpreting the deltas and the list (e.g., it could
-replay the edits on a copy of the page).</p>
+responsible for interpreting the deltas and the list, for example, by
+replaying edits on a copy of the page.</p>
 
 <p>As long as deltas are only in the buffer (\(10\%\) of the dataset
-size), this adds up to 1 read I/O for the base page, or less.</p>
+size), this adds up to 1 read I/O or less for the base page.</p>
 
-<p>Writes to a page are exactly what you expect: log the delta (along
+<p>Writes to a page are exactly what you’d expect: log the delta (along
 with a locator for the old list head) in the buffer, and update the
-in-memory hash table to point to the new delta for that page.  This
+in-memory dictionary to point to the new delta for that page.  This
 log of delta can also serve as a WAL, and there is thus marginal write
-amplification (assume no amplification, 1x).</p>
+amplification (assume no amplification, \(1\times\)).</p>
 
 <p>Eventually, the buffer will grow to \(10\%\) of the data set size,
 and will have to be flushed.  We do so by fully scanning the flat log
@@ -225,7 +231,7 @@ flushes are triggered by size in bytes rather than number of logical
 changes.  This lets the page manager achieve its write and space
 amplification bounds regardless of page size; pages can even have
 different sizes, as long as they’re large enough to dominate their
-entry in the in-memory hash table.</p>
+entry in the in-memory dictionary.</p>
 
 <p>Combine all that together, and we find a page manager that achieves a
 total of \(11\times\) write amplification, at most \(10\%\) space
@@ -243,10 +249,11 @@ to \(\approx 1\%\) of the data set size.</p>
 <h2 id="making-this-a-little-bit-more-practical">Making this a little bit more practical</h2>
 
 <p>LSMs proponent might model accesses to \(10\%\) of the data set as
-“free,” but I think everyone can agree that’s not really the case.</p>
+“free,” but I think everyone can agree that’s not super realistic in
+general.</p>
 
 <p>We probably want to structure the buffer like a size-tiered layer:
-each layer has at most one entry for each page, except for the
+each log has at most one entry for each page, except for the
 \(L_0\) log, which is fully time-ordered.  When the \(L_0\) log
 grows to \(1\%\) of the dataset size, it’s shuffled to create a new
 intermediate log in \(L_1\).  When we have \(10\) such \(L_1\)
@@ -261,7 +268,7 @@ we’ll need per-layer directories (that still fit comfortably in RAM,
 and with linked list locators that tell us which directories to skip).</p>
 
 <p>We can also incrementalise flushes over time by, e.g., GCing
-\(10\%\) of base logs whenever we we add one more tier (with a
+\(10\%\) of base logs whenever we we add one more run (with a
 footprint equal to \(1\%\) of the whole dataset).  If we do that, we
 will also want to version fully materialised pages, to know what
 deltas to disregard.</p>
@@ -274,12 +281,12 @@ while appends only pay for copies from \(L_0\) to \(L_1\) and
 \(L_1\) to a fresh segment in the final base log.</p>
 
 <p>In all cases, freer-form restructuring comes at the expense of
-more directories (hash table from page uuid to location) for each
+more directories (dictionary from page id to location) for each
 layer that may be restructured independently of more recent data.</p>
 
 <p>Another problem with the linked list structure is the way it fully
 serialises I/O.  We can instead store multiple locators (e.g., up to
-one per tier) directly in the in-memory hash table.  This both allows
+one per tier) directly in the in-memory dictionary.  This both allows
 parallel I/O, and makes it easier to restructure old data without
 rewriting younger changes that refer to that old data.</p>
 
@@ -299,19 +306,113 @@ and reduce write I/O).</p>
 
 <p>Well yes… but really specialised for the lookups performed by the
 page manager: only point lookups for short keys, where the records
-associated with each key add up to tens of kilobytes.</p>
+associated with each key span multiple kilobytes.</p>
 
 <p>The lower bound on the footprint of each key is essential to the
 strategy of just storing every key in an in-memory data structure.</p>
 
-<p>Combined with the knowledge that we only care about point lookups,
-we can also implement a trivial version of fractional cascading.</p>
+<p>Combined with the knowledge that we only care about point lookups by
+strict equality, we can also implement a trivial version of fractional
+cascading.</p>
 
 <p>I think this adventure in storage system entomology is useful, because
 it shows how we can decouple the write amplification properties of
 LSMs from the specific associative data structure implemented with
 LSMs… and how the fundamental tradeoff is additional CPU time to
 interpret deltas in read operations.</p>
+
+<h2 id="dealing-with-deltas">Dealing with deltas</h2>
+
+<p>An obvious practical problem with the page manager is that an
+application might have to apply a lot of deltas whenever it accesses a
+page.</p>
+
+<p>We can at least simplify the workload for most external tree-shaped
+data structure, where the bulk of updates target leaf nodes: we can
+usually amortise full rewrites for internal nodes.  This means deltas
+can correspond to LSM updates (upsert or remove the record for a key).
+Since deltas don’t leave the cached tier, it also “doesn’t hurt” to
+implement logical deltas like “increment a value.”</p>
+
+<p>Assuming a fully software-managed cache, we can also start caching
+fully resolved pages as soon as the deltas for a page consume as
+much storage as the page itself.  That imposes an upper bound on
+the number of deltas one might have to apply.</p>
+
+<p>It may be simpler to store the resolved page in the \(L_0\) log
+itself.  However, each time we do, we incur another \(1\times\)
+write <em>and space</em> amplification in the cached tier, which in turn
+doubles the write amplification when promoting to the final log.</p>
+
+<p>There’s definitely an interesting policy question here: if promotion
+to the final log is estimated to incur a \(10\times\) write
+amplification, we’d rather GC \(L_1\) if it’s more than 10%
+redundant.  So… maybe we can still flatten deltas on disk for
+heavily mutated pages?</p>
+
+<p>Either way, it sounds like we want small leaf pages, to avoid having
+to deal with too many deltas.  However, we want large pages to
+amortise the descriptor overhead.  It sounds like we might want a van
+Emde Boas-style layout trick so that one descriptor can refer to a
+bundle of contiguous subpages, while letting reads focus on a specific
+subpage.  That is something the application could manage, by quickly
+skipping over irrelevant deltas.  However, it’s not clear how best to
+store and refer to subpages with deltas applied.  Another list head in
+the descriptor? An array of descriptor in the log, with a shared
+in-memory list head?</p>
+
+<p>Also, how do we index in a bundle of subpages, when subpages can have
+arbitrary sizes?  Do we just have to read the whole bundle (and a
+small header for offsets)?  That’s not unreasonable if we assume
+bundles are only used to compact small subpages.  We might even
+let the page manager bundle small pages together semi-arbitrarily!</p>
+
+<p>We assume lookups in the in-memory dictionary are free, so we could
+simply search for two keys: first for the subpage’s id, and then for
+the bundle id.  The final log only stores contiguous page bundles,
+while \(L_1\) and \(L_0\) store subpages.  These younger tiers are
+small (at most \(10\%\) of the total dataset size), so we can afford
+more descriptors per bundle (i.e., more subpages per bundle).</p>
+
+<p>Also, how small can the in-memory descriptor be?</p>
+
+<p>With a flat array of dense page ids, the key is implicit. We could
+try to do the same thing with short prefixes of hashes, but that
+quickly wastes a lot of RAM (or incurs a lot of collisions).</p>
+
+<p>For up to \(2^{30}\) pages, a 64 bit in-memory hash suffices to make
+collisions rare enough that they shouldn’t impact performance.
+However, if the location of the value in memory tells us about the
+high bits of that hash, we only need to store a small number of bits
+(I think around \(\Theta([\lg \lg n]^2)\)) to make collisions
+unlikely.</p>
+
+<p>As for the locator, we minimally need a segment (file) id and an
+offset.  Let’s say we cap segments to 16MB (or more if we align
+records to 8 or 16 bytes).  The offset needs 3 bytes.  Assuming we
+only care about total footprints up to 100TB (remember, we’re
+designing around a cache that’s \(10\%\) as large), we only
+need 3 more bytes for the segment id.</p>
+
+<p>I think even with hashing, we can safely fit descriptors in 10 bytes
+(3 bytes for the partial hash, 3 bytes for the segment id, 3 bytes
+offset, 1 byte size hint).  At an 80% load factor, and RAM footprint
+for the dictionary equal to 1% of the data set size, we can afford
+pages of 1250 bytes or more.</p>
+
+<p>With a double-lookup scheme (small subpages get their own descriptor
+when in the buffer), we could assume subpages are at least 250 bytes,
+let subpages of 2500 bytes or more always have their own descriptor,
+and otherwise group subpages of fewer than 2500 bytes in bundles of up
+to 10 subpages.  In the worst case, we only have subpages in the
+buffer, so \(5\% \cdot 10\% = 0.5\%\) of total storage for
+in-memory locators to the buffer, and the base log has 9 locators
+for 2500 byte pages, and 1 for a 250 byte page, so \(10 \cdot 12.5 / (9\cdot 2500 + 250) = 0.55\%\).  The total is \(1.5\%\), and we can
+clearly tweak the constants a bit.</p>
+
+<p>Does a read of 25KB count as one I/O? It’s not far!</p>
+
+<p>TODO: tweak the numbers for a max bundle size of 16KB.</p>
 
 <h2 id="how-do-you-recover-from-crashes">How do you recover from crashes?</h2>
 
@@ -347,6 +448,15 @@ manager to control write and space amplification feels like a huge
 simplifier for persistent and transactional data structures.
 The fact that pages can be identified by name (e.g., a crypto hash of
 their logical path from the root) rather than by index is just gravy.</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:array" role="doc-endnote">
+      <p>For dense indices, we can simply use an array keyed on the index. A hash table keyed on 128-bit hashes or uuids probably makes for a nicer programing interface. <a href="#fnref:array" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
 </div>
 
 
