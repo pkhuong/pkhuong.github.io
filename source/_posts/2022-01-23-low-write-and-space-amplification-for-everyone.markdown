@@ -139,62 +139,82 @@ write amplification from the page size, so we could simply increase
 the size of B-Tree leaf pages and reduce the internal node footprint
 to \\(\approx 1\%\\) of the data set size.
 
-Making this a little bit more practical
----------------------------------------
+But that's just a cost model hack!
+----------------------------------
 
-LSMs proponent might model accesses to \\(10\%\\) of the data set as
-"free," but I think everyone can agree that's not super realistic in
-general.
+Yes. But it's interesting to see how must we can ram through the
+model's blind spots, and to consider whether other data structures
+that perform well according to the same model might exploit the same
+weaknesses.  Maybe people running LSMs at scale find that their
+storage is CPU-bound or more memory hungry than they'd like...
 
-We probably want to structure the buffer like a size-tiered layer:
-each log has at most one entry for each page, except for the
-\\(L_0\\) log, which is fully time-ordered.  When the \\(L_0\\) log
-grows to \\(1\%\\) of the dataset size, it's shuffled to create a new
-intermediate log in \\(L_1\\).  When we have \\(10\\) such \\(L_1\\)
-logs, we can flush them to the final base log.
+Now with some intellectual honesty
+----------------------------------
 
-Size-tiered promotions cost us very little write amplification
-(\\(1\\) per layer), so we're still doing great on that front.  In
-fact, we can add more layers to increase the growth factor from
-\\(L_0\\) to the total data set size.  However, given the size of our
-values, the benefits aren't as clear as with LSMs.  If we do that,
-we'll need per-layer directories (that still fit comfortably in RAM,
-and with linked list locators that tell us which directories to skip).
+[Iacono and Patrascu](https://arxiv.org/abs/1104.2799)
+observed that the key problem in external memory hashing is
+determining where we can find a given key: given such
+a directory, O(1) lookup in a frozen subtable is easy.
 
-We can also incrementalise flushes over time by, e.g., GCing
-\\(10\%\\) of base logs whenever we we add one more run (with a
-footprint equal to \\(1\%\\) of the whole dataset).  If we do that, we
-will also want to version fully materialised pages, to know what
-deltas to disregard.
+[Conway and friends](https://arxiv.org/abs/1805.09423) showed one way
+to simplify the trick.
 
-Append-only workloads can also do a lot better: we only need to GC old
-pages when they have been mutated or deleted.  We could amortise GC
-scans independently of flattening fresh data into new segments in the
-base log.  Write amplification is then only an issue for mutations,
-while appends only pay for copies from \\(L_0\\) to \\(L_1\\) and
-\\(L_1\\) to a fresh segment in the final base log.
+We don't need such complexity: we know our values are large, and keys
+small (e.g., 128-bit uuid), so we can easily amortise *one* in-memory
+record per key-value pair.
 
-In all cases, freer-form restructuring comes at the expense of
-more directories (dictionary from page id to location) for each
-layer that may be restructured independently of more recent data.
+That in-memory record can tell us:
 
-Another problem with the linked list structure is the way it fully
-serialises I/O.  We can instead store multiple locators (e.g., up to
-one per tier) directly in the in-memory dictionary.  This both allows
-parallel I/O, and makes it easier to restructure old data without
-rewriting younger changes that refer to that old data.
+1. where we can find the base data
+2. where we can find any additional diff
 
-With such an approach, we could flatten changes to new log segments,
-and then scan older segments only to delete useless records.
+The base data contains an updated version of the page's full contents.
+The diff consists of application-specific payload; there's only one
+such payload per record, so the application must concatenate multiple
+diffs until it wants to generates a fully flattened value.
 
-Lifetime and locality hints would also make sense.  For example,
-internal B-Tree nodes are longer lived than leaves, so we probably
-want to store internal nodes and leaves in different log segment
-files.  That doesn't change the worst-case bounds, but increases the
-practical probability that we will scan a segment and find there's
-nothing to do (we can also decline to rewrite a segment when the
-wasted space is \\(<2\%\\), to heuristically waste a bit more space
-and reduce write I/O).
+I think it makes sense to keep around sqrt(page size) diffs before
+flattening.
+
+Assume we have a base layer without any redundant data (i.e., only
+base data, no diffs), in small (dozen MBs maybe) segments, each tasked
+with non-overlapping ranges of the keyspace.
+
+Let's say we have up to ~20% of the data set size in queued writes.
+
+Let's structure that 20% as ~200 layers with 0.1% of the data size each
+(plus the in-memory ingress layer).  Each layer is a frozen
+hash dictionary, easy to construct and then search.
+
+The layers also function as a FIFO queue: whenever we add a layer to
+the queue, we must remove another.
+
+We can remove a queued layer by dumping it to the base layer (i.e.,
+applying any diff to the current base data and updating the
+corresponding base chunk with that new flattened payload).  Of course,
+if we're going to rewrite a base segment, we might as well absorb all
+other records in that segment.  We can easily find them because
+there's an in-memory table mapping keys to data locators.
+
+Hashing helps here: the write patterns cannot create "clumps," except
+for outright repeated keys, and flattening handles that.  Letting each
+layer drive the rewrite victims like that evens out only thanks to
+hashing.
+
+Because we apply changes eagerly, as soon as the corresponding base
+segment is rewritten, layers will often be mostly filled with
+information that has already been dumped or is otherwise obsolete
+(e.g., a base or diff record that has already been replaced).
+
+The prevalence of useless records can make it hard to get a bound on
+write amplification.
+
+It's also possible to compress a few layers together such that they
+contain on redundant data, and re-enter the queue as a fresh layer.
+For example, we'll probably want to do that with the in-memory ingress
+layer.
+
+TBD what's the best policy here.
 
 That's just an LSM!
 -------------------
