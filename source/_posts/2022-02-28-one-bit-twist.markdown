@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "One-bit twist"
-date: 2022-02-28 23:02:42 -0500
+date: 2022-02-28 23:02:43 -0500
 draft: true
 hidden: true
 comments: true
@@ -18,14 +18,14 @@ independence to guarantee constant or logarithmic expected time per
 operation, in practice, we just take the hit if we're unlucky.
 
 However, hash functions have many more applications than just hash
-tables; for example, statistical estimators.  In such applications,
-knowing exactly how much independence a hash function provides and how
-little an algorithm can work with is crucial.  Plugging an overly weak
-independent hash function in, e.g.,
+tables; for example, statistical estimators.  When implementing
+estimators, knowing exactly how much independence a hash function
+provides (how close it is to a true random function) and how little an
+algorithm can work with is crucial.  Plugging a hash function with
+overly low independence in, e.g.,
 [sketching data structures](https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch)
 becomes a *correctness* problem, rather than one of mere performance.
-I find that to be a particularly important consideration in practice
-because:
+I find that to be an important consideration in practice because:
 
 1. we tend to use statistical sketches when computing the exact ground
    truth is impractical if not infeasible;
@@ -49,8 +49,8 @@ round (32 or 64 bits) output sizes.
 This post shows an alternative bit-at-a-time approach that "twists"
 more efficiently.
 
-Regular tabulation hashing
---------------------------
+Simple tabulation hashing
+-------------------------
 
 Tabulation hashing is usually presented in terms of look-up tables
 from bytes to the hash range (e.g., 64-bit integers).  It's certainly
@@ -66,7 +66,8 @@ In order to tabulation-hash an \\(n-\\)bit input value to an
 \\(m-\\)bit result, we need \\(n\\) pairs of \\(m-\\)bit integers.
 Each bit in the input selects one \\(m-\\)bit integer from the
 corresponding pair, and tabulation hashing `xor`s all the selected
-integers together.
+integers together: \\(h(x) = \bigoplus_{i\in[n]} h_i(x_i),\\) where
+each \\(x_i\\) is a single bit of \\(x.\\)
 
 {% codeblock tabulation.py %}
 def tabhash(value, table):
@@ -95,8 +96,23 @@ def tabhash_mask(value, initial, normalised_table):
     return acc
 {% endcodeblock %}
 
+The loop above is now clearly equivalent to an affine transform with
+bit-matrices, \\(h(x) = A x \oplus b,\\) where the bit matrix \\(A\\)
+and the bit vector \\(b\\) are generated uniformly at random.  This
+affine transformation presentation hopefully makes it obvious that
+such transformations are \\(3-\\)independent, but not
+\\(4-\\)independent: given the values of \\(A x_1 \oplus b\\) and \\(A
+x_2 \oplus b\\) for any \\(x_1, x_2\\), \\(A x_3 \oplus b\\) may still
+take any value in the output range.  However, given three values
+\\(h(x_1), h(x_2), h(x_3)\\) for
+\\(x_1 = 0)\\) and \\(x_2 = \mathbf{e}_i \neq x_3 = \mathbf{e}_j\\),
+it's possible to pin down \\(b\\), and as well as two columns of
+\\(A\\)... enough to predict \\(A (\mathbf{e}_i \oplus \mathbf{e}_j)
+\oplus b.\\)
+
 It's much more common to index the look-up table with \\(k\\) bits at a
-time, which divides the number of loop iterations by \\(k.\\)
+time in order to divide the number of iterations by \\(k,\\) a
+[classic application of the Four Russians' trick](https://www.amazon.com/Design-Analysis-Computer-Algorithms/dp/0201000296).
 
 {% codeblock tabulation.py %}
 def tabhash_chunked(value, k, ktable):
@@ -111,8 +127,8 @@ def tabhash_chunked(value, k, ktable):
 {% endcodeblock %}
 
 Letting \\(k = 8\\) is often a good choice, as long as one can afford
-the resulting large look-up table (\\(8 \times 256 \times w = 2048w\\)
-bits when hashing 64-bit inputs to \\(w-\\)bit results).  As long as
+the resulting large look-up table (\\(8 \cdot 256 \cdot w = 2048w\\)
+bits to hash 64-bit inputs into \\(w-\\)bit results).  When
 the look-up table is all cached, it's easy to hit 12-13 cycles for a
 64 bit to 64 bit hash, on a 2 GHz EPYC 7713.
 
@@ -157,13 +173,13 @@ additional character from all but the last character (or any other
 one) in the initial input, and `xor`ing that last character with the
 newly derived one before looking up the result in a random table.
 
-Given a character size of \\(c\\) bits, the additional character is
-generated with a \\(c \times c\\)-bit look-up table for each character
-in the input.  When the result size is shorter than the word size
-(e.g., a 56-bit output on 64-bit machines), we can conveniently find
-this additional character in unused output bits.  Otherwise, we must
-perform double the lookups.  In C, the general case might look like
-the following.
+Given characters of size \\(s\\) bits, the additional character is
+generated with an \\(s \times s\\)-bit look-up table for each original
+character in the input.  When the result size is shorter than the word
+size (e.g., a 56-bit output on 64-bit machines), we can conveniently
+find this additional character in unused output bits.  Otherwise, we
+must perform double the lookups.  In C, the general case might look
+like the following.
 
 {% codeblock tabulation.c %}
 uint64_t
@@ -199,9 +215,9 @@ twisted_hash_byte(uint64_t x, const uint64_t *byte_table,
 Double the operations, half the speed (around 22 cycles/hash on an EPYC
 7713).
 
-Working with bits, i.e., \\(c = 1\\), will let us recover most of
+Working with bits, i.e., \\(s = 1\\), will let us recover most of
 plain tabulation hashing's performance by computing `additional` with
-a SWAR algorithm.  We just saw that \\(c = 1\\) does not preclude an
+a SWAR algorithm.  We just saw that \\(s = 1\\) does not preclude an
 implementation that indexes in look-up tables with full bytes, so we
 will do so while preserving the speed of byte-at-a-time processing for
 the rest of the hash.
@@ -219,26 +235,29 @@ So, given the first 63 bits, we can compute the additional character
 by `and`ing it with a random uniform 63-bit integer, and taking the
 parity of the result.  When we want to directly compute the result of
 `xor`ing that with the 64th bit, we can `and` all 64 input bits with a
-random uniform integer in \\([2^{63}, 2^{64})\\), and take the parity
-of *that*.
+random uniform integer in \\(\left[2^{63}, 2^{64}\right)\\), and take
+the parity of *that*.
 
 Parity isn't a common hardware function anymore, at least not on full
 64-bit integers... but population count is, and 
 `parity(x) == popcount(x) % 2`.
 
-I see two ways to use this simple tabulation-hash for bit outputs.  We
-we could let regular tabulation hashing run its course, compute the
-derived bit independently, and use that to conditionally `xor` in an
-additional random integer.  Alternatively, We could compute the
-derived bit, `xor` that with the distinguished bit, and *then* let
-regular byte-indexed tabulation hashing proceed on the modified input.
+I see two ways we can use this simple tabulation hash funcion for bit
+outputs.  We we could let regular tabulation hashing run its course,
+compute the derived bit independently, and use that to conditionally
+`xor` in an additional random integer.  Alternatively, we could
+compute the derived bit, `xor` that with the distinguished bit, and
+*then* let regular byte-indexed tabulation hashing proceed on the
+modified input.  This corresponds to the "less efficient" but
+mathematically convenient version of twisted tabulation hashing in
+[Section 1.2 of Pătrașcu and Thorup](https://epubs.siam.org/doi/pdf/10.1137/1.9781611973105.16#page=2).
 
 The former might make sense in a vectorised bit-at-a-time
-implementation.  However, as long as we're paying for full-blown table
-lookups, we might as well `xor` the derived bit in before one of the
-lookups.  In C, bit-twisted tabulation hashing can look like the
+implementation.  However, while we're already paying for full-blown
+table lookups, we might as well `xor` the derived bit in before
+looking up.  In C, bit-twisted tabulation hashing can look like the
 following, which runs in at 14 cycles per hash on my EPYC 7713, i.e.,
-around one more cycle than regular tabulation hashing.
+around one more cycle per hash than regular tabulation hashing.
 
 {% codeblock bit_twisted.c %}
 uint64_t
@@ -269,10 +288,40 @@ hash_twisted(uint64_t x, uint64_t derived_mask, const uint64_t *tab)
 
 Starting with a bit-oriented view of tabulation hashing lead us to a
 much more efficient version of "twisting," without giving up any of
-[twisted tabulation hashing's surprising strength](https://arxiv.org/abs/1505.01523).
+[its surprising strength](https://arxiv.org/abs/1505.01523).
+
+A bit of linear algebra shows we can do even better: the "twisting"
+step is a linear transform on bit vectors (multiplication by a
+half-arrowhead-shaped matrix), and affine transforms are closed under
+composition.  Now that we view simple tabulation hashing as an affine
+bitwise transformation accelerated with a precomputed data structure,
+it's clear that twisting can be free!
+
+```
+[1     ... ]
+[ 1    ... ]
+[  1   ... ]
+[   1  ... ]
+    ...
+[ ...   1  ]
+[ ...    1 ]
+[????...??1]
+```
+
+Free twisting definitely sounds a bit odd to me, but feels compatible with
+the "Insufficiency of simple tabulation for general Chernoff bounds"
+subsection of [Pătrașcu and Thorup](https://epubs.siam.org/doi/pdf/10.1137/1.9781611973105.16#page=3).
+Essentially, twisted tabulation hashing works around "weak" sets of
+random parameters.  The bit matrix view shows that we can instead
+generate such weak parameters with a much lower probability.
+
+For twisted tabulation hashing, unlike simple tabulation hashing,
+replacing our carefully structured affine transform with a uniformly
+generated random one would hurt: the additional structure avoids
+particularly weak parameters.
 
 Why does 64 bit \\(\rightarrow\\) 64 bit hashing matter?
------------------------------------------
+--------------------------------------------------------
 
 The whole exercise seems a priori pointless: we're doing a lot of work
 to "hash" 64 bit values down to... 64 bits.  Of course, the same ideas
@@ -281,14 +330,14 @@ work at least as well when reducing to fewer bits, but the \\(2^w
 
 It's important to remember that tabulation hashing doesn't just reduce
 the dimensionality of its input, it also shuffles away correlation or
-clumping in the inputs.  Twister tabulation hashing provably does so
+clumping in the inputs.  Twisted tabulation hashing provably does so
 well enough for, e.g., [minwise hashing](https://arxiv.org/abs/1404.6724).
 
 Strong hash functions for fixed-size inputs are also important because
 they let us construct strong and fast hash functions modularly: we can
 use a fast but merely 2-independent (i.e., [universal](https://en.wikipedia.org/wiki/Universal_hashing))
 hash function like [UMASH](https://github.com/backtrace-labs/umash) to
-reduce large input data to 64 or 128 bits with minimal chances of
+reduce an input dataset to 64 or 128 bits with minimal chances of
 collision, and shuffle the result with a strong hash function like
 twisted tabulation hashing.
 
@@ -297,8 +346,8 @@ has to avoid collisions; the strong hash functions takes the first
 function's 2-independent output, and bootstraps it into something
 3-independent or more.  As long as the probability of *any* collision
 in the first hash function's output is negligible, we can treat the
-composition of the fast-but-weak and
-\\(k-\\)independent-but-fixed-size functions as
+composition of the fast-but-weak with the
+\\(k-\\)independent-but-fixed-size functions as a
 fast-and-\\(k-\\)independent hash function.
 
 [We only know \\(2-\\)independent variable-length hash functions](https://arxiv.org/abs/1008.1715),
