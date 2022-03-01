@@ -8,6 +8,9 @@ comments: true
 categories: 
 ---
 
+<emph>This is DOA: twisted tabulation hashing depends on the size of
+the alphabet, and doesn't really work for boolean characters.</emph>
+
 [Tabulation hashing](https://arxiv.org/abs/1011.5200) is one
 of a few practical approaches that guarantee 
 [high-independence in hash functions](https://en.wikipedia.org/wiki/K-independent_hashing).
@@ -46,8 +49,8 @@ hashing punches above its 3-independence weight.
 its standard presentation is awkward to implement efficiently for
 round (32 or 64 bits) output sizes.
 
-This post shows an alternative bit-at-a-time approach that "twists"
-more efficiently.
+This post shows an alternative bit-at-a-time approach where "twisting"
+is free.
 
 Simple tabulation hashing
 -------------------------
@@ -72,7 +75,7 @@ each \\(x_i\\) is a single bit of \\(x.\\)
 {% codeblock tabulation.py %}
 def tabhash(value, table):
     """Computes the tabulation hash for `value`, a stream of bits,
-    and a `table` random uniform integers."""
+    and a `table` of random uniform integers."""
     acc = 0
     for bit, pair in zip(value, table):
         acc ^= pair[bit]
@@ -88,7 +91,7 @@ cycles for a 64 bit to 64 bit hash with AVX, on a 2 GHz EPYC 7713.
 {% codeblock tabulation.py %}
 def tabhash_mask(value, initial, normalised_table):
     """Computes the tabulation hash for `value`, a stream of bits,
-    and a `table` random uniform integers."""
+    and a `normalised_table` of random uniform integers."""
     acc = initial
     for bit, hash in zip(value, normalised_table):
         if bit != 0:
@@ -116,8 +119,8 @@ time in order to divide the number of iterations by \\(k,\\) a
 
 {% codeblock tabulation.py %}
 def tabhash_chunked(value, k, ktable):
-    """Computes the tabulation hash for `value`, a stream of bits,
-    and a `table` random uniform integers indexed `k` bits at a time."""
+    """Computes the tabulation hash for `value`, a stream of bits, and
+    a `ktable` of random uniform integers indexed `k` bits at a time."""
     acc = 0
     for position, bits in enumerate(zip(*([iter(value)] * k))):
         # convert a list of `k` bits to a k-bit unsigned integer value.
@@ -173,13 +176,14 @@ additional character from all but the last character (or any other
 one) in the initial input, and `xor`ing that last character with the
 newly derived one before looking up the result in a random table.
 
-Given characters of size \\(s\\) bits, the additional character is
-generated with an \\(s \times s\\)-bit look-up table for each original
-character in the input.  When the result size is shorter than the word
-size (e.g., a 56-bit output on 64-bit machines), we can conveniently
-find this additional character in unused output bits.  Otherwise, we
-must perform double the lookups.  In C, the general case might look
-like the following.
+Given characters of size \\(s\\) bits (alphabet \\(\Sigma\\) of
+cardinality \\(2^s\\)), the additional character is generated with an
+\\(s \times s\\)-bit look-up table for each original character in the
+input.  When the result size is shorter than the word size (e.g., a
+56-bit output on 64-bit machines), we can conveniently find this
+additional character in unused output bits.  Otherwise, we must
+perform double the lookups.  In C, the general case might look like
+the following.
 
 {% codeblock tabulation.c %}
 uint64_t
@@ -196,7 +200,6 @@ twisted_hash_byte(uint64_t x, const uint64_t *byte_table,
         acc ^= byte_table[256 * 4 + ((x >> 32) & 0xFF)];
         acc ^= byte_table[256 * 5 + ((x >> 40) & 0xFF)];
         acc ^= byte_table[256 * 6 + ((x >> 48) & 0xFF)];
-
 
         additional = twisting_table[256 * 0 + ((x >> 0) & 0xFF)];
         additional ^= twisting_table[256 * 1 + ((x >> 8) & 0xFF)];
@@ -240,9 +243,10 @@ the parity of *that*.
 
 Parity isn't a common hardware function anymore, at least not on full
 64-bit integers... but population count is, and 
-`parity(x) == popcount(x) % 2`.
+`parity(x) == popcount(x) % 2`.  That's
+[the one-bit hash function I blogged about in 2017](https://pvk.ca/Blog/2017/04/02/three-universal-hashing-in-four-instructions/).
 
-I see two ways we can use this simple tabulation hash funcion for bit
+I see two ways we can use this simple tabulation hash function for bit
 outputs.  We we could let regular tabulation hashing run its course,
 compute the derived bit independently, and use that to conditionally
 `xor` in an additional random integer.  Alternatively, we could
@@ -298,14 +302,13 @@ bitwise transformation accelerated with a precomputed data structure,
 it's clear that twisting can be free!
 
 ```
-[1     ... ]
-[ 1    ... ]
-[  1   ... ]
-[   1  ... ]
+[1    ... ]
+[ 1   ... ]
+[  1  ... ]
     ...
-[ ...   1  ]
-[ ...    1 ]
-[????...??1]
+[ ...  1  ]
+[ ...   1 ]
+[???...??1]
 ```
 
 Free twisting definitely sounds a bit odd to me, but feels compatible with
@@ -317,8 +320,16 @@ avoid generating such weak parameters in the first place.
 
 For twisted tabulation hashing, unlike simple tabulation hashing,
 replacing our carefully structured affine transform with a uniformly
-generated random one would hurt: it's thanks to this additional
-structure that we avoid particularly weak parameters.
+generated random one would hurt: it's this exact structure that avoids
+particularly weak parameters.
+
+This linear algebraic trick only works because neither simple
+tabulation hashing nor twisted tabulation hashing impose any
+constraint on the size of the alphabet.  It does *not* extend to
+[double tabulation](https://arxiv.org/abs/1311.3121), where the
+additional independence grows with the alphabet size 
+\\(|\Sigma| = 2^s\\) and shrink with the number of characters in
+the input.
 
 Why does 64 bit \\(\rightarrow\\) 64 bit hashing matter?
 --------------------------------------------------------
