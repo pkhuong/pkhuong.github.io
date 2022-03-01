@@ -3,8 +3,6 @@ layout: post
 title: "Bounded dynamicism with cross-modifying code"
 date: 2021-12-19 19:43:01 -0500
 comments: true
-hidden: true
-draft: true
 categories:
 ---
 
