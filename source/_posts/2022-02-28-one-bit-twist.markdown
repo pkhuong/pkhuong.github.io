@@ -8,8 +8,8 @@ comments: true
 categories: 
 ---
 
-<emph>This is DOA: twisted tabulation hashing depends on the size of
-the alphabet, and doesn't really work for boolean characters.</emph>
+**This is DOA: twisted tabulation hashing depends on the size of the
+alphabet, and doesn't really work for boolean characters.**
 
 [Tabulation hashing](https://arxiv.org/abs/1011.5200) is one
 of a few practical approaches that guarantee 
