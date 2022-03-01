@@ -313,12 +313,12 @@ the "Insufficiency of simple tabulation for general Chernoff bounds"
 subsection of [Pătrașcu and Thorup](https://epubs.siam.org/doi/pdf/10.1137/1.9781611973105.16#page=3).
 Essentially, twisted tabulation hashing works around "weak" sets of
 random parameters.  The bit matrix view shows that we can instead
-generate such weak parameters with a much lower probability.
+avoid generating such weak parameters in the first place.
 
 For twisted tabulation hashing, unlike simple tabulation hashing,
 replacing our carefully structured affine transform with a uniformly
-generated random one would hurt: the additional structure avoids
-particularly weak parameters.
+generated random one would hurt: it's thanks to this additional
+structure that we avoid particularly weak parameters.
 
 Why does 64 bit \\(\rightarrow\\) 64 bit hashing matter?
 --------------------------------------------------------
