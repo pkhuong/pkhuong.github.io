@@ -1,0 +1,619 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>One-bit twist - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2022/02/28/one-bit-twist/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">One-bit twist</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Feb
+  
+28th, 
+2022
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2022/02/28/one-bit-twist/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p><a href="https://arxiv.org/abs/1011.5200">Tabulation hashing</a> is one
+of a few practical approaches that guarantee 
+<a href="https://en.wikipedia.org/wiki/K-independent_hashing">high-independence in hash functions</a>.
+A priori, \(k-\)independence seems like an obscure academic concept.
+That’s probably because hash tables don’t care too much about higher
+independence in practice: although linear probing needs high
+independence to guarantee constant or logarithmic expected time per
+operation, in practice, we just take the hit if we’re unlucky.</p>
+
+<p>However, hash functions have many more applications than just hash
+tables; for example, statistical estimators.  In such applications,
+knowing exactly how much independence a hash function provides and how
+little an algorithm can work with is crucial.  Plugging an overly weak
+independent hash function in, e.g.,
+<a href="https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch">sketching data structures</a>
+becomes a <em>correctness</em> problem, rather than one of mere performance.
+I find that to be a particularly important consideration in practice
+because:</p>
+
+<ol>
+  <li>we tend to use statistical sketches when computing the exact ground
+truth is impractical if not infeasible;</li>
+  <li>we know sketches can <em>sometimes</em> fail with extremely inaccurate
+estimates… an ill-suited hash function simply makes such failures
+more probable than documented.</li>
+</ol>
+
+<p>Given these two facts, it seems hard to empirically determine whether
+one is or isn’t running into issues caused by a weakly independent
+hash function.  That’s why I think it makes sense to err on the side
+of caution and use provably strong enough hash functions in
+statistical sketches and similar algorithms.</p>
+
+<p><a href="https://arxiv.org/abs/1011.5200">Tight analyses</a> show that tabulation
+hashing punches above its 3-independence weight.
+<a href="https://epubs.siam.org/doi/pdf/10.1137/1.9781611973105.16">Twisted tabulation hashing</a>, a small tweak on top of regular tabulation hashing,
+<a href="https://arxiv.org/abs/1505.01523">does even better</a>.  Unfortunately,
+its standard presentation is awkward to implement efficiently for
+round (32 or 64 bits) output sizes.</p>
+
+<p>This post shows an alternative bit-at-a-time approach that “twists”
+more efficiently.</p>
+
+<h2 id="regular-tabulation-hashing">Regular tabulation hashing</h2>
+
+<p>Tabulation hashing is usually presented in terms of look-up tables
+from bytes to the hash range (e.g., 64-bit integers).  It’s certainly
+an efficient way to implement the scheme, at least for applications
+where the keys are short and the tables hot in cache.</p>
+
+<p>I believe this section’s bit-oriented presentation makes more sense.
+The byte-driven look-up table becomes a mere instance of 
+<a href="https://en.wikipedia.org/wiki/Method_of_Four_Russians">the four Russians’ trick</a>,
+where a \(2^k\) space blow-up buys us a \(k\times\) speedup.</p>
+
+<p>In order to tabulation-hash an \(n-\)bit input value to an
+\(m-\)bit result, we need \(n\) pairs of \(m-\)bit integers.
+Each bit in the input selects one \(m-\)bit integer from the
+corresponding pair, and tabulation hashing <code>xor</code>s all the selected
+integers together.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>tabulation.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">tabhash</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">table</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Computes the tabulation hash for `value`, a stream of bits,</span>
+</span><span class="line"><span class="sd">    and a `table` random uniform integers.&quot;&quot;&quot;</span>
+</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">bit</span><span class="p">,</span> <span class="n">pair</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">table</span><span class="p">):</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">pair</span><span class="p">[</span><span class="n">bit</span><span class="p">]</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">acc</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We could also assume the table is normalised such that
+<code>table[_][0] = 0</code>, and compensate for that normalisation with a
+randomly generated uniform initial value.  This tweak is useful when
+vectorising a frugal bit-oriented implementation: I’ve seen 34-36
+cycles for a 64 bit to 64 bit hash with AVX, on a 2 GHz EPYC 7713.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>tabulation.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">tabhash_mask</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">initial</span><span class="p">,</span> <span class="n">normalised_table</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Computes the tabulation hash for `value`, a stream of bits,</span>
+</span><span class="line"><span class="sd">    and a `table` random uniform integers.&quot;&quot;&quot;</span>
+</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="n">initial</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">bit</span><span class="p">,</span> <span class="nb">hash</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">normalised_table</span><span class="p">):</span>
+</span><span class="line">        <span class="k">if</span> <span class="n">bit</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+</span><span class="line">            <span class="n">acc</span> <span class="o">^=</span> <span class="nb">hash</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">acc</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>It’s much more common to index the look-up table with \(k\) bits at a
+time, which divides the number of loop iterations by \(k.\)</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>tabulation.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">tabhash_chunked</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">ktable</span><span class="p">):</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Computes the tabulation hash for `value`, a stream of bits,</span>
+</span><span class="line"><span class="sd">    and a `table` random uniform integers indexed `k` bits at a time.&quot;&quot;&quot;</span>
+</span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">    <span class="k">for</span> <span class="n">position</span><span class="p">,</span> <span class="n">bits</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="o">*</span><span class="p">([</span><span class="nb">iter</span><span class="p">(</span><span class="n">value</span><span class="p">)]</span> <span class="o">*</span> <span class="n">k</span><span class="p">))):</span>
+</span><span class="line">        <span class="c1"># convert a list of `k` bits to a k-bit unsigned integer value.</span>
+</span><span class="line">        <span class="n">key</span> <span class="o">=</span> <span class="n">bits_to_int</span><span class="p">(</span><span class="n">bits</span><span class="p">)</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">ktable</span><span class="p">[</span><span class="n">position</span><span class="p">][</span><span class="n">key</span><span class="p">]</span>
+</span><span class="line">    <span class="k">return</span> <span class="n">acc</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Letting \(k = 8\) is often a good choice, as long as one can afford
+the resulting large look-up table (\(8 \times 256 \times w = 2048w\)
+bits when hashing 64-bit inputs to \(w-\)bit results).  As long as
+the look-up table is all cached, it’s easy to hit 12-13 cycles for a
+64 bit to 64 bit hash, on a 2 GHz EPYC 7713.</p>
+
+<p>In the classic formulation, each run of \(k\) bytes is a
+“character.”  For example, a 64-bit value split in bytes would be a
+string of 8 characters of one byte each.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>tabulation.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">uint64_t</span>
+</span><span class="line"><span class="nf">tabhash_byte_chunked</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="k">const</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">byte_table</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">uint64_t</span> <span class="n">acc</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">acc</span> <span class="o">=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">0</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">1</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">16</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">3</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">24</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">4</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">5</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">40</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">6</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">48</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">7</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">56</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Of course, if we’re going to look up 8 bits at a time for each
+<code>position</code>, we don’t have to derive 256 values by <code>xor</code>-ing together
+one of 8 random values (e.g., <code>ktable[0][3] = table[0][1] ^
+table[1][1] ^ table[2][0] ...</code>): we might as well populate
+<code>ktable</code> with independently generated integers.  As far as I
+understand, this does not <em>provably</em> help, but can’t hurt: it can be
+seen as <code>xor</code>-combining the initial bit-driven table with an
+independent random function for each byte.</p>
+
+<h2 id="bit-twisted-tabulation-hashing">Bit-twisted tabulation hashing</h2>
+
+<p>Pătrașcu and Thorup’s <a href="https://epubs.siam.org/doi/pdf/10.1137/1.9781611973105.16">twisted tabulation hashing</a>
+provably strengthens regular tabulation hashing by deriving an
+additional character from all but the last character (or any other
+one) in the initial input, and <code>xor</code>ing that last character with the
+newly derived one before looking up the result in a random table.</p>
+
+<p>Given a character size of \(c\) bits, the additional character is
+generated with a \(c \times c\)-bit look-up table for each character
+in the input.  When the result size is shorter than the word size
+(e.g., a 56-bit output on 64-bit machines), we can conveniently find
+this additional character in unused output bits.  Otherwise, we must
+perform double the lookups.  In C, the general case might look like
+the following.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>tabulation.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">uint64_t</span>
+</span><span class="line"><span class="nf">twisted_hash_byte</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="k">const</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">byte_table</span><span class="p">,</span>
+</span><span class="line">    <span class="k">const</span> <span class="kt">uint8_t</span> <span class="o">*</span><span class="n">twisting_table</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">uint64_t</span> <span class="n">acc</span><span class="p">;</span>
+</span><span class="line">        <span class="kt">uint8_t</span> <span class="n">additional</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">acc</span> <span class="o">=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">0</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">1</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">16</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">3</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">24</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">4</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">5</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">40</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">6</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">48</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line">        <span class="n">additional</span> <span class="o">=</span> <span class="n">twisting_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">0</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">additional</span> <span class="o">^=</span> <span class="n">twisting_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">1</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">additional</span> <span class="o">^=</span> <span class="n">twisting_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">16</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">additional</span> <span class="o">^=</span> <span class="n">twisting_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">3</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">24</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">additional</span> <span class="o">^=</span> <span class="n">twisting_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">4</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">additional</span> <span class="o">^=</span> <span class="n">twisting_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">5</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">40</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">additional</span> <span class="o">^=</span> <span class="n">twisting_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">6</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">48</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">7</span> <span class="o">+</span> <span class="p">(</span><span class="n">additional</span> <span class="o">^</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">56</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">))];</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Double the operations, half the speed (around 22 cycles/hash on an EPYC
+7713).</p>
+
+<p>Working with bits, i.e., \(c = 1\), will let us recover most of
+plain tabulation hashing’s performance by computing <code>additional</code> with
+a SWAR algorithm.  We just saw that \(c = 1\) does not preclude an
+implementation that indexes in look-up tables with full bytes, so we
+will do so while preserving the speed of byte-at-a-time processing for
+the rest of the hash.</p>
+
+<p>When the additional character is a single bit, <code>tabhash_mask</code> shows we
+can compute it with \(n - 1\) bits, and an initial value.  For each
+input bit except the last, that bit equiprobably affects or doesn’t
+affect the derived bit.  The result indexes in a randomly generated
+look-up table, so we don’t even need a random initial value: the
+impact of that initial value is equivalent to permuting the look-up
+table, and a look-up table of random uniform variates permutes to
+another look-up table of random uniforms.</p>
+
+<p>So, given the first 63 bits, we can compute the additional character
+by <code>and</code>ing it with a random uniform 63-bit integer, and taking the
+parity of the result.  When we want to directly compute the result of
+<code>xor</code>ing that with the 64th bit, we can <code>and</code> all 64 input bits with a
+random uniform integer in \([2^{63}, 2^{64})\), and take the parity
+of <em>that</em>.</p>
+
+<p>Parity isn’t a common hardware function anymore, at least not on full
+64-bit integers… but population count is, and 
+<code>parity(x) == popcount(x) % 2</code>.</p>
+
+<p>I see two ways to use this simple tabulation-hash for bit outputs.  We
+we could let regular tabulation hashing run its course, compute the
+derived bit independently, and use that to conditionally <code>xor</code> in an
+additional random integer.  Alternatively, We could compute the
+derived bit, <code>xor</code> that with the distinguished bit, and <em>then</em> let
+regular byte-indexed tabulation hashing proceed on the modified input.</p>
+
+<p>The former might make sense in a vectorised bit-at-a-time
+implementation.  However, as long as we’re paying for full-blown table
+lookups, we might as well <code>xor</code> the derived bit in before one of the
+lookups.  In C, bit-twisted tabulation hashing can look like the
+following, which runs in at 14 cycles per hash on my EPYC 7713, i.e.,
+around one more cycle than regular tabulation hashing.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>bit_twisted.c </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">uint64_t</span>
+</span><span class="line"><span class="nf">hash_twisted</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">derived_mask</span><span class="p">,</span> <span class="k">const</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">tab</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line">        <span class="kt">uint64_t</span> <span class="n">acc</span><span class="p">;</span>
+</span><span class="line">        <span class="kt">uint8_t</span> <span class="n">derived</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="cm">/* We&#39;ll mix the derived bit with the *56th* bit. */</span>
+</span><span class="line">        <span class="n">assert</span><span class="p">(((</span><span class="n">derived_mask</span> <span class="o">&gt;&gt;</span> <span class="mi">56</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+</span><span class="line">
+</span><span class="line">        <span class="n">derived</span> <span class="o">=</span> <span class="n">__builtin_popcountll</span><span class="p">(</span><span class="n">x</span> <span class="o">&amp;</span> <span class="n">derived_mask</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line">        <span class="cm">/* This unshifted input lets us start work early. */</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">=</span> <span class="n">tab</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">0</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">tab</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">1</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">tab</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">16</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">tab</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">3</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">24</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">tab</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">4</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">tab</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">5</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">40</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">tab</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">6</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">48</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
+</span><span class="line">        <span class="cm">/* By the time we get here, `derived` should be available. */</span>
+</span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">tab</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">7</span> <span class="o">+</span> <span class="p">(((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">56</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)</span> <span class="o">^</span> <span class="n">derived</span><span class="p">)];</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Starting with a bit-oriented view of tabulation hashing lead us to a
+much more efficient version of “twisting,” without giving up any of
+<a href="https://arxiv.org/abs/1505.01523">twisted tabulation hashing’s surprising strength</a>.</p>
+
+<h2 id="why-does-64-bit-rightarrow-64-bit-hashing-matter">Why does 64 bit \(\rightarrow\) 64 bit hashing matter?</h2>
+
+<p>The whole exercise seems a priori pointless: we’re doing a lot of work
+to “hash” 64 bit values down to… 64 bits.  Of course, the same ideas
+work at least as well when reducing to fewer bits, but the \(2^w
+\rightarrow 2^w\) case actually does matter in practice.</p>
+
+<p>It’s important to remember that tabulation hashing doesn’t just reduce
+the dimensionality of its input, it also shuffles away correlation or
+clumping in the inputs.  Twister tabulation hashing provably does so
+well enough for, e.g., <a href="https://arxiv.org/abs/1404.6724">minwise hashing</a>.</p>
+
+<p>Strong hash functions for fixed-size inputs are also important because
+they let us construct strong and fast hash functions modularly: we can
+use a fast but merely 2-independent (i.e., <a href="https://en.wikipedia.org/wiki/Universal_hashing">universal</a>)
+hash function like <a href="https://github.com/backtrace-labs/umash">UMASH</a> to
+reduce large input data to 64 or 128 bits with minimal chances of
+collision, and shuffle the result with a strong hash function like
+twisted tabulation hashing.</p>
+
+<p>The bulk of the work is performed by the first function, which only
+has to avoid collisions; the strong hash functions takes the first
+function’s 2-independent output, and bootstraps it into something
+3-independent or more.  As long as the probability of <em>any</em> collision
+in the first hash function’s output is negligible, we can treat the
+composition of the fast-but-weak and
+\(k-\)independent-but-fixed-size functions as
+fast-and-\(k-\)independent hash function.</p>
+
+<p><a href="https://arxiv.org/abs/1008.1715">We only know \(2-\)independent variable-length hash functions</a>,
+so this construction is pretty useful when we want to drive
+statistical estimates by hashing large records.</p>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Feb
+  
+28th, 
+2022
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2021/12/19/bounded-dynamicism-with-cross-modifying-code/" title="Previous Post: Bounded dynamicism with cross-modifying code">&laquo; Bounded dynamicism with cross-modifying code</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2022 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2022/02/28/one-bit-twist/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2022/02/28/one-bit-twist/';
+      this.page.title = 'One-bit twist';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>

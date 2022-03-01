@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2022-01-25T01:50:52-05:00</updated>
+  <updated>2022-02-28T23:03:43-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -13,6 +13,372 @@
   <generator uri="http://octopress.org/">Octopress</generator>
 
   
+  
+  <entry>
+    <title type="html"><![CDATA[Bounded dynamicism with cross-modifying code]]></title>
+    <link href="https://www.pvk.ca/Blog/2021/12/19/bounded-dynamicism-with-cross-modifying-code/"/>
+    <updated>2021-12-19T19:43:01-05:00</updated>
+    <id>https://www.pvk.ca/Blog/2021/12/19/bounded-dynamicism-with-cross-modifying-code</id>
+    <content type="html"><![CDATA[<p><small>Originally posted on the <a href="https://engineering.backtrace.io/2021-12-19-bounded-dynamicism-with-cross-modifying-code/">Backtrace I/O tech blog</a>.</small></p>
+
+<p>All long-lived programs are either implemented in <a href="https://wiki.c2.com/?DynamicLanguage">dynamic languages</a>,<sup id="fnref:images" role="doc-noteref"><a href="#fn:images" class="footnote" rel="footnote">1</a></sup>
+or eventually <a href="https://en.wikipedia.org/wiki/Greenspun%27s_tenth_rule">Greenspun</a>
+themselves into subverting static programming
+languages to create a dynamic system (e.g., Unix process trees). The
+latter approach isn’t a bad idea, but it’s easy to introduce more
+flexibility than intended (e.g.,
+<a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-44228">data-driven JNDI lookups</a>)
+when we add late binding features piecemeal, without a holistic view
+of how all the interacting components engender a weird program
+modification language.</p>
+
+<p>At Backtrace, we mostly implement late (re)binding by isolating subtle
+logic in dedicated executables with short process lifetimes: we can
+replace binaries on disk atomically, and their next invocation will
+automatically pick up the change. In a pinch, we sometimes edit
+template or Lua source files and hot reload them in <a href="http://openresty.org/en/">nginx</a>.
+We prefer this to first-class programmatic support for runtime
+modification because Unix has a well understood permission model
+around files, and it’s harder to bamboozzle code into overwriting
+files when that code doesn’t perform any disk I/O.</p>
+
+<p>However, these patterns aren’t always sufficient. For example, we
+sometimes wish to toggle code that’s deep in performance-sensitive
+query processing loops, or tightly coupled with such logic. That’s
+when we rely on <a href="https://github.com/backtrace-labs/dynamic_flag">our <code>dynamic_flag</code> library</a>.</p>
+
+<p>This library lets us tweak flags at runtime, but flags can only take
+boolean values (enabled or disabled), so the dynamicism it introduces
+is hopefully bounded enough to avoid unexpected emergent
+complexity.  The functionality looks like classic feature flags,
+but thanks to the flags’ minimal runtime overhead coupled with the
+ability to flip them at runtime, there are additional use cases, such
+as disabling mutual exclusion logic during single-threaded startup or
+toggling log statements. The library has also proved invaluable for crisis
+management, since we can leave flags (enabled by default) in
+well-trodden pieces of code without agonising over their impact on
+application performance. These flags can serve as ad hoc circuit
+breakers around complete features or specific pieces of code when new
+inputs tickle old latent bugs.</p>
+
+<p>The secret behind this minimal overhead? Cross-modifying machine code!</p>
+
+<p>Intel tells us we’re not supposed to do that, at least not without
+pausing threads… yet the core of <a href="https://github.com/backtrace-labs/dynamic_flag">the <code>dynamic_flag</code> C library</a>
+has been toggling branches on thousands of machines for years, without
+any issue.  It’s available under the
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/main/LICENSE">Apache license</a>
+for other adventurous folks.</p>
+
+<h2 id="overhead-matters">Overhead matters</h2>
+
+<p>Runtime efficiency is an essential feature in <code>dynamic_flag</code>—
+enough to justify mutating machine code while it’s executing on other
+cores
+—not only because it unlocks additional use cases, but, more
+importantly, because it frees programmers from worrying about the
+performance impact of branching on a flag in the most obvious
+location, even if that’s in the middle of a hot inner loop.</p>
+
+<p>With the aim of encouraging programmers to spontaneously protect code
+with flag checks, without prodding during design or code review, we
+designed <code>dynamic_flag</code> to minimise the amount of friction and mental
+overhead of adding a new feature flag. That’s why we care so much
+about all forms of overhead, not just execution time. For example,
+there’s no need to break one’s flow and register flags separately from
+their use points. Adding a feature flag should not feel like a chore.</p>
+
+<p>However, we’re also aware that feature flags tend to stick around
+forever. We try to counteract this inertia with static registration:
+all the <code>DF_*</code> expansions in an executable appear in
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L458-L466">its <code>dynamic_flag_list</code> section</a>, and
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L247-L277">the <code>dynamic_flag_list_state</code> function</a>
+enumerates them at runtime. Periodic audits will reveal flags that
+have become obsolete, and flags are easy to find:
+each flag’s full name includes its location in the source code.</p>
+
+<p>We find value in <code>dynamic_flag</code> because its runtime overhead is
+negligible for all but the most demanding
+code,<sup id="fnref:macro-writers-bill-of-rights" role="doc-noteref"><a href="#fn:macro-writers-bill-of-rights" class="footnote" rel="footnote">2</a></sup> while the interface lets us easily
+make chunks of code toggleable at runtime without having to worry
+about things like “where am I supposed to register this new option?”
+The same system is efficient <em>and</em> ergonomic enough for all teams in
+all contexts, avoids contention in our source tree, and guarantees
+discoverability for whoever happens to be on call.</p>
+
+<h2 id="how-to-use-dynamic_flag">How to use <code>dynamic_flag</code></h2>
+
+<p>All dynamic flags have a “kind” (namespace) string, and a name. We
+often group all flags related to an experimental module or feature in
+the same “kind,” and use the name to describe the specific functionality
+in the feature guarded by the flag. A dynamic flag can be disabled by
+default (like a feature flag), or enabled by default, and evaluating a
+dynamic flag’s value implicitly defines and registers it with the
+<code>dynamic_flag</code> library.</p>
+
+<p>A dynamic flag introduced with <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L98-L110">the <code>DF_FEATURE</code> macro</a>,
+as in the code snippet below, is disabled (evaluates to false) by
+default, and instructs the compiler to optimise for that default value.</p>
+
+<iframe width="800px" height="400px" src="https://godbolt.org/e#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:16,endLineNumber:12,positionColumn:16,positionLineNumber:12,selectionStartColumn:16,selectionStartLineNumber:12,startColumn:16,startLineNumber:12),source:'%23include+%3Cstdio.h%3E%0A%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Aint+new_feature(void)%3B%0A%0Aint+foo(void)%0A%7B%0A%0A++++/*+...+preexisting+code...+*/%0A++++printf(%22preexisting+prologue%5Cn%22)%3B%0A%0A++++if+(DF_FEATURE(my_module,+flag_name))+%7B%0A++++++++new_feature()%3B%0A++++%7D%0A%0A++++/*+Old+feature+code+*/%0A++++printf(%22preexisting+epilogue%5Cn%22)%3B%0A++++return+1%3B%0A%7D%0A'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cg112,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:1,endLineNumber:1,positionColumn:1,positionLineNumber:1,selectionStartColumn:1,selectionStartLineNumber:1,startColumn:1,startLineNumber:1),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+gcc+11.2+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4"></iframe>
+
+<p>We can instead enable code by default and optimise for cases where the
+flag is enabled with <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L112-L124">the <code>DF_DEFAULT</code> macro</a>.</p>
+
+<iframe width="800px" height="400px" src="https://godbolt.org/e#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:13,endLineNumber:12,positionColumn:13,positionLineNumber:12,selectionStartColumn:13,selectionStartLineNumber:12,startColumn:13,startLineNumber:12),source:'%23include+%3Cstdio.h%3E%0A%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Aint+now_old_feature(void)%3B%0A%0Aint+foo(void)%0A%7B%0A%0A++++/*+...+preexisting+code...+*/%0A++++printf(%22preexisting+prologue%5Cn%22)%3B%0A%0A++++if+(DF_DEFAULT(my_module,+flag_name))+%7B%0A++++++++now_old_feature()%3B%0A++++%7D%0A%0A++++/*+Old+feature+code+*/%0A++++printf(%22preexisting+epilogue%5Cn%22)%3B%0A++++return+1%3B%0A%7D%0A'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cg112,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:1,endLineNumber:1,positionColumn:1,positionLineNumber:1,selectionStartColumn:1,selectionStartLineNumber:1,startColumn:1,startLineNumber:1),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+gcc+11.2+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4"></iframe>
+
+<p>Each <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L98-L155"><code>DF_*</code> condition</a>
+in the source is actually its own flag;
+a flag’s full name looks like <code>kind:name@source_file:line_number</code> (e.g.,
+<code>my_module:flag_name@&lt;stdin&gt;:15</code>), and each condition has its own
+state record. It’s thus safe, if potentially confusing, to define flags
+of different types (feature or default) with the same kind and
+name. These macros may appear in <a href="https://godbolt.org/#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:1,endLineNumber:17,positionColumn:1,positionLineNumber:17,selectionStartColumn:1,selectionStartLineNumber:17,startColumn:1,startLineNumber:17),source:'%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Aint+old_feature(void)%3B%0A%0Aextern+inline+int+foo(void)%0A%7B%0A%0A++++/*+...+preexisting+code...+*/%0A%0A++++if+(DF_DEFAULT(my_module,+flag_name))+%7B%0A++++++++return+old_feature()%3B%0A++++%7D%0A%0A++++/*+Old+feature+code+*/%0A++++return+0%3B%0A%7D%0A'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cclang1300,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:9,endLineNumber:5,positionColumn:9,positionLineNumber:5,selectionStartColumn:9,selectionStartLineNumber:5,startColumn:9,startLineNumber:5),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+clang+13.0.0+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4">inline</a>
+or
+<a href="https://godbolt.org/#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:18,endLineNumber:21,positionColumn:18,positionLineNumber:21,selectionStartColumn:18,selectionStartLineNumber:21,startColumn:18,startLineNumber:21),source:'%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Aint+old_feature(void)%3B%0A%0Astatic+inline+int+foo(void)%0A%7B%0A%0A++++/*+...+preexisting+code...+*/%0A%0A++++if+(DF_DEFAULT(my_module,+flag_name))+%7B%0A++++++++return+old_feature()%3B%0A++++%7D%0A%0A++++/*+Old+feature+code+*/%0A++++return+0%3B%0A%7D%0A%0Aint+bar(void)%0A%7B%0A%0A++++return+foo()%3B%0A%7D'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cg112,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:9,endLineNumber:5,positionColumn:9,positionLineNumber:5,selectionStartColumn:9,selectionStartLineNumber:5,startColumn:9,startLineNumber:5),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+gcc+11.2+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4">static inline</a>
+functions: each instantiation will get its own metadata block, and an
+arbitrary number of blocks can share the same full name.</p>
+
+<p>Before manipulating these dynamic flags,
+applications must <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L291">call <code>dynamic_flag_init_lib</code> to initialise the library’s state</a>.
+Once the library is initialised, interactive or configuration-driven
+usage typically toggles flags by calling
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L220-L230"><code>dynamic_flag_activate</code> and <code>dynamic_flag_deactivate</code></a> with POSIX extended regexes that match
+the flags’ full names.</p>
+
+<h2 id="using-dynamic_flag-programmatically">Using <code>dynamic_flag</code> programmatically</h2>
+
+<p>The <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L98-L124"><code>DF_FEATURE</code> and <code>DF_DEFAULT</code> macros</a>
+directly map to classic feature flags, but the
+<code>dynamic_flag</code> library still has more to offer. Applications can
+programmatically enable and disable blocks of code to implement a
+restricted form of <a href="https://en.wikipedia.org/wiki/Aspect-oriented_programming">aspect oriented programming</a>:
+<a href="https://en.wikipedia.org/wiki/Advice_(programming)">“advice”</a> cannot
+be inserted post hoc, and must instead be defined inline in the
+source, but may be toggled at runtime by unrelated code.</p>
+
+<p>For example, an application could let individual HTTP requests opt
+into detailed tracing with a query string parameter <code>?tracing=1</code>, and
+set <code>request-&gt;tracing_mode = true</code> in its internal request object when
+it accepts such a request. Environments where fewer than one request
+in a million enables tracing could easily spend more aggregate time
+evaluating <code>if (request-&gt;tracing_mode == true)</code> than they do in the
+tracing logic itself.
+One could try to reduce the overhead by coalescing the trace code in
+fewer conditional blocks, but that puts more distance between the
+tracing code and the traced logic it’s supposed to record, which
+tends to cause the two to desynchronise and adds to development
+friction.</p>
+
+<p>It’s tempting to instead optimise frequent checks for the common case
+(no tracing) with a dynamic flag that is enabled whenever at least one
+in-flight request has opted into tracing. That’s why
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L141-L155">the <code>DF_OPT</code> (for opt-in logic) macro</a> exists.</p>
+
+<iframe width="800px" height="400px" src="https://godbolt.org/e#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,selection:(endColumn:1,endLineNumber:10,positionColumn:1,positionLineNumber:10,selectionStartColumn:1,selectionStartLineNumber:10,startColumn:1,startLineNumber:10),source:'%23include+%3Cstdbool.h%3E%0A%23include+%3Cstdio.h%3E%0A%23include+%3Chttps://raw.githubusercontent.com/backtrace-labs/dynamic_flag/main/include/dynamic_flag.h%3E%0A%0Astruct+request+%7B%0A++++bool+tracing_mode%3B%0A%7D%3B%0A%0Avoid+trace_request(struct+request+*req,+const+char+*func)%3B%0A%0Avoid+foo(struct+request+*req)%0A%7B%0A++++if+(DF_OPT(request_tracing,+check)+%26%26+req-%3Etracing_mode)%0A++++++++trace_request(req,+__FUNCTION__)%3B%0A++++%0A++++return%3B%0A%7D%0A'),l:'5',n:'0',o:'C+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:cg112,filters:(b:'0',binary:'0',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:___c,libs:!(),options:'-O2+-c',selection:(endColumn:1,endLineNumber:1,positionColumn:1,positionLineNumber:1,selectionStartColumn:1,selectionStartLineNumber:1,startColumn:1,startLineNumber:1),source:1,tree:'1'),l:'5',n:'0',o:'x86-64+gcc+11.2+(C,+Editor+%231,+Compiler+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4"></iframe>
+
+<p>The
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L141-L155"><code>DF_OPT</code> macro</a>
+instructs the compiler to assume the flag is disabled, but leaves the
+flag enabled (i.e., the conditional always evaluates
+<code>request-&gt;tracing_mode</code>) until the library is initialised with
+<code>dynamic_flag_init_lib</code>.<sup id="fnref:unreachable" role="doc-noteref"><a href="#fn:unreachable" class="footnote" rel="footnote">3</a></sup> After initialisation,
+the flag acts like a <code>DF_FEATURE</code> (i.e., the overhead is a <code>test eax</code>
+instruction that falls through without any conditional branching)
+until it is explicitly enabled again.</p>
+
+<p>With this flag-before-check pattern, it’s always safe to enable
+<code>request_tracing</code> flags: in the worst case, we’ll just look at the
+request object, see that <code>request-&gt;tracing_mode == false</code>, and skip
+the tracing logic. Of course, that’s not ideal for performance. When
+we definitely know that no request has asked for tracing, we want to
+disable <code>request_tracing</code> flags and not even look at the request
+object’s <code>tracing_mode</code> field.</p>
+
+<p>Whenever the application receives a request that opts into tracing, it
+can enable all flags with kind <code>request_tracing</code> by
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L189-L205">executing <code>dynamic_flag_activate_kind(request_tracing, NULL)</code></a>.
+When that same request leaves the system (e.g., when the application
+has fully sent a response back), the application
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L207-L218">undoes the activation with <code>dynamic_flag_deactivate_kind(request_tracing, NULL)</code></a>.</p>
+
+<p>Activation and deactivation calls actually increment and decrement
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/src/dynamic_flag.c#L99-L110">counters associated with each instance of a <code>DF_...</code> macro</a>, so this scheme works correctly when
+multiple requests with overlapping lifetimes opt into tracing:
+tracing blocks will check whether <code>request-&gt;tracing_mode == true</code>
+whenever at least one in-flight request has <code>tracing_mode == true</code>, and
+skip these conditionals as soon as no such request exists.</p>
+
+<h2 id="practical-considerations-for-programmatic-manipulation">Practical considerations for programmatic manipulation</h2>
+
+<p>Confirming that a flag is set to its expected value (disabled for
+<code>DF_FEATURE</code> and <code>DF_OPT</code>, enabled for <code>DF_DEFAULT</code>) is fast…
+because we shifted all the complexity to the flag flipping
+code. Changing the value for a set of flags is extremely slow
+(milliseconds of runtime and several <a href="https://en.wikipedia.org/wiki/Inter-processor_interrupt">IPIs</a> for
+<a href="https://man7.org/linux/man-pages/man2/mprotect.2.html">multiple <code>mprotect(2)</code> calls</a>), so it only makes sense to use dynamic flags when they are
+rarely activated or deactivated (e.g., less often than once a minute
+or even less often than once an hour).</p>
+
+<p>We have found programmatic flag manipulation to be useful not just for
+opt-in request tracing or to enable log statements, but also to
+minimise the impact of complex logic on program phases that do not
+require them. For example, mutual exclusion and
+<a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">safe memory reclamation deferral (PDF)</a>
+may be redundant while a program is in a single-threaded
+startup mode; we can guard such code behind <code>DF_OPT(steady_state, ...)</code>
+to accelerate startup,
+and enable <code>steady_state</code> flags just before spawning worker threads.</p>
+
+<p>It can also make sense to guard slow paths with <code>DF_OPT</code> when
+a program only enters phases that needs this slow path logic every few minutes. That was the case for a
+<a href="https://www.youtube.com/watch?v=hZDr4pfz0Nc">software transactional memory system with batched updates</a>.
+Most of the time, no update is in flight, so readers never have to
+check for concurrent writes.  These checks can be guarded with
+<code>DF_OPT(stm, ...)</code> conditions., as long as the program enables <code>stm</code>
+flags around batches of updates.  Enabling and disabling all these
+flags can take a while (milliseconds), but, as long as updates are
+infrequent enough, the improved common case (getting rid of a memory
+load and a conditional jump for a read barrier) means the tradeoff
+is favourable.</p>
+
+<p>Even when flags are controlled programmatically, it can be useful to
+work around bugs by manually forcing some flags to remain enabled or
+disabled.  In the tracing example above, we could find a crash in one
+of the tracing blocks, and wish to prevent <code>request-&gt;tracing_mode</code> from
+exercising that block of code.</p>
+
+<p>It’s easy to force a flag into an active state: flag activations
+are counted, so it suffices to <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L220-L224">activate it</a>
+manually, once. However, we want it to be safe <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L226-L230">issue ad hoc <code>dynamic_flag_deactivate</code> calls</a>
+without wedging the system in a weird state, so activation counts don’t go negative.
+Unfortunately, this means we can’t use deactivations
+to prevent, e.g., a crashy request tracing block from being
+activated.</p>
+
+<p>Flags can instead be “unhooked” dynamically.  While unhooked,
+increments to a flag’s activation count are silently disregarded.
+The <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L232-L239"><code>dynamic_flag_unhook</code> function</a>
+unhooks <code>DF_*</code> conditions when their full name matches the extended POSIX regular expression it received as an argument.
+When a flag has been
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L232-L239">“unhook”ed</a>
+more often than it has been
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L241-L245">“rehook”ed</a>,
+attempts to activate it will
+silently no-op. Once a flag has been unhooked, we can
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L226-L230">issue <code>dynamic_flag_deactivate</code> calls</a>
+until <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/src/dynamic_flag.c#L99-L110">its activation count reaches 0</a>.
+At that point, the flag is disabled, and will remain disabled
+until rehooked.</p>
+
+<h2 id="the-core-implementation-trick">The core implementation trick</h2>
+
+<p>The <a href="https://gcc.gnu.org/legacy-ml/gcc-patches/2009-07/msg01556.html">introduction of <code>asm goto</code> in GCC 4.5</a>
+made it possible to <a href="https://lwn.net/Articles/350714/">implement control operators in inline assembly</a>.
+When the condition actually varies at runtime, it usually
+makes more sense to <a href="https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html#:~:text=6.47.2.4%20Flag%20Output%20Operands">set an output variable with a condition code</a>,
+but <code>dynamic_flag</code> conditions are actually static in machine code:
+each <code>DF_*</code> macro expands to <em>one</em> 5-byte instruction,
+<a href="https://c9x.me/x86/html/file_module_x86_id_315.html">a <code>test eax, imm32</code> instruction</a>
+that falls through to the common case when that’s the flag’s value
+(i.e., enabled for <code>DF_DEFAULT</code>, disabled for <code>DF_FEATURE</code> and
+<code>DF_OPT</code>), and a <a href="https://c9x.me/x86/html/file_module_x86_id_147.html">32-bit relative <code>jmp rel32</code> to the unexpected path</a>
+(disabled for <code>DF_DEFAULT</code>, enabled for <code>DF_FEATURE</code> and <code>DF_OPT</code>)
+otherwise. Activating and deactivating dynamic flags toggles the
+corresponding target instructions between <code>test imm32</code> (0xA9) and <code>jmp rel32</code> (0xE9).</p>
+
+<p>The <code>DF_...</code> macros expand into a
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L443-L478">lot more inline assembly than just that one instruction</a>;
+the rest of the expansion is a lot of noise to
+register everything with structs and pointers in dedicated
+sections. Automatic static registration is mostly orthogonal to the
+performance goals, but is key to the (lazy-)programmer-friendly
+interface.</p>
+
+<p>We use <code>test eax, imm32</code> instead of a nop because it’s exactly five
+bytes, just like <code>jmp rel32</code>, and because its 4-byte immediate is in
+the same place as the 4-byte offset of <code>jmp rel32</code>. We can thus encode
+the jump offset at assembly-time, and flip between falling through to
+the common path (<code>test</code>) and jumping to the unexpected path (<code>jmp</code>) by
+overwriting the opcode byte (0xA9 for <code>test</code>, 0xE9 for <code>jmp</code>).</p>
+
+<p>Updating a single byte for each dynamic flag avoids questions
+around the correct order for writes.  This single-byte
+cross-modification (we overwrite instruction bytes while other threads
+may be executing the mutated machine code) also doesn’t affect the
+size of the instruction (both <code>test eax</code> and <code>jmp rel</code> span 5 bytes),
+which should hopefully suffice to avoid sharp edges around instruction
+decoding in hardware, despite our disregard for
+<a href="https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf#page=260">Intel’s recommendations regarding cross-modifying code in Section 8.1.3 of the SDM</a>.<sup id="fnref:cpu-millenia" role="doc-noteref"><a href="#fn:cpu-millenia" class="footnote" rel="footnote">4</a></sup></p>
+
+<p>The library does try to protect against code execution exploits by
+<a href="https://man7.org/linux/man-pages/man2/mprotect.2.html">relaxing and reinstating page protection with <code>mprotect(2)</code></a>) around
+all cross modification writes.  Since <code>mprotect</code>-ing from
+Read-Write-eXecute permissions to Read-eXecute acts as a
+<a href="https://lwn.net/Articles/728795/#:~:text=These%20users%20have%20found%20a%20trick%20to%20get%20the%20desired%20behavior%20without%20calling%20membarrier()%3A%20they%20make%20a%20call%20to%20either%20mprotect()%20or%20munmap()%20instead"><code>membarrier</code> (issues IPIs) on Linux/x86-64</a>,
+we can also know that the updated code is globally visible by the time
+a <a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/include/dynamic_flag.h#L189-L230">call to <code>dynamic_flag_activate</code>, etc.,</a> returns.</p>
+
+<p>It’s not practical to bounce page protection for <em>each</em> <code>DF_</code> expansion,
+especially with inlining (some users have hundreds of inlined calls to
+flagged functions, e.g., to temporarily paper over
+use-after-frees by nopping out a few calls to <code>free(2)</code>). Most of the
+complexity in <code>dynamic_flag.c</code> is simply in
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/src/dynamic_flag.c#L474-L529">gathering metadata records for all <code>DF_</code> sites that should be activated or deactivated</a>, and in
+<a href="https://github.com/backtrace-labs/dynamic_flag/blob/00381c2cab5c8628e6a7d18730a98f7d7e6712f2/src/dynamic_flag.c#L390-L449">amortising <code>mprotect</code> calls for stretches of <code>DF_</code> sites on contiguous pages</a>.</p>
+
+<h2 id="sometimes-code-is-just-done">Sometimes, code is just done</h2>
+
+<p>The <a href="https://github.com/backtrace-labs/dynamic_flag"><code>dynamic_flag</code> library</a>
+is an updated interface for the core implementation of the
+<a href="https://github.com/appnexus/acf/blob/master/common/an_hook.h">6-year old <code>an_hook</code></a>,
+and reflects years of experience with that functionality. We’re happy
+to share it, but aren’t looking for feature requests or contributions.</p>
+
+<p>There might be some small clean-ups as we add support for ARM or RISC
+V, or let the library interoperate with a Rust implementation.
+However, we don’t expect changes to the interface, i.e., the <code>DF_</code> macros
+and the activation/deactivation functions, nor to its core structure,
+especially given the contemporary tastes for hardening (for example,
+the cross-modification approach is completely incompatible with
+OpenBSD’s and OS X’s strict <code>W^X</code> policies). The library works for our
+target platforms, and we don’t wish to take on extra complexity that
+is of no benefit to us.</p>
+
+<p>Of course, <a href="https://github.com/backtrace-labs/dynamic_flag/blob/main/LICENSE">it’s Apache licensed</a>,
+so anyone can fork the library and twist it beyond
+recognition. However, if you’re interested in powerful patching
+capabilities, dynamic languages (e.g., Erlang, Common Lisp, or even
+Python and Ruby), or tools like <a href="https://liveplusplus.tech">Live++</a>
+and <a href="https://www.indefiant.com/">Recode</a> may be more appropriate.<sup id="fnref:ask-games" role="doc-noteref"><a href="#fn:ask-games" class="footnote" rel="footnote">5</a></sup>
+We want <code>dynamic_flag</code> to remain simple and just barely flexible
+enough for our usage patterns.</p>
+
+<p><small>Thank you, Jacob, Josh, and Per, for feedback on earlier
+versions.</small></p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:images" role="doc-endnote">
+      <p>It’s no accident that canonical dynamic languages like Smalltalk, Forth, and Lisp are all image-based: how would an image-based system even work if it were impossible to redefine functions or types? <a href="#fnref:images" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:macro-writers-bill-of-rights" role="doc-endnote">
+      <p>Like <a href="https://www.youtube.com/watch?v=LIEX3tUliHw">guaranteed optimisations in Lisps</a>, the predictable performance impact isn’t important because all code is performance sensitive, but because performance is a cross-cutting concern, and a predictably negligible overhead makes it easier to implement new abstractions, especially with the few tools available in C.  In practice, the impact of considering a code path reachable in case a flag is flipped from its expected value usually dwarfs that of the single <code>test</code> instruction generated for the dynamic flag itself. <a href="#fnref:macro-writers-bill-of-rights" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:unreachable" role="doc-endnote">
+      <p>Or if the <code>dynamic_flag</code> library isn’t aware of that <code>DF_OPT</code>, maybe because the function surrounding that <code>DF_OPT</code> conditional was loaded dynamically. <a href="#fnref:unreachable" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:cpu-millenia" role="doc-endnote">
+      <p>After a few CPU-millenia of production experience, the cross-modification logic hasn’t been associated with any “impossible” bug, or with any noticeable increase in the rate of hardware hangs or failures. <a href="#fnref:cpu-millenia" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:ask-games" role="doc-endnote">
+      <p>The industry could learn a lot from game development practices, <em>especially</em> for stateful non-interactive backend servers and slow batch computations. <a href="#fnref:ask-games" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Slitter: a slab allocator that trusts, but verifies]]></title>
@@ -1401,492 +1767,6 @@ if you don’t want to roll your own.</p>
     </li>
     <li id="fn:initialize-your-crc" role="doc-endnote">
       <p>We overwrite the <code>crc</code> field with <code>UINT32_MAX</code> before computing a checksum for the header and its trailing data.  It’s important to avoid zero prefixes because the result of crc-ing a 0 byte into a 0 state is… 0. <a href="#fnref:initialize-your-crc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-  </ol>
-</div>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[1.5x the PH bits for one more CLMUL]]></title>
-    <link href="https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul/"/>
-    <updated>2020-10-31T18:30:19-04:00</updated>
-    <id>https://www.pvk.ca/Blog/2020/10/31/nearly-double-the-ph-bits-with-one-more-clmul</id>
-    <content type="html"><![CDATA[<p><small>Turns out the part where I simply asserted a property was slightly off 😉. I had to go back to an older proof with weaker bounds, but that’s not catastrophic: we still collide way more rarely than \(2^{-70}\).</small></p>
-
-<p>The core of <a href="https://github.com/backtrace-labs/umash">UMASH</a> is a
-hybrid <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.105.9929&amp;rep=rep1&amp;type=pdf#page=3">PH</a>/<a href="https://eprint.iacr.org/2004/319.pdf#page=4">(E)NH</a>
-block compression function.
-That function is fast
-(it needs one multiplication for each 16-byte “chunk” in a block),
-but relatively weak:
-despite a 128-bit output, the worst-case probability of collision is
-\(2^{-64}\).</p>
-
-<p>For a <a href="https://en.wikipedia.org/wiki/Fingerprint_(computing)">fingerprinting</a>
-application, we want collision probability less than \(\approx 2^{-70},\)
-so that’s already too weak,
-before we even consider merging a variable-length string of compressed
-block values.</p>
-
-<p>The <a href="https://pvk.ca/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/">initial UMASH proposal</a>
-compresses each block with two independent compression functions.
-Krovetz showed that we could do so while reusing most of the key material
-(random parameters), with a <a href="http://krovetz.net/csus/papers/thesis.pdf#page=50">Toeplitz extension</a>,
-and I simply recycled the proof for UMASH’s hybrid compressor.</p>
-
-<p>That’s good for the memory footprint of the random parameters, but
-doesn’t help performance: we still have to do double the work to get
-double the hash bits.</p>
-
-<p>Earlier this month, <a href="https://github.com/jbapple">Jim Apple</a> pointed me at
-a <a href="https://link.springer.com/chapter/10.1007/978-3-662-46706-0_25">promising alternative that doubles the hash bit with only one more multiplication</a>.
-The construction adds finite field operations that aren’t particularly
-efficient in software, on top of the additional 64x64 -&gt; 128
-(carryless) multiplication, so isn’t a slam dunk win over a
-straightforward Toeplitz extension.
-However, Jim felt like we could “spend” some of the bits we don’t need
-for fingerprinting (\(2^{-128}\) collision probability is overkill
-when we only need \(2^{-70}\)) in order to make do with faster operations.</p>
-
-<p>Turns out he was right! We can use carryless multiplications by sparse
-constants (concretely, xor-shift and one more shift) without any
-reducing polynomial, <em>on independent 64-bit halves</em>… and still
-collide with probability at most <s>2^{-126}</s> \(2^{-98}\).</p>
-
-<p>The proof is fairly simple, but relies on a bit of notation for clarity.
-Let’s start by re-stating UMASH’s hybrid PH/ENH block compressor in
-that notation.</p>
-
-<h2 id="how-does-umash-currently-work">How does UMASH currently work?</h2>
-
-<p>The current block compressor in UMASH splits a 256-byte block \(m\)
-in 16 chunks \(m_i,\, i\in [0, 15]\) of 128 bits each, and processes
-all but the last chunk with a PH loop,</p>
-
-<p>\[ \bigoplus_{i=0}^{14} \mathtt{PH}(k_i, m_i), \]</p>
-
-<p>where</p>
-
-<p>\[ \mathtt{PH}(k_i, m_i) = ((k_i \bmod 2^{64}) \oplus (m_i \bmod 2^{64})) \odot (\lfloor k_i / 2^{64} \rfloor \oplus \lfloor m_i / 2^{64} \rfloor) \]</p>
-
-<p>and each \(k_i\) is a randomly generated 128-bit parameter.</p>
-
-<p>The compression loop in UMASH handles the last chunk, along with a
-size tag (to protect against extension attacks), with
-<a href="https://eprint.iacr.org/2004/319.pdf#page=4">ENH</a>:</p>
-
-<p>\[ \mathtt{ENH}(k, x, y) = ((k + x) \bmod 2^{64}) \cdot (\lfloor k / 2^{64}\rfloor + \lfloor x / 2^{64} \rfloor \bmod 2^{64}) + y \mod 2^{128}. \]</p>
-
-<p>The core operation in ENH is a full (64x64 -&gt; 128) integer
-multiplication, which has lower latency than PH’s carryless
-multiplication on x86-64.  That’s why UMASH switches to ENH for the
-last chunk.  We use ENH for only one chunk because combining multiple
-NH values calls for 128-bit additions, and that’s slower than PH’s
-xors.  Once we have mixed the last chunk and the size tag with ENH,
-the result is simply xored in with the previous chunks’ PH values:</p>
-
-<p>\[ \left(\bigoplus_{i=0}^{14} \mathtt{PH}(k_i, m_i)\right)  \oplus \mathtt{ENH}(m_{15}, k_{15}, \mathit{tag}). \]</p>
-
-<p>This function is annoying to analyse directly, because we end up
-having to manipulate different proofs of almost-universality.  Let’s
-abstract things a bit, and reduce the ENH/PH to the bare minimum we need
-to find our collision bounds.</p>
-
-<p>Let’s split our message blocks in \(n\) (\(n = 16\) for
-UMASH) “chunks”, and apply an independently sampled mixing function
-to each chunk.  Let’s say we have two messages \(m\) and
-\(m^\prime\) with chunks \(m_i\) and \(m^\prime_i\), for \(i\in
-[0, n)\), and let \(h_i\) be the result of mixing chunk \(m_i,\)
-and \(h^\prime_i\) that of mixing \(m^\prime_i.\)</p>
-
-<p>We’ll assume that the first chunk is mixed with a
-\(2^{-w}\)-almost-universal (\(2^{-64}\) for UMASH) hash function:
-if \(m_0 \neq m^\prime_0,\) \(\mathrm{P}[h_0 = h^\prime_0] \leq 2^{-w},\)
-(where the probability is taken over the set of randomly chosen
-parameters for the mixer).
-Otherwise, \(m_0 = m^\prime_0 \Rightarrow h_i = h^\prime_i\).</p>
-
-<p>This first chunks stands for the ENH iteration in UMASH.</p>
-
-<p>Every remaining chunk will instead be mixed with a
-\(2^{-w}\)-XOR-almost-universal hash function:
-if \(m_i \neq m^\prime_i\) (\(0 &lt; i &lt; n\)),
-\(\mathrm{P}[h_i \oplus h^\prime_i = y] \leq 2^{-w}\)
-for any \(y,\)
-where the probability is taken over the randomly generated
-parameter for the mixer.</p>
-
-<p>This stronger condition represents the PH iterations in UMASH.</p>
-
-<p>We hash a full block by xoring all the mixed chunks together:</p>
-
-<p>\[ H = \bigoplus_{i = 0}^{n - 1} h_i, \]</p>
-
-<p>and</p>
-
-<p>\[ H^\prime = \bigoplus_{i = 0}^{n - 1} h^\prime_i. \]</p>
-
-<p>We want to bound the probability that \(H = H^\prime \Leftrightarrow
-H \oplus H^\prime = 0,\) assuming that the messages differ
-(i.e., there is at least one index \(i\) such that
-\(m_i \neq m^\prime_i\)).</p>
-
-<p>If the two messages only differ in \(m_0 \neq n^\prime_0\) (and thus
-\(m_i = m^\prime_i,\,\forall i \in [1, n)\)),</p>
-
-<p>\[ \bigoplus_{i = 1}^{n - 1} h_i = \bigoplus_{i = 1}^{n - 1} h^\prime_i, \]</p>
-
-<p>and thus \(H = H^\prime \Leftrightarrow h_0 = h^\prime_0\).</p>
-
-<p>By hypothesis, the 0th chunks are mixed with a
-\(2^{-w}\)-almost-universal hash, so this happens with probability
-at most \(2^{-w}\).</p>
-
-<p>Otherwise, assume that \(m_j \neq m^\prime_j\), for some \(j \in
-[1, n)\).
-We will rearrange the expression</p>
-
-<p>\[ H \oplus H^\prime = h_j \oplus h^\prime_j \oplus \left(\bigoplus_{i\in [0, n) \setminus \{ j \}} h_i \oplus h^\prime_i\right). \]</p>
-
-<p>Let’s conservatively replace that unwieldly sum with an adversarially
-chosen value \(y\):</p>
-
-<p>\[ H \oplus H^\prime = h_j \oplus h^\prime_j \oplus y, \]</p>
-
-<p>and thus \(H = H^\prime\) iff \(h_j \oplus h^\prime_j = y.\)
-By hypothesis, the \(j\)th chunk (every chunk but the 0th),
-is mixed with a \(2^{-w}\)-almost-XOR-universal hash, and
-this thus happens with probability at most \(2^{-w}\).</p>
-
-<p>In both cases, we find a collision probability at most \(2^{-w}\)
-with a simple analysis, despite combining mixing functions from
-different families over different rings.</p>
-
-<h2 id="wringing-more-bits-out-of-the-same-mixers">Wringing more bits out of the same mixers</h2>
-
-<p>We combined strong mixers (each is \(2^{-w}\)-almost-universal),
-and only got a \(2^{-w}\)-almost-universal output.
-It seems like we should be able to do better when two or
-more chunks differ.</p>
-
-<p>As <a href="https://link.springer.com/chapter/10.1007/978-3-662-46706-0_25">Nandi</a>
-points outs, we can apply erasure codes to derive additional
-chunks from the original messages’ contents.  We only need
-one more chunk, so we can simply xor together all the original
-chunks:</p>
-
-<p>\[m_n = \bigoplus_{i=0}^{n - 1} m_i,\]</p>
-
-<p>and similarly for \(m^\prime_n\).
-If \(m\) and \(m^\prime\) differ in only one chunk, \(m_n \neq
-m^\prime_n\).  It’s definitely possible for \(m_n = m^\prime_n\)
-when \(m \neq m^\prime\), but only if two or more chunks differ.</p>
-
-<p>We will again mix \(m_n\) and \(m^\prime_n\) with a fresh
-\(2^{-w}\)-almost-XOR-universal hash function to yield \(h_n\) and
-\(h^\prime_n\).</p>
-
-<p>We want to xor the result \(h_n\) and \(h^\prime_n\) with the second
-(still undefined) hash values \(H_2\) and \(H^\prime_2\); if
-\(m_n \neq m^\prime_n\), the final xored values are equal with
-probability at most \(2^{-w}\), regardless of \(H_2\) and
-\(H^\prime_2\ldots\) and, crucially, independently of \(H \neq
-H^\prime\).</p>
-
-<p>When the two messages \(m\) and \(m^\prime\) only differ in a
-single (initial) chunk, mixing a <a href="https://en.wikipedia.org/wiki/Longitudinal_redundancy_check">LRC checksum</a>
-gives us an independent hash function, which
-squares the collision probability to \(2^{-2w}\).</p>
-
-<p>Now to the interesting bit: we must define a second hash function
-that combines \(h_0,h_1,\ldots, h_{n - 1}\) and \(h^\prime_0, h^\prime_1, \ldots, h^\prime_{n - 1}\)
-such that the resulting hash values \(H_2\) and \(H^\prime_2\) collide
-independently enough of \(H\) and \(H^\prime\).
-That’s a tall order, but we do have one additional assumption to work
-with: we only care about collisions in this second hash function if the
-additional checksum chunks are equal, which means that the two messages
-differ in two or more chunks (or they’re identical).</p>
-
-<p>For each index \(0 &lt; i &lt; n\), we’ll fix a <em>public</em> linear (with xor
-as the addition) function \(\overline{xs}_i(x)\).  This family of
-function must have two properties:</p>
-
-<ol>
-  <li>\(f(x) = x \oplus \overline{xs}_i(x)\) is invertible for all \(0 &lt; i &lt; n\).</li>
-  <li>For any two distinct \(0 &lt; i &lt; j &lt; n\), xoring the two functions
-together into \(g(x) = \overline{xs}_i(x) \oplus
-\overline{xs}_j(x)\) yields a function with a small (low rank)
-null space.  In other words, while \(g\) may not be invertible,
-it must be “pretty close.”</li>
-</ol>
-
-<p>For regularity, we will also define \(\overline{xs}_0(x) = x\).</p>
-
-<p>Concretely, let \(\overline{xs}_1(x) = x \mathtt{«} 1\), where the
-bitshift is computed for the two 64-bit halves independently, and
-\(\overline{xs}_i(x) = (x  \mathtt{«} 1) \oplus (x \mathtt{«} i)\)
-for \(i &gt; 1\), again with all the bitshifts computed independently
-over the two 64-bit halves.</p>
-
-<p>To see that these satisfy our requirements, we can represent the
-functions as carryless multiplication by distinct “even” constants
-(the least significant bit is 0) on each 64-bit half:</p>
-
-<ol>
-  <li>Once we xor in \(x\), we get a multiplication by an odd constant,
-and that’s invertible.</li>
-  <li>Combining \(\overline{xs}_i\) and \(\overline{xs}_j\) with xor
-yields either \(x \mathtt{«} j\) or \((x \mathtt{«} i) \oplus (x \mathtt{«} j)\).  In the worst case, we lose \(j\) bits in each 64-bit half,
-and there are thus \(2^{2j}\) values in \(g^{-1}(0)\).</li>
-</ol>
-
-<p>To recapitulate, we defined the first hash function as</p>
-
-<p>\[ H = \bigoplus_{i = 0}^{n - 1} h_i, \]</p>
-
-<p>the (xor) sum of the mixed value \(h_i\) for each chunk \(m_i\) in
-the message block \(m\), and similarly for \(H^\prime\) and
-\(h^\prime_i\).</p>
-
-<p>We’ll let the second hash function be</p>
-
-<p>\[ H_2 \oplus h_n = \left(\bigoplus_{i = 0}^{n - 1} \overline{xs}_i(h_i)\right) \oplus h_n, \]</p>
-
-<p>and</p>
-
-<p>\[ H^\prime_2 \oplus h^\prime_n = \left(\bigoplus_{i = 0}^{n - 1} \overline{xs}_i(h^\prime_i)\right) \oplus h^\prime_n. \]</p>
-
-<p>We can finally get down to business and find some collision bounds.
-We’ve already shown that both \(H = H^\prime\) <em>and</em> \(H_2 \oplus h_n =
-H^\prime_2 \oplus h^\prime_n\) collide simultaneously with probability at most \(2^{-2w}\)
-when the checksum chunks differ, i.e., when \(m_n \neq m^\prime_n\).</p>
-
-<p>Let’s now focus on the case when \(m \neq m^\prime\), but \(m_n =
-m^\prime_n\).
-In that case, we know that at least two chunks \(0 \leq i &lt; j &lt; n\)
-differ: \(m_i \neq m^\prime_i\) and \(m_j \neq m^\prime_j\).</p>
-
-<p>If only two chunks \(i\) and \(j\) differ, and one of them is the
-\(i = 0\)th chunk, we want to bound the probability that</p>
-
-<p>\[ h_0 \oplus h_j = h^\prime_0 \oplus h^\prime_j \]</p>
-
-<p>and</p>
-
-<p>\[ h_0 \oplus \overline{xs}_j(h_j) = h^\prime_0 \oplus \overline{xs}_j(h^\prime_j), \]</p>
-
-<p>both at the same time.</p>
-
-<p>Letting \(\Delta_i = h_i \oplus h^\prime_i\), we can reformulate the
-two conditions as</p>
-
-<p>\[ \Delta_0 = \Delta_j \]
-and
-\[ \Delta_0 = \overline{xs}_j(\Delta_j). \]</p>
-
-<p>Taking the xor of the two conditions yields</p>
-
-<p>\[ \Delta_j \oplus \overline{xs}_j(\Delta_j) = 0, \]</p>
-
-<p>which is only satisfied for \(\Delta_j = 0\), since \(f(x) = x
-\oplus \overline{xs}_j(x)\) is an invertible linear function.
-This also forces \(\Delta_0 = 0\).</p>
-
-<p>By hypothesis, \(\mathrm{P}[\Delta_j = 0] \leq 2^{-w}\), and
-\(\mathrm{P}[\Delta_0 = 0] \leq 2^{-w}\) as well.  These two
-probabilities are independent, so we get a probability that both
-hash collide less than or equal to \(2^{-2w}\) (\(2^{-128}\)).</p>
-
-<p>In the other case, we have messages that differ in at least two chunks
-\(0 &lt; i &lt; j &lt; n\): \(m_i \neq m^\prime_i\) and \(m_j \neq
-m^\prime_j\).</p>
-
-<p>We can simplify the collision conditions to</p>
-
-<p>\[ h_i \oplus h_j = h^\prime_i \oplus h^\prime_j \oplus y \]</p>
-
-<p>and</p>
-
-<p>\[ \overline{xs}_i(h_i) \oplus \overline{xs}_j(h_j) = \overline{xs}_i(h^\prime_i) \oplus \overline{xs}_j(h^\prime_j) \oplus z, \]</p>
-
-<p>for \(y\) and \(z\) generated arbitrarily (adversarially), but
-without knowledge of the parameters that generated \(h_i, h_j, h^\prime_i,
-h^\prime_j\).</p>
-
-<p>Again, let \(\Delta_i = h_i \oplus h^\prime_i\) and \(\Delta_j = h_j \oplus h^\prime_j\), and reformulate the conditions into</p>
-
-<p>\[ \Delta_i \oplus \Delta_j = y \]
-and
-\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z. \]</p>
-
-<p>Let’s apply the linear function \(\overline{xs}_i\) to the first
-condition</p>
-
-<p>\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_i(\Delta_j) = \overline{xs}_i(y); \]</p>
-
-<p>since \(\overline{xs}_i\) isn’t invertible, the result
-isn’t equivalent, but is a weaker (necessary, not sufficient)
-version of the initial condiion.</p>
-
-<p>After xoring that with the second condition</p>
-
-<p>\[ \overline{xs}_i(\Delta_i) \oplus \overline{xs}_j(\Delta_j) = z, \]</p>
-
-<p>we find</p>
-
-<p>\[ \overline{xs}_i(\Delta_j) \oplus \overline{xs}_j(\Delta_j) = \overline{xs}_i(y) \oplus z. \]</p>
-
-<p>By hypothesis, the null space of
-\(g(x) = \overline{xs}_i(x) \oplus \overline{xs}_j(x)\)
-is “small.”
-For our concrete definition of \(\overline{xs}\), there
-are \(2^{2j}\) values in that null space, which means that \(\Delta_j\)
-can only satisfy the combined xored condition by taking one of at most
-\(2^{2j}\) values; otherwise, the two hashes definitely can’t both
-collide.</p>
-
-<p>Since \(j &lt; n\), this happens with probability at most \(2^{2(n -
-1) - w} \leq 2^{-34}\) for UMASH with \(w = 64\) and \(n =
-16\).</p>
-
-<p>Finally, for any given \(\Delta_j\), there is at most one
-\(\Delta_i\) that satisfies</p>
-
-<p>\[ \Delta_i \oplus \Delta_j = y,\]</p>
-
-<p>and so <em>both</em> hashes collide with probability at most \(2^{-98}\),
-for \(w = 64\) and \(n = 16\).</p>
-
-<p>Astute readers will notice that we could let
-\(\overline{xs}_i(x) = x \mathtt{«} i\),
-and find the same combined collision probability.
-However, this results in a much weaker secondary hash, since a chunk
-could lose up to \(2n - 2\) bits (\(n - 1\) in each 64-bit half)
-of hash information to a plain shift.
-The shifted xor-shifts might be a bit slower to compute, but
-guarantees that we only lose at most 2 bits<sup id="fnref:one-bit-with-ph" role="doc-noteref"><a href="#fn:one-bit-with-ph" class="footnote" rel="footnote">1</a></sup> of
-information per chunk.  This feels like an interface that’s harder to
-misuse.</p>
-
-<p>If one were to change the \(\overline{xs}_i\) family of functions, I
-think it would make more sense to look at a more diverse form of
-(still sparse) multipliers, which would likely let us preserve a
-couple more bits of independence.  Jim has constructed such a family
-of multipliers, in arithmetic modulo \(2^{64}\); I’m sure we could
-find something similar in carryless multiplication.  The hard part is
-implementing these multipliers: in order to exploit the multipliers’
-sparsity, we’d probably have to fully unroll the block hashing loop,
-and that’s not something I like to force on implementations.</p>
-
-<h2 id="what-does-this-look-like-in-code">What does this look like in code?</h2>
-
-<p>The base <a href="https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L336">UMASH block compressor</a>
-mixes all but the last of the message block’s 16-byte chunks with
-PH: xor the chunk with the corresponding bytes in the parameter
-array, computes a carryless multiplication of the xored chunks’ half
-with the other half.  The last chunk goes through a variant of
-<a href="https://github.com/backtrace-labs/umash/blob/8fd6287617f41e236bfb679e8d29a8b32f82c0e9/umash.c#L358">ENH</a>
-with an invertible finaliser (safe because we only rely on
-\(\varepsilon\)-almost-universality),
-and everything is xored in the accumulator.</p>
-
-<p>The collision proofs above preserved the same structure for the first hash.</p>
-
-<p>The second hash reuses so much work from the first that it mostly
-makes sense to consider a combined loop that computes both (regular
-UMASH and this new xor-shifted variant) block compression functions at
-the same time.</p>
-
-<p>The first change for this combined loop is that we need to xor
-together all 16-bytes chunk in the message, and mix the resulting
-checksum with a fresh PH function.  That’s equivalent to xoring
-everything in a new accumulator (or two accumulators when working with
-256-bit vectors) initialised with the PH parameters, and <code>CLMUL</code>ing
-together the accumulator’s two 64-bit halves at the end.</p>
-
-<p>We also have to apply the \(\overline{xs}_i\) quasi-xor-shift
-functions to each \(h_i\).  The trick is to accumulate the shifted
-values in two variables: one is the regular UMASH accumulator without
-\(h_0\) (i.e., \(h_1 \oplus h_2 \ldots\)), and the other shifts
-the current accumulator before xoring in a new value, i.e.,
-\(\mathtt{acc}^\prime = (\mathtt{acc} \mathtt{«} 1) \oplus h_i\),
-where the left shift on parallel 64-bit halves simply adds <code>acc</code>
-to itself.</p>
-
-<p>This additional shifted accumulator includes another special case to
-skip \(\overline{xs}_1(x) = x \mathtt{«} 1\); that’s not a
-big deal for the code, since we already have to special case the last
-iteration for the ENH mixer.</p>
-
-<p>Armed with \(\mathtt{UMASH} = \bigoplus_{i=1}^{n - 1} h_i\) and
-\(\mathtt{acc} = \bigoplus_{i=2}^{n - 1} h_i \mathtt{«} (i - 1),\)
-we have
-\[\bigoplus_{i=1}^{n - 1} \overline{xs}_i(h_i) = (\mathtt{UMASH} \oplus \mathtt{acc}) \mathtt{«} 1.\]</p>
-
-<p>We just have to xor in the <code>PH</code>-mixed checksum \(h_n\), and finally
-\(h_0\) (which naturally goes in GPRs, so can be computed while we
-extract values out of vector registers).</p>
-
-<p>We added two vector xors and one addition for each chunk in a block,
-and, at the end, one <code>CLMUL</code> plus a couple more xors and adds again.</p>
-
-<p>This should most definitely be faster than computing two UMASH at the
-same time, which incurred two vector xors and a <code>CLMUL</code> (or full
-integer multiplication) for each chunk: even when <code>CLMUL</code> can pipeline
-one instruction per cycle, vector additions can dispatch to more
-execution units, so the combined throughput is still higher.</p>
-
-<h2 id="one-last-thing-what-if-we-have-blocks-of-different-length">One last thing: what if we have blocks of different length?</h2>
-
-<p>It’s easy to show that UMASH is relatively safe when one block is
-shorter than the other, and we simply xor together fewer mixed chunks.
-Without loss of generality, we can assume the longer block has \(n\)
-chunks; that block’s final ENH is independent of the shorter block’s
-UMASH, and any specific value occurs with probability at most
-\(2^{-63}\) (the probability of a multiplication by zero).</p>
-
-<p>A similar argument seems more complex to defend for the shifted UMASH.</p>
-
-<p>Luckily, we can tweak the <a href="https://en.wikipedia.org/wiki/Longitudinal_redundancy_check">LRC checksum</a>
-we use to generate an additional chunk in the block: rather than xoring
-together the raw message chunks, we’ll xor them <em>after</em> xoring them
-with the PH key, i.e.,</p>
-
-<p>\[m_n = \bigoplus_{i=0}^{n - 1} m_i \oplus k_i, \]</p>
-
-<p>where \(k_i\) are the PH parameters for each chunk.</p>
-
-<p>When checksumming blocks of the same size, this is a no-op with respect
-to collision probabilities.  Implementations might however benefit
-from the ability to use a fused <code>xor</code> with load from memory<sup id="fnref:latency" role="doc-noteref"><a href="#fn:latency" class="footnote" rel="footnote">2</a></sup>
-to compute \(m_i \oplus k_i\), and feed that both into the checksum
-and into <code>CLMUL</code> for PH.</p>
-
-<p>Unless we’re extremely unlucky (\(m_{n - 1} = k_{n - 1}\), with
-probability \(2^{-2w}\)), the long block’s LRC will differ from the
-shorter block’s.  As long as we always xor in the same PH parameters
-when mixing the artificial LRC, the secondary hashes collide with
-probability at most \(2^{-64}\).</p>
-
-<p>With a small tweak to the checksum function, we can easily guarantee
-that blocks with a different number of chunks collide with probability
-less than \(2^{-126}\).<sup id="fnref:tag" role="doc-noteref"><a href="#fn:tag" class="footnote" rel="footnote">3</a></sup></p>
-
-<p><small>Thank you Joonas for helping me rubber duck the presentation, and Jim for pointing me in the right direction, and for the fruitful discussion!</small></p>
-
-<p><hr style="width: 50%" /></p>
-
-<div class="footnotes" role="doc-endnotes">
-  <ol>
-    <li id="fn:one-bit-with-ph" role="doc-endnote">
-      <p>It’s even better for UMASH, since we obtained these shifted chunks by mixing with PH.  The result of PH is the carryless product of two 64-bit values, so the most significant bit is always 0.  The shifted-xorshift doesn’t erase any information in the high 64-bit half! <a href="#fnref:one-bit-with-ph" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:latency" role="doc-endnote">
-      <p>This might also come with a small latency hit, which is unfortunate since PH-ing \(m_n\) is likely to be on the critical path… but one cycle doesn’t seem that bad. <a href="#fnref:latency" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:tag" role="doc-endnote">
-      <p>The algorithm to expand any input message to a sequence of full 16-byte chunks is fixed.  That’s why we incorporate a size tag in ENH; that makes it impossible for two messages of different lengths to collide when they are otherwise identical after expansion. <a href="#fnref:tag" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

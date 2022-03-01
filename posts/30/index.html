@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/">Doodle: hybridising SBCL's GENCGC with mark and sweep</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/">Performance tuning ~ writing an essay</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Sept
+Oct
   
-13th, 
+19th, 
 2014
 
 
 
 
         
-         | <a href="/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/09/13/doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/"
+         | <a href="/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/"
 	      >Comments</a>
         
         
@@ -117,201 +117,294 @@ Sept
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><em>Meta-note: this is more of a journal entry than the usual post
-here.  I’ll experiment with the format and see if I like publishing
-such literal and figurative doodles.</em></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><a href="#trust-no-one">Skip to the meaty bits.</a></p>
 
-<p>Garbage collection is in the air.  My friend
-<a href="http://pointersgonewild.wordpress.com/2014/09/09/ds-garbage-collector-problem/">Maxime</a>
-is having issues with D’s garbage collector, and Martin Cracauer has a
-large patch to improve SBCL’s handling of conservative references.  I
-started reviewing that patch today, and, after some discussion with
-Alastair Bridgewater, I feel like adding a mark-and-sweep component to
-SBCL’s GC might be easier than what the patch does, while achieving
-its goal of reducing the impact of conservative references.  That lead
-to the whiteboarding episode below and a plan to replace the garbage
-collecting half of SBCL’s generational GC.  But first, a summary of
-the current implementation.</p>
+<p>My work at <a href="http://www.appnexus.com/">AppNexus</a> mostly involves
+performance optimisation, at any level from microarchitecture-driven
+improvements to data layout and assembly code to improving the
+responsiveness of our distributed system under load.  Technically,
+this is similar to what I was doing as a lone developer on
+research-grade programs.  However, the scale of our (constantly
+changing) code base and collaboration with a dozen other coders mean
+that I approach the task differently: e.g., rather than
+single-mindedly improving throughput <em>now</em>, I aim to pick an evolution
+path that improves throughput today without imposing too much of a
+burden on future development or fossilising ourselves in a design
+dead-end.  So, although numbers still don’t lie (hah), my current
+approach also calls for something like judgment and taste, as well as
+a fair bit of empathy for others.  Rare are the obviously correct
+choices, and, in that regard, determining what changes to make and
+which to discard as
+<a href="http://fun.irq.dk/funroll-loops.org/">over-the-top ricing</a> feels like
+I’m drafting a literary essay.</p>
 
-<p><img src="/images/2014-09-13-doodle-hybridising-sbcls-gencgc-with-mark-and-sweep/gc_notes.png" /></p>
+<p>This view is probably tainted by the fact that, between English and
+French classes, I spent something like half of my time in High School
+critiquing essays, writing essays, or preparing to write one.
+Initially, there was a striking difference between the two languages:
+English teachers had us begin with the five paragraph format where one
+presents multiple arguments for the same thesis, while French teachers
+imposed a thesis/antithesis/synthesis triad (and never really let it
+go until CÉGEP, but that’s another topic).  When I write that
+performance optimisation feels like drafting essays, I’m referring to
+the latter “Hegelian” process, where one exposes arguments and
+counterarguments alike in order to finally make a stronger case.</p>
 
-<h1 id="the-present-and-how-we-got-here">The present, and how we got here</h1>
+<p>I’ll stretch the analogy further.  Reading between the lines gives us
+access to more arguments, but it’s also easy to get the context wrong and
+come up with hilariously far-fetched interpretations.  When I try to
+understand a system’s performance, the most robust metrics treat the
+system as a black box: it’s hard to get throughput under production
+data wrong.  However, I need finer grained information (e.g.,
+performance counters, instruction-level profiling, or
+application-specific metrics) to guide my work, and, the more useful
+that information can be – like domain specific metrics that highlight
+what we could do differently rather than how to do the same thing more
+efficiently – the easier it is to measure incorrectly.  That’s not a
+cause for despair, but rather a fruitful line of skepticism that helps
+me find more opportunities.</p>
 
-<p>CMUCL started out with a Cheney-style two-space collector.  Two-space
-collectors free up space for more allocations by copying objects that
-might still be useful (that are reachable from “roots,” e.g.,
-variables on the stack) from the old space to the new space.  Cheney’s
-algorithm elegantly simplifies this task by storing bookkeeping
-information in the data itself.  When we copy an object to the new
-space (because it is reachable), we want to make sure that all other
-references to that object are also replaced with references to the
-copy.  Cheney’s solution to that desideratum is obvious: overwrite the
-old object with a broken heart (forwarding pointer), a marker that</p>
+<p>Just two weeks ago, questioning our application-specific metrics
+lead to an easy 10% improvement in throughput for our biggest
+consumer of CPU cycles.  The consumer is an application that
+determines whether internet advertising campaigns are eligible to bid
+on an ad slot, and if so, which creative (ad) to show and at what bid
+price.  For the longest time, the most time-consuming part of that
+process was the first step, testing for campaign eligibility.
+Consequently, we tracked the execution of that step precisely and
+worked hard to minimise the time spent on ineligible campaigns,
+without paying much attention to the rest of the pipeline.  However,
+we were clearly hitting diminishing returns in that area, so I asked
+myself how an adversary could use our statistics to mislead us.  The
+easiest way I could think of was to have campaigns that are eligible
+to bid, but without any creative compatible with the ad slot (e.g.,
+because it’s the wrong size or because the website forbids Flash ads):
+although the campaigns are technically eligible, they are unable to
+bid on the ad slot.  We added code to track these cases and found that
+almost half of our “eligible” campaigns simply had no creative in the
+right size.  Filtering these campaigns early proved to be a
+low-hanging fruit with an ideal code complexity:performance
+improvement ratio.</p>
 
-<ol>
-  <li>the object has already been copied to the new space;</li>
-  <li>the copy lives at address <code>x</code>.</li>
-</ol>
+<h1 id="trust-no-one-not-even-performance-counters"><a href="#trust-no-one" name="trust-no-one">Trust no one, not even performance counters</a></h1>
 
-<p>This adds a constraint that heap-allocated objects can never be
-smaller than a broken heart, but they’re usually one or two words (two
-in SBCL’s case) so the constraint is rarely binding.</p>
+<p>I recently learned that we also had to second-guess instruction level
+profiles.  Contemporary x86oids are out of order, superscalar, and
+speculative machines, so profiles are always messy: “blame” is
+scattered around the real culprit, and some instructions (pipeline
+hazards like conditional jumps and uncached memory accesses, mostly)
+seem to account for more than their actual share.  What I never
+realised is that, in effect, some instructions systematically mislead
+and push their cycles to others.</p>
 
-<p>When the garbage collector traverses the roots (the stack, for
-example) and finds a pointer, the code only has to dereference that
-pointer to determine if the objects it points to has been moved.  If
-so, the GC replaces the root pointer with a pointer to the copy in the
-new space.  Otherwise, the GC copies the object to the new space,
-repoints to that copy, and overwrites the old object with a broken heart.</p>
+<p>Some of our internal spinlocks use <code>mfence</code>.  I expected that to be
+suboptimal, since it’s
+<a href="https://blogs.oracle.com/dave/resource/NHM-Pipeline-Blog-V2.txt">common</a>
+<a href="http://shipilev.net/blog/2014/on-the-fence-with-dependencies/">knowledge</a>
+that <code>lock</code>ed instruction are more efficient barriers: serialising
+instructions like <code>mfence</code> have to affect streaming stores and other
+weakly ordered memory accesses, and that’s a lot more work than just
+preventing store/load reordering.  However, our profiles showed that
+we spent very little time on spinlocking so I never gave it much thought…
+until eliminating a set of spinlocks had a much better impact on
+performance than I would have expected from the profile.  Faced with
+this puzzle, I had to take a closer look at the way <code>mfence</code> and
+locked instructions affect hardware-assisted instruction profiles on
+our production Xeon E5s (Sandy Bridge).</p>
 
-<p>We also need to traverse objects recursively: when we find that an
-object is live and copy it to the new space, we must also make sure
-that anything that objects points to is also preserved, and that any
-pointer in that object is updated with pointers to copies in the new
-space.</p>
+<p>I came up with a simple synthetic microbenchmark to simulate locking
+on my E5-4617: the loop body is an adjustable set of memory accesses
+(reads and writes of out-of-TLB or uncached locations) or computations
+(divisions) bracketed by pairs of normal stores, <code>mfence</code>, or <code>lock
+inc/dec</code> to cached memory (I would replace the fences with an
+increment/decrement pair and it looks like all read-modify-write
+instructions are implemented similarly on Intel).  Comparing runtimes
+for normal stores with the other instructions helps us gauge their
+overhead.  I can then execute each version under <code>perf</code> and estimate
+the overhead from the instruction-level profile.  If <code>mfence</code> is
+indeed extra misleading, there should be a greater discrepancy between
+the empirical impact of the <code>mfence</code> pair and my estimate from the
+profile.</p>
 
-<p>That’s a graph traversal, and the obvious implementation
-maintains a workset of objects to visit which, in the worst case,
-could include all the objects in old space.  The good news is we don’t have
-to worry about objects re-entering that workset: we always
-overwrite objects (in old space) with a broken heart when we visit
-them for the first time.</p>
+<p>You can find the
+<a href="/images/2014-10-19-performance-optimisation-~-writing-an-essay/fence.c">super crufty code here</a>,
+<a href="/images/2014-10-19-performance-optimisation-~-writing-an-essay/cycle.h">along with an <code>rdtscp</code> version of cycle.h</a>.</p>
 
-<p>Cheney proposed a clever trick to implement this workset.  Whenever an
-object enters the workset, it has just been copied to the new space;
-as long as we allocate in the new space by incrementing an allocation
-pointer, the new space itself can serve as the workset!  In addition
-to the allocation pointer, we now need a “to-scan” pointer.  Any
-object in the new space that’s below the to-scan pointer has already
-been scanned for pointers and fixed to point in the new space; any object
-between the to-scan pointer and the allocation pointer must be scanned
-for pointers to the old space.  We pop an element from the workset by
-looking at the next object (in terms of address) after the to-scan
-pointer and incrementing that pointer by the object’s size.  When the
-to-scan and the allocation pointers meet, the workset is empty
-and GC terminates.</p>
+<p>With <code>lock</code>ed instructions and random reads that miss the L3 cache,
+the (cycle) profile for the microbenchmark loop is:</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">$ perf annotate -s cache_misses
+</span><span class="line">[...]
+</span><span class="line">    0.06 :        4006b0:       and    %rdx,%r10
+</span><span class="line">    0.00 :        4006b3:       add    $0x1,%r9
+</span><span class="line">    ;; random (out of last level cache) read
+</span><span class="line">    0.00 :        4006b7:       mov    (%rsi,%r10,8),%rbp
+</span><span class="line">   30.37 :        4006bb:       mov    %rcx,%r10
+</span><span class="line">    ;; foo is cached, to simulate our internal lock
+</span><span class="line">    0.12 :        4006be:       mov    %r9,0x200fbb(%rip)        # 601680 &lt;foo&gt;
+</span><span class="line">    0.00 :        4006c5:       shl    $0x17,%r10
+</span><span class="line">    [... Skipping arithmetic with &lt; 1% weight in the profile]
+</span><span class="line">    ;; locked increment of an in-cache "lock" byte
+</span><span class="line">    1.00 :        4006e7:       lock incb 0x200d92(%rip)        # 601480 &lt;private+0x200&gt;
+</span><span class="line">   21.57 :        4006ee:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    ;; random out of cache read
+</span><span class="line">    0.00 :        400704:       xor    (%rsi,%r10,8),%rbp
+</span><span class="line">   21.99 :        400708:       xor    %r9,%r8
+</span><span class="line">    [...]
+</span><span class="line">    ;; locked in-cache decrement
+</span><span class="line">    0.00 :        400729:       lock decb 0x200d50(%rip)        # 601480 &lt;private+0x200&gt;
+</span><span class="line">   18.61 :        400730:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    0.92 :        400755:       jne    4006b0 &lt;cache_misses+0x30&gt;</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Some SBCL platforms still use this two-space collector, but it doesn’t
-scale very well to large heaps (throughput is usually fine, but we
-waste a lot of space and GC pauses can be long).  The generational
-conservative garbage collector (GENCGC, GENGC on
-precise/non-conservative platforms) is a hack on top of that Cheney GC.</p>
+<p>Looking at that profile, I’d estimate that the two random reads
+account for ~50% of runtime, and the pair of <code>lock inc/dec</code> for ~40%.</p>
 
-<p>The GC is “generational” because most passes only collect garbage from
-a small fraction of the heap, and “conservative” because we have to
-deal with values that may or may not be pointers (e.g., we don’t always
-know if the value in a register is a Lisp reference or just a machine
-integer) by considering some objects as live (not up for collection)
-while pinning them at their current address.</p>
+<p>The picture is completely different for <code>mfence</code>.</p>
 
-<p>The runtime uses mprotect to record writes to the heap, except for the
-nursery (newly allocated objects) where we expect most writes to land.
-The heap is partitioned in pages, and the first write to a page after
-a GC triggers a protection fault; the signal handler marks that page
-as mutated and changes the protection to allow writes.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">$ perf annotate -s cache_misses
+</span><span class="line">[...]
+</span><span class="line">    0.00 :        4006b0:       and    %rdx,%r10
+</span><span class="line">    0.00 :        4006b3:       add    $0x1,%r9
+</span><span class="line">    ;; random read
+</span><span class="line">    0.00 :        4006b7:       mov    (%rsi,%r10,8),%rbp
+</span><span class="line">   42.04 :        4006bb:       mov    %rcx,%r10
+</span><span class="line">    ;; store to cached memory (lock word)
+</span><span class="line">    0.00 :        4006be:       mov    %r9,0x200fbb(%rip)        # 601680 &lt;foo&gt;
+</span><span class="line">    [...]
+</span><span class="line">    0.20 :        4006e7:       mfence 
+</span><span class="line">    5.26 :        4006ea:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    ;; random read
+</span><span class="line">    0.19 :        400700:       xor    (%rsi,%r10,8),%rbp
+</span><span class="line">   43.13 :        400704:       xor    %r9,%r8
+</span><span class="line">    [...]
+</span><span class="line">    0.00 :        400725:       mfence 
+</span><span class="line">    4.96 :        400728:       add    $0x1,%rax
+</span><span class="line">    0.92 :        40072c:       add    $0x1,%rax
+</span><span class="line">    [...]
+</span><span class="line">    0.36 :        40074d:       jne    4006b0 &lt;cache_misses+0x30&gt;</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>When a GC is triggered, we usually want to collect only the nursery,
-i.e., only objects that were allocated after the previous GC pass.
-GEN(C)GC adapts Cheney to this use case by building the set of all
-pages that might have been mutated to point somewhere in the nursery
-(thanks to the mprotect write barrier) and scanning them for roots,
-like the stack in Cheney GC.  The default GENGC configuration has 7
-generations and we extend this scheme by flagging pages with pointers
-to younger generations (newer objects), without noting what these
-generations might be.</p>
+<p>It looks like the loads from uncached memory represent ~85% of the
+runtime, while the <code>mfence</code> pair might account for <em>at most</em> ~15%, if
+I include all the noise from surrounding instructions.</p>
 
-<p>Pinned objects are also handled by abusing the root set: pages that
-contain at least one pinned object don’t undergo garbage collection
-and are directly scanned for pointers, like the stack in Cheney GC.</p>
+<p>If I trusted the profile, I would worry about eliminating <code>lock</code>ed
+instructions, but not so much for <code>mfence</code>.  However, runtimes (in
+cycles), which is what I’m ultimately interested in, tell a different
+story.  The same loop of LLC load misses takes 2.81e9 cycles for 32M
+iterations without any atomic or fence, versus 3.66e9 for <code>lock
+inc/dec</code> and 19.60e9 cycles for <code>mfence</code>.  So, while the profile for
+the <code>mfence</code> loop would let me believe that only ~15% of the time is
+spent on synchronisation, the <code>mfence</code> pair really represents 86%
+\(((19.6 - 2.81) / 19.6)\) of the runtime for that loop!  Inversely,
+the profile for the <code>lock</code>ed pair would make me guess that we spend
+about 40% of the time there, but, according to the timings, the real
+figure is around 23%.</p>
 
-<p>Instead of having two heaps, an old space and a new space, we now have
-a lot of pages, and each page belongs to a generation.  When we want
-to collect a given generation, pages in that generation form the old
-space, and pages allocated during GC the new space.  This means that
-we lose the simplicity of Cheney’s new-space-is-the-workset trick: the
-new space isn’t contiguous, so a single to-scan pointer doesn’t cut it
-anymore!  GENGC works around that by scanning the page table, but it’s
-not pretty and I really don’t know if Cheney is a good fit anymore.</p>
+<p>The other tests all point to the same conclusion: the overhead of
+<code>mfence</code> is strongly underestimated by instruction level profiling,
+and that of <code>lock</code>ed instructions exaggerated, especially when
+adjacent instructions write to memory.</p>
 
-<h1 id="martin-cracauers-patch">Martin Cracauer’s patch</h1>
+<pre><code>  setup     cycles   (est. overhead)  ~actual overhead
 
-<p>GENCGC’s approach to pinned objects is stupid.  If a page has no
-reference except for one conservative pointer, the whole page is
-considered live and scanned for references.</p>
+div [ALU] (100 Mi iterations)
+ atomic: 20153782848   (20%)          ~ 3.8%
+ mfence: 28202315112   (25%)          ~31.3%
+vanilla: 19385020088
 
-<p>Martin’s solution is to allocate additional temporary metadata only
-for pinned pages and track the pinned status of individual objects.
-When the GC encounters a pointer to a page with pinned objects, it
-checks if it’s a pointer to a pinned object.  If so, the pointee is
-left in place.  Otherwise, it’s copied normally.</p>
+Reads:
 
-<p>The patch has code to mark objects as live (pinned) and to overwrite
-objects once they have been copied.  Basically, it is half of a
-mark-and-sweep garbage collector.  The main difference is that the set
-of pinned objects doesn’t grow (being pinned isn’t a contagious
-property), so we don’t need a worklist for pinned objects.  However, I
-already noted that I’m not convinced the worklist hack in GENGC is a
-good idea.</p>
+TLB misses (64Mi iterations)
+ atomic:  3776164048   (80%)          ~39.3%
+ mfence: 12108883816   (50%)          ~81.1%
+vanilla:  2293219400 
 
-<h1 id="a-hybrid-collector">A hybrid collector!</h1>
+LLC misses (32Mi iterations)
+ atomic:  3661686632   (40%)          ~23.3%
+ mfence: 19596840824   (15%)          ~85.7%
+vanilla:  2807258536
 
-<p>Instead of marking pages as containing pinned objects, I feel it may
-be simpler to collect some pages by copying, and others by marking.
-Any pinned page would have the “mark” GC policy, while pages that
-likely contain few live objects (e.g., the nursery and pages with a
-lot of unused memory) would be collected by copying.  This too would
-avoid the issue with considering whole <em>pages</em> as live when pinned,
-and I think that having the choice of copying or marking at a page
-granularity will be simpler than toggling at the level of individual
-object.</p>
+Writes:
 
-<p>Each “mark” page now has two (bit)sets, one for live objects and
-another for live objects that have already been scanned.  We can
-maintain a worklist at the page granularity with an embedded linked
-list: whenever a “mark” page gains a new live object and it’s not
-already in the worklist, that page is enqueued for scanning.</p>
+TLB (64Mi iterations)
+ atomic:  3864497496   (80%)          ~10.4%
+ mfence: 13860666388   (50%)          ~75.0%
+vanilla:  3461354848
 
-<p>Instead of emulating Cheney’s trick by looking for newly allocated
-pages in our page table, we can add pages in new space to the worklist
-whenever they become full.</p>
+LLC (32Mi iterations)
+ atomic:  4023626584   (60%)          ~16.9%
+ mfence: 21425039912   (20%)          ~84.4%
+ vanilla: 3345564432
+</code></pre>
 
-<p>Finally, at the end of the pass, we traverse all “mark” pages and
-clear dead objects.</p>
+<p>I can guess why we observe this effect; it’s not like Intel is
+intentionally messing with us.  <code>mfence</code> is a full pipeline flush: it
+slows code down because it waits for all in-flight instructions to
+complete their execution.  Thus, while it’s flushing that slows us
+down, the profiling machinery will attribute these cycles to the
+instructions that are being flushed.  Locked instructions instead
+affect stores that are still queued.  By forcing such stores to
+retire, locked instructions become responsible for the extra cycles
+and end up “paying” for writes that would have taken up time anyway.</p>
 
-<p>That’s pretty simple (arguably simpler than the current
-implementation!), and shouldn’t involve too many changes to the rest
-of the code.  Mostly, I’d have to adapt the weak pointer machinery to
-stop assuming that it can use forwarding pointers to determine when
-objects have been marked as live.</p>
+<p>Losing faith in hardware profiling being remotely representative of
+reality makes me a sad panda; I now have to double check <code>perf</code>
+profiles when hunting for misleading metrics.  At least I can tell
+myself that knowing about this phenomenon helps us make better
+informed – if less definite – decisions and ferret out more easy
+wins.</p>
 
-<p>However, we might lose the ability to run medium GCs, to collect more
-than the nursery but less than the whole heap.  If we only want to GC
-the nursery, the mprotect write barrier gives us all the information
-we need to find references from the rest of the heap to the nursery.
-If we wish to collect the whole heap, we only have to consider stacks
-and some statically allocated space as roots.</p>
-
-<p>For medium GCs, e.g., collect only generations 1-4 out of 7, GENGC
-exploits the way that garbage collection (almost) always copies to
-easily track pages with pointers to younger generations.  It’s coarse,
-but usually acceptable thanks to the copying.  I don’t know that it
-would work as well if the default is to only copy the nursery.
-Moreover, if we have a hybrid GC, it probably makes sense to focus
-copying on pages that are mostly empty, regardless of their age.  If
-we do want medium GCs, we might have to track, for each page, the set
-of pages that point there.  This set can include false positives, so
-it’s probably easiest to clear it before major GCs, and otherwise only
-add to that set (removing pages that were emptied by a GC pass sounds
-reasonable).  I also expect that some pages will have many refererrers;
-I’m thinking we might use a distinguished value to mean “referred by
-every pages” and not consider them for medium GC.</p>
-
-<h1 id="whats-next">What’s next</h1>
-
-<p>Martin’s patch clearly addresses an important weakness in SBCL’s
-garbage collector.  If I can’t make good progress on the hybrid GC
-soon, I’ll make sure the patch is cleaned up for master, hopefully by
-Thanksgiving.</p>
+<p>P.S., if you find this stuff interesting, feel free to send an email
+(pkhuong at $WORK.com).  My team is hiring both experienced developers
+and recent graduates (:</p>
 </div>
   
   
