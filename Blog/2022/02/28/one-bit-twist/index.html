@@ -118,7 +118,10 @@ Feb
 <p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
 
 
-<div class="entry-content" style="font-family: ; font-size: "><p><a href="https://arxiv.org/abs/1011.5200">Tabulation hashing</a> is one
+<div class="entry-content" style="font-family: ; font-size: "><emph>This is DOA: twisted tabulation hashing depends on the size of
+the alphabet, and doesn't really work for boolean characters.</emph>
+
+<p><a href="https://arxiv.org/abs/1011.5200">Tabulation hashing</a> is one
 of a few practical approaches that guarantee 
 <a href="https://en.wikipedia.org/wiki/K-independent_hashing">high-independence in hash functions</a>.
 A priori, \(k-\)independence seems like an obscure academic concept.
@@ -158,8 +161,8 @@ hashing punches above its 3-independence weight.
 its standard presentation is awkward to implement efficiently for
 round (32 or 64 bits) output sizes.</p>
 
-<p>This post shows an alternative bit-at-a-time approach that “twists”
-more efficiently.</p>
+<p>This post shows an alternative bit-at-a-time approach where “twisting”
+is free.</p>
 
 <h2 id="simple-tabulation-hashing">Simple tabulation hashing</h2>
 
@@ -190,7 +193,7 @@ each \(x_i\) is a single bit of \(x.\)</p>
 <span class="line-number">7</span>
 </pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">tabhash</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">table</span><span class="p">):</span>
 </span><span class="line">    <span class="sd">&quot;&quot;&quot;Computes the tabulation hash for `value`, a stream of bits,</span>
-</span><span class="line"><span class="sd">    and a `table` random uniform integers.&quot;&quot;&quot;</span>
+</span><span class="line"><span class="sd">    and a `table` of random uniform integers.&quot;&quot;&quot;</span>
 </span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span>
 </span><span class="line">    <span class="k">for</span> <span class="n">bit</span><span class="p">,</span> <span class="n">pair</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">table</span><span class="p">):</span>
 </span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">pair</span><span class="p">[</span><span class="n">bit</span><span class="p">]</span>
@@ -214,7 +217,7 @@ cycles for a 64 bit to 64 bit hash with AVX, on a 2 GHz EPYC 7713.</p>
 <span class="line-number">8</span>
 </pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">tabhash_mask</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">initial</span><span class="p">,</span> <span class="n">normalised_table</span><span class="p">):</span>
 </span><span class="line">    <span class="sd">&quot;&quot;&quot;Computes the tabulation hash for `value`, a stream of bits,</span>
-</span><span class="line"><span class="sd">    and a `table` random uniform integers.&quot;&quot;&quot;</span>
+</span><span class="line"><span class="sd">    and a `normalised_table` of random uniform integers.&quot;&quot;&quot;</span>
 </span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="n">initial</span>
 </span><span class="line">    <span class="k">for</span> <span class="n">bit</span><span class="p">,</span> <span class="nb">hash</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">normalised_table</span><span class="p">):</span>
 </span><span class="line">        <span class="k">if</span> <span class="n">bit</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
@@ -251,8 +254,8 @@ time in order to divide the number of iterations by \(k,\) a
 <span class="line-number">8</span>
 <span class="line-number">9</span>
 </pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">def</span> <span class="nf">tabhash_chunked</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">ktable</span><span class="p">):</span>
-</span><span class="line">    <span class="sd">&quot;&quot;&quot;Computes the tabulation hash for `value`, a stream of bits,</span>
-</span><span class="line"><span class="sd">    and a `table` random uniform integers indexed `k` bits at a time.&quot;&quot;&quot;</span>
+</span><span class="line">    <span class="sd">&quot;&quot;&quot;Computes the tabulation hash for `value`, a stream of bits, and</span>
+</span><span class="line"><span class="sd">    a `ktable` of random uniform integers indexed `k` bits at a time.&quot;&quot;&quot;</span>
 </span><span class="line">    <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span>
 </span><span class="line">    <span class="k">for</span> <span class="n">position</span><span class="p">,</span> <span class="n">bits</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="o">*</span><span class="p">([</span><span class="nb">iter</span><span class="p">(</span><span class="n">value</span><span class="p">)]</span> <span class="o">*</span> <span class="n">k</span><span class="p">))):</span>
 </span><span class="line">        <span class="c1"># convert a list of `k` bits to a k-bit unsigned integer value.</span>
@@ -323,13 +326,14 @@ additional character from all but the last character (or any other
 one) in the initial input, and <code>xor</code>ing that last character with the
 newly derived one before looking up the result in a random table.</p>
 
-<p>Given characters of size \(s\) bits, the additional character is
-generated with an \(s \times s\)-bit look-up table for each original
-character in the input.  When the result size is shorter than the word
-size (e.g., a 56-bit output on 64-bit machines), we can conveniently
-find this additional character in unused output bits.  Otherwise, we
-must perform double the lookups.  In C, the general case might look
-like the following.</p>
+<p>Given characters of size \(s\) bits (alphabet \(\Sigma\) of
+cardinality \(2^s\)), the additional character is generated with an
+\(s \times s\)-bit look-up table for each original character in the
+input.  When the result size is shorter than the word size (e.g., a
+56-bit output on 64-bit machines), we can conveniently find this
+additional character in unused output bits.  Otherwise, we must
+perform double the lookups.  In C, the general case might look like
+the following.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>tabulation.c </span></figcaption>
 <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
@@ -359,7 +363,6 @@ like the following.</p>
 <span class="line-number">25</span>
 <span class="line-number">26</span>
 <span class="line-number">27</span>
-<span class="line-number">28</span>
 </pre></td><td class="code"><pre><code class="c"><span class="line"><span></span><span class="kt">uint64_t</span>
 </span><span class="line"><span class="nf">twisted_hash_byte</span><span class="p">(</span><span class="kt">uint64_t</span> <span class="n">x</span><span class="p">,</span> <span class="k">const</span> <span class="kt">uint64_t</span> <span class="o">*</span><span class="n">byte_table</span><span class="p">,</span>
 </span><span class="line">    <span class="k">const</span> <span class="kt">uint8_t</span> <span class="o">*</span><span class="n">twisting_table</span><span class="p">)</span>
@@ -374,7 +377,6 @@ like the following.</p>
 </span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">4</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
 </span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">5</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">40</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
 </span><span class="line">        <span class="n">acc</span> <span class="o">^=</span> <span class="n">byte_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">6</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">48</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
-</span><span class="line">
 </span><span class="line">
 </span><span class="line">        <span class="n">additional</span> <span class="o">=</span> <span class="n">twisting_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">0</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
 </span><span class="line">        <span class="n">additional</span> <span class="o">^=</span> <span class="n">twisting_table</span><span class="p">[</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">1</span> <span class="o">+</span> <span class="p">((</span><span class="n">x</span> <span class="o">&gt;&gt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xFF</span><span class="p">)];</span>
@@ -418,9 +420,10 @@ the parity of <em>that</em>.</p>
 
 <p>Parity isn’t a common hardware function anymore, at least not on full
 64-bit integers… but population count is, and 
-<code>parity(x) == popcount(x) % 2</code>.</p>
+<code>parity(x) == popcount(x) % 2</code>.  That’s
+<a href="https://pvk.ca/Blog/2017/04/02/three-universal-hashing-in-four-instructions/">the one-bit hash function I blogged about in 2017</a>.</p>
 
-<p>I see two ways we can use this simple tabulation hash funcion for bit
+<p>I see two ways we can use this simple tabulation hash function for bit
 outputs.  We we could let regular tabulation hashing run its course,
 compute the derived bit independently, and use that to conditionally
 <code>xor</code> in an additional random integer.  Alternatively, we could
@@ -499,14 +502,13 @@ composition.  Now that we view simple tabulation hashing as an affine
 bitwise transformation accelerated with a precomputed data structure,
 it’s clear that twisting can be free!</p>
 
-<pre><code>[1     ... ]
-[ 1    ... ]
-[  1   ... ]
-[   1  ... ]
+<pre><code>[1    ... ]
+[ 1   ... ]
+[  1  ... ]
     ...
-[ ...   1  ]
-[ ...    1 ]
-[????...??1]
+[ ...  1  ]
+[ ...   1 ]
+[???...??1]
 </code></pre>
 
 <p>Free twisting definitely sounds a bit odd to me, but feels compatible with
@@ -518,8 +520,16 @@ avoid generating such weak parameters in the first place.</p>
 
 <p>For twisted tabulation hashing, unlike simple tabulation hashing,
 replacing our carefully structured affine transform with a uniformly
-generated random one would hurt: it’s thanks to this additional
-structure that we avoid particularly weak parameters.</p>
+generated random one would hurt: it’s this exact structure that avoids
+particularly weak parameters.</p>
+
+<p>This linear algebraic trick only works because neither simple
+tabulation hashing nor twisted tabulation hashing impose any
+constraint on the size of the alphabet.  It does <em>not</em> extend to
+<a href="https://arxiv.org/abs/1311.3121">double tabulation</a>, where the
+additional independence grows with the alphabet size 
+\(|\Sigma| = 2^s\) and shrink with the number of characters in
+the input.</p>
 
 <h2 id="why-does-64-bit-rightarrow-64-bit-hashing-matter">Why does 64 bit \(\rightarrow\) 64 bit hashing matter?</h2>
 
