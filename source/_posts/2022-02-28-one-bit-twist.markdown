@@ -8,8 +8,7 @@ comments: true
 categories: 
 ---
 
-**This is DOA: twisted tabulation hashing depends on the size of the
-alphabet, and doesn't really work for boolean characters.**
+**This is DOA: twisted tabulation hashing needs \\(\Sigma^\epsilon > \log u\\), and that doesn't work for boolean characters.  [GFNI](https://en.wikipedia.org/wiki/AVX-512#GFNI) could fix it.**
 
 [Tabulation hashing](https://arxiv.org/abs/1011.5200) is one
 of a few practical approaches that guarantee 
