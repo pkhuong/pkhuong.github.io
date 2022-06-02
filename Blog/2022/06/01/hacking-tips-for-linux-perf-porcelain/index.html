@@ -5,7 +5,7 @@
 <!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
 <head>
   <meta charset="utf-8">
-  <title>Paul Khuong: some Lisp</title>
+  <title>Hacking tips for Linux perf porcelain - Paul Khuong: some Lisp</title>
   <meta name="author" content="Paul Khuong">
   <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
   
@@ -16,7 +16,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   
-  <link rel="canonical" href="https://www.pvk.ca/">
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/">
   <link href="/favicon.png" rel="icon">
   <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
   <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
@@ -79,15 +79,14 @@
   <div id="main">
     <div id="content">
       
-      <div class="blog-index">
+      <div>
+<article class="hentry" role="article">
   
-  
-  
-    <article>
-      
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/">Hacking tips for Linux perf porcelain</a></h1>
+      
+        <h1 class="entry-title" style="font-family: ">Hacking tips for Linux perf porcelain</h1>
+      
     
     
       <p class="meta">
@@ -106,7 +105,7 @@ June
 
 
         
-         | <a href="/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/#disqus_thread"
+         | <a href="#disqus_thread"
               data-disqus-identifier="https://www.pvk.ca/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/"
 	      >Comments</a>
         
@@ -117,7 +116,7 @@ June
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>Sometimes you just want to abuse <a href="https://perf.wiki.kernel.org/index.php/Main_Page">Linux <code>perf</code></a>
+<div class="entry-content" style="font-family: ; font-size: "><p>Sometimes you just want to abuse <a href="https://perf.wiki.kernel.org/index.php/Main_Page">Linux <code>perf</code></a>
 to make it do a thing it’s not designed for, and a proper C program
 would represent an excessive amount of work.</p>
 
@@ -252,19 +251,61 @@ hacks, and I’ve been using (and rediscovering) them for years.</p>
 <p>I find tightly scoped tools that don’t try to generalise have an ideal
 insight:effort ratio.  Go write your own!</p>
 </div>
-  
-  
 
 
-    </article>
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+June
   
-  <div class="pagination">
+1st, 
+2022
+
+
+
+
+      
+      
+
+
+    </p>
     
-      <a class="prev" href="/posts/2">&larr; Older</a>
+      <div class="sharing">
+  
+  
+  
+</div>
+
     
-    <a href="/Blog/archives">Blog Archives</a>
-    
-  </div>
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2021/12/19/bounded-dynamicism-with-cross-modifying-code/" title="Previous Post: Bounded dynamicism with cross-modifying code">&laquo; Bounded dynamicism with cross-modifying code</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
 </div>
 
     </div>
@@ -277,6 +318,24 @@ insight:effort ratio.  Go write your own!</p>
   
 
 <script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/';
+      this.page.title = 'Hacking tips for Linux perf porcelain';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
 
 
 

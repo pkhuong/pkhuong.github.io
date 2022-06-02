@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2021/05/14/baseline-implementations-should-be-predictable/">Baseline implementations should be predictable</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2021/06/07/entomological-solutions/">Entomological solutions</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-May
+June
   
-14th, 
+7th, 
 2021
 
 
 
 
         
-         | <a href="/Blog/2021/05/14/baseline-implementations-should-be-predictable/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2021/05/14/baseline-implementations-should-be-predictable/"
+         | <a href="/Blog/2021/06/07/entomological-solutions/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2021/06/07/entomological-solutions/"
 	      >Comments</a>
         
         
@@ -117,228 +117,293 @@ May
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I wrote <a href="https://crates.io/crates/reciprocal">Reciprocal</a> because I
-couldn’t find a nice implementation of div-by-mul in Rust without
-data-dependent behaviour. Why do I care?</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>Non-blocking algorithms have a reputation for complexity.  However, if
+you ask people who work on systems where strong progress guarantees
+are mandatory (e.g., hard real-time systems), they’ll often disagree.</p>
 
-<p>Like <a href="https://ridiculousfish.com/blog/posts/benchmarking-libdivide-m1-avx512.html">ridiculous fish mentions in his review of integer divisions on M1 and Xeon</a>,
-certain divisors (those that lose a lot of precision when rounding up
-to a fraction of the form \(n / 2^k\)) need a different, slower,
-code path in classic implementations. Powers of two are also typically
-different, but at least divert to a faster sequence, a variable right
-shift.</p>
+<p>I believe the difference is rooted in the way systems which <em>must</em>
+bound their pauses will sacrifice nice-to-haves to more cleanly
+satisfy that hard requirement.</p>
 
-<p>Reciprocal instead <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L116">uses a unified code path</a>
-to implement two expressions, 
-\(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\) and
-\(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \cdot \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\),
-that are identical except for the saturating increment of \(x\) in
-\(g_{m^\prime,s^\prime}(x)\).</p>
+<p>Researchers and library writers instead tend to aim for maximal
+guarantees or functionality while assuming (sacrificing) as little as
+possible.  Someone who’s sprinkling lock-free algorithms in a large
+codebase will similarly want to rely on maximally general algorithms,
+in order to avoid increasing the scope of their work: if
+tail latency and lock-freedom were high enough priorities to justify
+wide-ranging changes, the program would probably have been designed
+that way from the start.</p>
 
-<p>The first expression, \(f_{m,s}(x)\) corresponds to the usual
-div-by-mul approximation (implemented in gcc, LLVM, libdivide, etc.)
-where the reciprocal \(1/d\) is approximated in fixed point by rounding
-\(m\) <em>up</em>, with the upward error compensated by the truncating
-multiplication at runtime.  See, for example, Granlund and
-Montgomery’s <a href="https://gmplib.org/~tege/divcnst-pldi94.pdf">Division by invariant integers using multiplication</a>.</p>
+<p>It makes sense to explore general solutions, and academia is
+definitely a good place to do so.  It was fruitful for mathematicians
+to ask questions about complex numbers, then move on to fields, rings,
+groups, etc., like sadistic kids probing what a bug can still do as
+they tear its legs off one by one.  Quicksort and mergesort are
+probably the strongest exemplars of that sort of research in computer
+science: we don’t even ask what data is made of before assuming a
+comparison sort is probably a good idea.</p>
 
-<p>The second, \(g_{m^\prime,s^\prime}(x)\), is the multiply-and-add
-scheme of described by Robison in <a href="https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.512.2627&amp;rep=rep1&amp;type=pdf">N-Bit Unsigned Division Via N-Bit Multiply-Add</a>.</p>
+<p>It is however more typical to trade something in return for
+generality.  When there’s no impact on performance or resource
+usage, code complexity usually takes a hit.</p>
 
-<p>In that approximation, the reciprocal multiplier \(m^\prime\) is
-rounded <em>down</em> when converting \(1/d^\prime\) to fixed point.  At 
-runtime, we then bump the product up (by the largest value
-\(\frac{n}{2^{s^\prime}} &lt; 1/d^\prime\), i.e., \(\frac{m^\prime}{2^{s^\prime}}\)) before dropping the low bits.</p>
+<p>When solving a core problem like lock-freedom in a parallel
+realtime system, we instead ask how much more we can assume, what else
+we can give up, in order to obtain simpler, more robust solutions.
+We don’t want generality, we’re not crippling bugs; we want
+specificity, we’re dosing eggs with <a href="https://en.wikipedia.org/wiki/Antennapedia">Hox to get more legs</a>.</p>
 
-<p>With a bit of algebra, we see that \(m^\prime x + m^\prime = m^\prime (x + 1)\)…
-and we can use a saturating increment to avoid a 64x65 multiplication
-as long as we don’t trigger this second expression for divisors
-\(d^\prime\) for which
-\(\left\lfloor \frac{\mathtt{u64::MAX}}{d^\prime}\right\rfloor \neq \left\lfloor \frac{\mathtt{u64::MAX} - 1}{d^\prime}\right\rfloor\).</p>
+<p>The first time someone used to academic non-blocking algorithms hears
+about the resulting maximally specialised solutions, they’ll sometimes
+complain about “cheating.” Of course, it’s never cheating when a
+requirement actually is met; the surprise merely shows that the rules
+typically used to evaluate academic solutions are but approximations
+of reality, and can be broken…  and practitioners faced with
+specific problems are ideally placed to determine what rules
+they can flout.</p>
 
-<p>We have a pair of dual approximations, one that rounds the reciprocal
-up to a fixed point value, and another that rounds down; it makes
-sense to round to nearest, which nets us one extra bit of precision in
-the worst case, compared to always applying one or the other.</p>
+<h2 id="hoarding-is-caring">Hoarding is caring?</h2>
 
-<p>Luckily,<sup id="fnref:or-is-it" role="doc-noteref"><a href="#fn:or-is-it" class="footnote" rel="footnote">1</a></sup>
-<a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L322">all of <code>u64::MAX</code>’s factors (except 1 and <code>u64::MAX</code>) work with the “round up” approximation</a>
-that doesn’t increment, so the saturating increment is always safe
-when we actually want to use the second “round-down” approximation
-(unless \(d^\prime \in \{1, \mathtt{u64::MAX}\}\)).</p>
+<p>My favourite example of such cheating is type-stable memory.  The
+literature on Safe memory reclamation (SMR) conflates<sup id="fnref:or-does-it" role="doc-noteref"><a href="#fn:or-does-it" class="footnote" rel="footnote">1</a></sup> two
+problems that are addressed by SMR algorithms: reclamation races, and
+the ABA problem.</p>
 
-<p>This duality is the reason why Reciprocal can get away with
-64-bit multipliers.</p>
+<p>A reclamation race is what happens when a thread dereferences a
+pointer to the heap, but the pointee has already been deallocated;
+even when the racy accesses are loads, they can result in a
+segmentation fault (and a crash).</p>
 
-<p>Even better, \(f_{m,s}\) and \(g_{m^\prime,s^\prime}\)
-differ only in the absence or presence of a saturating increment.
-Rather than branching, <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L116">Reciprocal executes a data-driven increment</a>
-by 0 or 1,
-for \(f_{m,s}(x)\) or \(g_{m^\prime,s^\prime}(x)\) respectively.
-The upshot: predictable improvements over hardware division, even when
-dividing by different constants.</p>
+<p>The ABA problem is what happens when a descriptor (e.g., a pointer) is
+reused to refer to something else, but some code is unaware of the
+swap. For example, a thread could load a global pointer to a logically
+read-only object, read data off that pointer, sleep for a while, and
+observe that the global pointer has the same value. That does not mean
+nothing has changed: while the thread was sleeping, the pointee could
+have been freed, and then recycled to satisfy a fresh allocation.</p>
 
-<p>Summary of the results below: when measuring the throughput of
-independent divisions on my i7 7Y75 @ 1.3 GHz, Reciprocal consistently
-needs 1.3 ns per division, while hardware division can only achieve
-~9.6 ns / division (Reciprocal needs 14% as much / 86% less time).
-This looks comparable to the
-<a href="https://ridiculousfish.com/blog/posts/benchmarking-libdivide-m1-avx512.html#:~:text=intel%20xeon%203.0%20ghz%20(8275cl)">results reported by fish for libdivide when dividing by 7</a>.
-Fish’s <a href="https://github.com/ridiculousfish/libdivide">libdivide</a> no
-doubt does better on nicer divisors, especially powers of two, but
-it’s good to know that a simple implementation comes close.</p>
+<p>Classic SMR algorithms like <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf">epoch reclamation</a>
+and <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">hazard pointers</a>
+solve both problems at once; in fact, addressing
+reclamation races is their core contribution (it’s certainly the
+challenging part), and ABA protection is simply a nice corollary.</p>
 
-<p>We’ll also see that, in Rust land, the
-<a href="https://crates.io/crates/fastdivide">fast_divide crate</a>
-is dominated by <a href="https://github.com/ejmahler/strength_reduce">strength_reduce</a>,
-and that strength_reduce is only faster than <a href="https://github.com/pkhuong/reciprocal/">Reciprocal</a>
-when dividing by powers of two (although, looking at the disassembly,
-it probably comes close for single-result latency).</p>
+<p>However, programs <em>can choose</em> not to crash on benign use-after-free:
+reading from freed objects only triggers crashes when memory is mapped
+and unmapped dynamically, and that’s usually not an option for hard
+realtime systems.  On smaller embedded targets, there’s a fixed
+physical memory budget; either the program fits, or the program is
+broken.  Larger shared-memory parallel programs often can’t afford the IPIs
+and other hiccups associated with releasing memory to the operating
+system.  Either way, half the problem solved by SMR doesn’t even exist
+for them.</p>
 
-<p>First, results for division with the same precomputed inverse.  The
-timings are from
-<a href="https://github.com/bheisler/criterion.rs">criterion.rs</a>, 
-for <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/benches/div_throughput.rs#L29">\(10^4\) divisions in a tight loop</a>.</p>
+<p>The other half, ABA, is still an issue…  but that subproblem is
+easier to solve.  For example, we can tag data with sequence counters.<sup id="fnref:reuse-dont-recycle" role="doc-noteref"><a href="#fn:reuse-dont-recycle" class="footnote" rel="footnote">2</a></sup></p>
 
-<ul>
-  <li>“Hardware” is a regular HW DIV,</li>
-  <li>“compiled” lets LLVM generate specialised code,</li>
-  <li>“reciprocal” is <a href="https://github.com/pkhuong/reciprocal/blob/d591c59044b3a4f662112aae73c3adae9f168ea6/src/lib.rs#L11">PartialReciprocal</a>,<sup id="fnref:why-partial" role="doc-noteref"><a href="#fn:why-partial" class="footnote" rel="footnote">2</a></sup></li>
-  <li>“strength_reduce” is the <a href="https://github.com/ejmahler/strength_reduce">strength_reduce crate’s u64 division</a>,</li>
-  <li>and “fast_divide” is <a href="https://crates.io/crates/fastdivide">the fast_divide crate’s u64 division</a>.</li>
-</ul>
+<h2 id="lock-free-stacks-and-aba">Lock-free stacks and ABA</h2>
 
-<p>The last two options are the crates I considered before writing
-Reciprocal.  The strength_reduce crate switches between a special
-case for powers of two (implemented as a bitscan and a shift), and a
-general slow path that handles everything with a 128-bit fixed
-point multiplier.  fast_divide is inspired by libdivide and 
-implements the same three paths: a fast path for powers of two (shift
-right), a slow path for reciprocal multipliers that need one more bit
-than the word size (e.g, division by 7), and a regular round-up
-div-by-mul sequence.</p>
+<p>A <a href="https://en.wikipedia.org/wiki/Treiber_stack">lock-free multiple producers / single consumer linked stack</a> might be
+the simplest lock-free data structure.<sup id="fnref:but-maybe-not-scalable" role="doc-noteref"><a href="#fn:but-maybe-not-scalable" class="footnote" rel="footnote">3</a></sup></p>
 
-<p>Let’s look at <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/benches/div_throughput.rs#L29">the three cases in that order</a>.</p>
+<p>Pushing a new record to such a stack is easy:<sup id="fnref:not-in-c" role="doc-noteref"><a href="#fn:not-in-c" class="footnote" rel="footnote">4</a></sup> load the current top
+of stack pointer, publish that in our <a href="https://en.wikipedia.org/wiki/CAR_and_CDR">new record’s “next” (CDR) field</a>,
+and attempt to replace the top of stack with a pointer to our new
+record with a compare-and-swap (CAS).</p>
 
-<p>\(10^4\) divisions by 2 (i.e., a mere shift right by 1)</p>
+<p>How do we consume from such a stack?</p>
 
-<pre><code>hardware_u64_div_2      time:   [92.297 us 95.762 us 100.32 us]
-compiled_u64_div_by_2   time:   [2.3214 us 2.3408 us 2.3604 us]
-reciprocal_u64_div_by_2 time:   [12.667 us 12.954 us 13.261 us]
-strength_reduce_u64_div_by_2
-                        time:   [2.8679 us 2.9190 us 2.9955 us]
-fast_divide_u64_div_by_2
-                        time:   [2.7467 us 2.7752 us 2.8025 us]
-</code></pre>
+<p>The simplest way is to use a fetch-and-set (atomic exchange) to
+simultaneously clear the stack (set the top-of-stack pointer to the
+“empty stack” sentinel, e.g., <code>NULL</code>) and read the previous
+top-of-stack.  Any number of consumers can concurrently execute such a
+batch pop, although only one will grab everything.</p>
 
-<p>This is the <em>comparative</em> worst case for Reciprocal: while Reciprocal
-always uses the same code path (1.3 ns/division), the compiler shows
-we can do much better with a right shift. Both branchy implementations
-include a special case for powers of two, and thus come close to the
-compiler, thanks a predictable branch into a right shift.</p>
+<p>Alternatively, if there’s only one consumer at a time, it can pop with
+a compare-and-swap.  The consumer must load the current top-of-stack
+pointer.  If the stack is empty, there’s nothing to pop.  Otherwise,
+it can read the top record’s “next” field, and attempt to CAS out the
+top-of-stack pointer from the one it just read to the “next” record.</p>
 
-<p>\(10^4\) divisions by 7 (a “hard” division)</p>
+<p>The tricky step here is the one where the consumer reads the “next”
+field in the current top-of-stack record: that step would be subject
+to reclamation races, except that there’s only one consumer, so
+we know no one else concurrently popped that record and freed it.</p>
 
-<pre><code>hardware_u64_div_7      time:   [95.244 us 96.096 us 97.072 us]
-compiled_u64_div_by_7   time:   [10.564 us 10.666 us 10.778 us]
-reciprocal_u64_div_by_7 time:   [12.718 us 12.846 us 12.976 us]
-strength_reduce_u64_div_by_7
-                        time:   [17.366 us 17.582 us 17.827 us]
-fast_divide_u64_div_by_7
-                        time:   [25.795 us 26.045 us 26.345 us]
-</code></pre>
+<p>What can we do to support multiple consumers? Can we
+simply make sure that stack records are always safe to read, e.g., by
+freeing them to an object pool? Unfortunately, while
+use-after-free is benign for producers, it is not for
+consumers.</p>
 
-<p>Division by 7 is hard for compilers that do not implement the “rounded down”
-approximation described in Robison’s
-<a href="https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.512.2627&amp;rep=rep1&amp;type=pdf">N-Bit Unsigned Division Via N-Bit Multiply-Add</a>.
-This is the comparative <em>best</em> case for Reciprocal, since it always
-uses the same code (1.3 ns/division), but most other implementations
-switch to a slow path (strength_reduce enters a general case that
-is arguably more complex, but more transparent to LLVM). Even
-divisions directly compiled with LLVM are ~20% faster than Reciprocal:
-LLVM does not implement Robison’s round-down scheme, so it
-<a href="https://godbolt.org/z/Wvn3hhahd">hardcodes a more complex sequence</a>
-than Reciprocal’s.</p>
+<p>The key problem is that a consumer can observe that the top of stack
+points to record A, and that record A’s “next” field points to B, and
+then get stuck or sleep for a while.  During that time, another thread
+pops A and B, frees both, pushes C, and then pushes A’, a new record
+that happens to have the same address as A.  Finally, the initial
+consumer will compare the top-of-stack pointers with A (which also
+matches A’), and swap that for B, resurrecting a record that has
+already been consumed and freed.</p>
 
-<p>\(10^4\) divisions by 11 (a regular division)</p>
+<p>Full-blown SMR would fix all that.  However, if we can instead assume
+read-after-free do not crash (e.g., we use a type-stable allocator or
+an explicit object pool for records), we simply have to reliably
+detect when a record has returned to the top of the stack.<sup id="fnref:ll-sc" role="doc-noteref"><a href="#fn:ll-sc" class="footnote" rel="footnote">5</a></sup></p>
 
-<pre><code>hardware_u64_div_11     time:   [95.199 us 95.733 us 96.213 us]
-compiled_u64_div_by_11  time:   [7.0886 us 7.1565 us 7.2309 us]
-reciprocal_u64_div_by_11
-                        time:   [12.841 us 13.171 us 13.556 us]
-strength_reduce_u64_div_by_11
-                        time:   [17.026 us 17.318 us 17.692 us]
-fast_divide_u64_div_by_11
-                        time:   [21.731 us 21.918 us 22.138 us]
-</code></pre>
+<p>We can do that by tagging the top-of-stack pointer with a sequence
+counter, and update both with a double-wide compare-and-swap: instead
+of CASing the top-of-stack pointer, we want to CAS that pointer and
+its monotonically increasing counter.  Every successful CAS of the
+pointer will also increment the counter by one, so the sequence counter
+will differ when a record is popped and pushed back on the stack.</p>
 
-<p>This is a typical result. Again, Reciprocal can be trusted to work at
-1.3 ns/division.  Regular round-up div-by-mul works fine when dividing
-by 11, so code compiled by LLVM only needs a multiplication and a shift,
-nearly twice as fast as Reciprocal’s generic sequence.  The fast_divide
-crate does do better here than when dividing by 7, since it avoids the
-slowest path, but Reciprocal is still faster; simplicity pays.</p>
+<p>There is still a risk of ABA: the counter can wrap around.  That’s not
+a practical concern with 64-bit counters, and there are reasonable
+arguments that narrower counters are safe because no consumer will
+stay “stuck” for minutes or hours.<sup id="fnref:bitpacking" role="doc-noteref"><a href="#fn:bitpacking" class="footnote" rel="footnote">6</a></sup></p>
 
-<p>The three microbenchmarks above reward special-casing, since they always
-divide by the same constant in a loop, and thus always hit the same
-code path without ever incurring a mispredicted branch.</p>
+<h2 id="single-compare-multiple-swaps">Single-compare multiple-swaps</h2>
 
-<p>What happens to independent divisions <a href="https://github.com/pkhuong/reciprocal/blob/main/benches/div_throughput_variable.rs">by unpredictable precomputed divisors</a>,
-for divisions by 2, 3, 7, or 11 (respectively easy, regular, hard, 
-and regular divisors)?</p>
+<p>Sometimes, the application can naturally guarantee that CASed fields
+are ABA-free.</p>
 
-<pre><code>hardware_u64_div        time:   [91.592 us 93.211 us 95.125 us]
-reciprocal_u64_div      time:   [17.436 us 17.620 us 17.828 us]
-strength_reduce_u64_div time:   [40.477 us 41.581 us 42.891 us]
-fast_divide_u64_div     time:   [69.069 us 69.562 us 70.100 us]
-</code></pre>
+<p>For example, a hierarchical bump allocator may carve out global
+type-specific arenas from a shared chunk of address space, and satisfy
+allocations for each object type from the type’s current arena.
+Within an arena, allocations are reserved with atomic increments.
+Similarly, we carve out each arena from the shared chunk of address
+space with a (larger) atomic increment.
+Neither bump pointer ever decreases: once a region of address space
+has been converted to an arena, it stays that way, and once an object
+has been allocated from an arena, it also remains allocated (although
+it might enter a freelist).  Arenas are also never recycled: once
+exhausted, they stay exhausted.</p>
 
-<p>The hardware doesn’t care, and Reciprocal is only a bit slower (1.8
-ns/division instead of 1.3 ns/division) presumably because the relevant
-<code>PartialReciprocal</code> struct must now be loaded in the loop body.</p>
+<p>When an allocation type has exhausted its current arena (the arena’s
+bump pointer is exhausted), we want to atomically grab a new arena
+from the shared chunk of address space, and replace the type’s arena
+pointer with the newly created arena.</p>
 
-<p>The other two branchy implementations seemingly take a hit
-proportional to the number of special cases. The <code>strength_reduce</code> hot
-path only branches once, to detect divisors that are powers of two;
-its runtime goes from 0.29 - 1.8 ns/division to 4.2 ns/division (at
-least 2.4 ns slower/division).  The <code>fast_divide</code> hot path, like libdivide’s,
-switches between <em>three</em> cases, and goes from 0.28 - 2.2
-ns/division to 7.0 ns/division (at least 4.8 ns slower/division).</p>
+<p>A lock-free algorithm for such a transaction looks like it would have
+to build on top of multi-word compare-and-swap (MCAS), a hard operation that can
+be <a href="https://www.cl.cam.ac.uk/research/srg/netos/papers/2002-casn.pdf">implemented in a wait-free manner, but with complex algorithms</a>.</p>
 
-<p>And that’s why I prefer to start with predictable baseline
-implementations: unpredictable code with special cases can easily
-perform well on benchmarks, but, early on during development, it’s
-hard to tell how the benchmarks may differ from real workloads, and
-whether the special cases “overfit” on these differences.</p>
+<p>However, we know that the compare-and-swapped state evolves
+monotonically: once an arena has been carved out from the shared
+chunk, it will never be returned as a fresh arena again.  In other
+words, there is no ABA, and a compare-and-swap on an arena pointer
+will never succeed spuriously.</p>
 
-<p>With special cases for classes of divisors, most runtime div-by-mul
-implementations make you guess whether you’ll tend to divide by powers
-of two, by “regular” divisors, or by “hard” ones in order to estimate
-how they will perform.  Worse, they also force you to take into
-account how often you’ll switch between the different classes.
-Reciprocal does not have that problem: its hot path is the same
-regardless of the constant divisor, so it has the same predictable
-performance for all divisors,<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">3</a></sup>
-and there’s only one code path, so we don’t have to worry about class
-switches.</p>
+<p>Monotonicity also means that we can acquire a consistent snapshot of both
+the type’s arena pointer and the chunk’s allocation state by reading
+everything twice.  Values are never repeated, so any write
+that executes concurrently with our snapshot loop will be detected: the
+first and second reads of the updated data will differ.</p>
 
-<p>Depending on the workload, it may make sense to divert to faster code
-paths, but it’s usually best to start without special cases when it’s
-practical to do so…  and I think
-<a href="https://crates.io/crates/reciprocal">Reciprocal</a> shows that, for
-integer division by constants, it is.</p>
+<p>We also know that the only way a type’s arena pointer can be replaced
+is by allocating a new one from the shared chunk.  If we took a
+consistent snapshot of the type’s arena pointer and of the shared
+chunk’s allocation state, and the allocation state hasn’t changed
+since, the arena pointer must also be unchanged (there’s a
+hierarchy).</p>
+
+<p>We can combine all these properties to atomically replace a type’s
+arena pointer with a new one obtained from the shared chunk, using a
+much simpler core operation, a single-compare multiple-swap (SCMS). We
+want to execute a series of CASes (one to allocate an arena
+in the chunk, a few to initialise the arena, and one to publish
+the new arena), but we can also assume that once the first
+updated location matches the CAS’s expected value, all other ones will
+as well.  In short, only the first CAS may fail.</p>
+
+<p>That’s the key simplifier compared to full-blown multi-word
+compare-and-swap algorithms: they have to incrementally acquire update
+locations, any of which might turn the operation into a failure.</p>
+
+<p>We can instead encode all the CASes in a transaction descriptor, CAS
+that descriptor in the first update location, and know that the
+multi-swaps will all succeed iff that CAS is successful.</p>
+
+<p>If the first CAS is successful, we also know that it’s safe to execute
+the remaining CASes, and finally replace the descriptor with its
+final value with one last CAS.  We don’t even have to publish the
+descriptor to all updated locations, because concurrent allocations
+will notice the current arena has been exhausted, and try to get a new
+one from the shared chunk… at which point they will notice the
+transaction descriptor.</p>
+
+<p>All the CASes after the first one are safe to execute arbitrarily
+often thanks to monotonicity.  We already know that any descriptor that has
+been published with the initial CAS will not fail, which means the only
+potential issue is spuriously successful CASes… but our mutable
+fields never repeat a value, so that can’t happen.</p>
+
+<p>The application’s guarantee of ABA-safety ends up really simplifying
+this single-compare multiple-swap algorithm (SCMS), compared to a
+multi-word compare-and-swap (MCAS).  In a typical MCAS implementation, helpers
+must abort when they detect that they’re helping a MCAS operation that
+has already failed or already been completed.  Our single-compare
+assumption (once the first CAS succeeds, the operation succeeds) takes
+care of the first case: helpers never see failed operations.  Lack
+of ABA means helpers don’t have to worry about their CASes succeeding
+after the SCMS operation has already been completed: they will always fail.</p>
+
+<p>Finally, we don’t even need any form of SMR on the transaction
+descriptor: <a href="https://arxiv.org/pdf/1708.01797.pdf#page=4">a sequence counter in the descriptor and a copy of that counter in a tag next to pointers to that descriptor</a>
+suffice to disambiguate incarnations of the same physical descriptor.</p>
+
+<p>Specialising to the allocator’s monotonic state let us use
+single-compare multiple-swap, a simplification of full multi-word
+compare-and-swap, and further specialising that primitive for
+monotonic state let us get away with nearly half as many CASes (k + 1
+for k locations) as the state of the art for MCAS (2k + 1 for k locations).</p>
+
+<h2 id="a-plea-for-integration">A plea for integration</h2>
+
+<p>There is a common thread between never unmapping allocated addresses,
+sequence tags, type-stable memory, and the allocator’s single-compare
+multiple-swap: monotonicity.</p>
+
+<p>The lock-free stack shows how easy it is to conjure up artificial
+monotonicity.  However, when we integrate algorithms more tightly
+with the program and assume the program’s state is naturally
+monotonic, we’ll often unlock simpler and more efficient solutions.  I
+also find there’s something of a virtuous cycle: it’s easier for a
+module to guarantee monotonicity to its components when it itself only
+has to handles monotonic state, like a sort of end-to-end monotonicity
+principle.</p>
+
+<p>Unfortunately, it’s not clear how much latent monotonicity there is
+in real programs.  I suppose that makes it hard to publish algorithms
+that assumes its presence.  I think it nevertheless makes sense to
+explore such stronger assumptions, in order to help practitioners estimate
+what we could gain in exchange for small sacrifices.</p>
+
+<p>Asymmetric synchronisation is widely used these days, but I imagine it
+was once unclear how much practical interest there might be in that
+niche; better understood benefits lead to increased adoption.  I hope
+the same can happen for algorithms that assume monotonic state.</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:or-is-it" role="doc-endnote">
-      <p>Is it luck?  Sounds like a fun number theory puzzle. <a href="#fnref:or-is-it" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:or-does-it" role="doc-endnote">
+      <p><a href="https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.87.5131&amp;rep=rep1&amp;type=pdf">Maged Michael’s original Safe Memory Reclamation paper</a> doesn’t: allowing arbitrary memory management is the paper’s main claim.  I think there’s a bit of a first mover’s advantage, and researchers are incentivised to play within the sandbox defined by Michael.  For example, <a href="https://arxiv.org/abs/1708.01797">Arbel-Raviv and Brown in “Reuse, don’t Recycle”</a> practically hide the implementation of their proposal on page 17 (Section 5), perhaps because a straightforward sequence counter scheme is too simple for publication nowadays. <a href="#fnref:or-does-it" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:why-partial" role="doc-endnote">
-      <p>The struct is “partial” because it can’t represent divisions by 1 or <code>u64::MAX</code>. <a href="#fnref:why-partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:reuse-dont-recycle" role="doc-endnote">
+      <p>See <a href="https://arxiv.org/abs/1708.01797">Reuse, don’t Recycle</a> for a flexible take. <a href="#fnref:reuse-dont-recycle" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:partial" role="doc-endnote">
-      <p>…all divisors except 1 and <code>u64::MAX</code>, which must instead <a href="https://github.com/pkhuong/reciprocal/blob/b2f1fa0093a3fbfb2758c434aba700bf852b4b30/src/lib.rs#L196">use the more general <code>Reciprocal</code> struct</a>. <a href="#fnref:partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:but-maybe-not-scalable" role="doc-endnote">
+      <p>A stack fundamentally focuses contention towards the top-of-stack pointer, so lock-free definitely doesn’t imply scalable. It’s still a good building block. <a href="#fnref:but-maybe-not-scalable" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:not-in-c" role="doc-endnote">
+      <p>In assembly language, anyway. Language memory models make this surprisingly hard. For example, any ABA in the push sequence is benign (we still have the correct bit pattern in the “next” field), but C and C++’s pointer provenance rules say that accessing a live object through a pointer to a freed object that happens to alias the new object is undefined behaviour. <a href="#fnref:not-in-c" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:ll-sc" role="doc-endnote">
+      <p>Load Linked / Store Conditional solves <em>this specific problem</em>, but that doesn’t mean LL/SC as found on real computers is necessarily a better primitive than compare-and-swap. <a href="#fnref:ll-sc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:bitpacking" role="doc-endnote">
+      <p>Which is nice, because it means we can pack data and sequence counters in 64-bit words, and use the more widely available single-word compare-and-swap. <a href="#fnref:bitpacking" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

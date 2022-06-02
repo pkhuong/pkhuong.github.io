@@ -118,7 +118,51 @@ Feb
 <p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
 
 
-<div class="entry-content" style="font-family: ; font-size: "><p><strong>This is DOA: twisted tabulation hashing needs \(\Sigma^\epsilon &gt; \log u\), and that doesn’t work for boolean characters.  <a href="https://en.wikipedia.org/wiki/AVX-512#GFNI">GFNI</a> could fix it.</strong></p>
+<div class="entry-content" style="font-family: ; font-size: "><h2 id="current-status">Current status</h2>
+
+<p>Twisted tabulation hashing needs an actual random function for the
+twisted head (the rest may use simple tabulation hashing, i.e., random
+boolean affine transforms).  The twisted head must also use a large
+alphabet such that \(|\Sigma|^\eps &gt; \log u\).  Pătrașcu and Thorup
+seem to think \(|\Sigma| = 256\) suffices.  This means we could
+reduce the memory requirements of twisted tabulation hashing to only
+need a full byte look-up table for the twisted head, and an optimally
+represented affine transform.</p>
+
+<p>On a Zen 3, there is enough MLP to sustain at least 1 LUT load per
+cycle, even from L2.  That’s a baseline of 8 input bits
+consumed/cycle.  In fact, that’s less than the theoretical limit: we’d
+expect 2 or 3 per cycle.  However, the number of instructions gets in
+the way: we observe &gt; 4 IPC for simple LUT tabulation hashing.</p>
+
+<p>The bit vector approach, when implemented as a rotation of the input
+bit vector + FMA (bitwise and / xor), can achieve ~1 dot product /
+lane / cycle.  We’re on 256-bit AVX2, so that’s only 4 input
+bits/cycle.  Here as well, the bottleneck is the sheer number of
+instructions.  VPTERNLOG would combine the <code>and / xor</code> FMA in one
+instruction and AVX-512 would immediately double the width and offer a
+native lane-wise rotation.  I believe the matrix-vector view on
+AVX-512 could match the speed of tabulation hashing with byte lookups,
+without the wasted space.</p>
+
+<p>There’s also a ~15-20c latency to roundtrip from vector to GPR to
+vector, but that’s easily hidden by overlapping executions.</p>
+
+<p>And of course, vector gathers still suck: the throughput of loads is
+one fetch per cycle, so at best we’re equivalent to scalar loads.  In
+practice, uops scheduling overhead seems to get us to ~half the speed
+(and 2 IPC).</p>
+
+<p>Given the above, unless you have AVX 512 or a very wide uarch (M1?) it
+probably makes sense to implement twisted tabulation hashing with byte
+lookups and a 56 bit output: the number of loads is what matters, so
+stealing one byte for the twister avoids halving the speed.  Even with
+128 bit inputs, we can hash at a ~16 cycles/input throughput: L2 is
+more than capable of feeding 1 miss/cycle.</p>
+
+<p>56 bits ought to be enough for estimators like minwise or KMV?</p>
+
+<hr width="50%" />
 
 <p><a href="https://arxiv.org/abs/1011.5200">Tabulation hashing</a> is one
 of a few practical approaches that guarantee 
@@ -160,8 +204,11 @@ hashing punches above its 3-independence weight.
 its standard presentation is awkward to implement efficiently for
 round (32 or 64 bits) output sizes.</p>
 
-<p>This post shows an alternative bit-at-a-time approach where “twisting”
-is free.</p>
+<p>Both simple and twisted tabulation hashing scale poorly with the input
+size: splitting up 128 bits in bytes, the classic character size,
+requires 16 look-up tables of 256 entries each, i.e., 32 KB for a
+64-bit output.  This post shows how a bit-at-a-time approach is more
+frugal in space and comparably practical for longer inputs.</p>
 
 <h2 id="simple-tabulation-hashing">Simple tabulation hashing</h2>
 
@@ -316,6 +363,32 @@ table[1][1] ^ table[2][0] ...</code>): we might as well populate
 understand, this does not <em>provably</em> help, but can’t hurt: it can be
 seen as <code>xor</code>-combining the initial bit-driven table with an
 independent random function for each byte.</p>
+
+<p>Mixing a 64-bit input to a 64-bit output (or 32 to 32) is close to the
+sweet spot for byte-drive tabulation hashing: longer inputs require
+impractically large look-up tables that fill or exceed the L1 cache,
+and shorter outputs can more easily make use of parity as a dot
+product in bitwise linear algebra.</p>
+
+<p>Let’s first see how we can implement 128 \(\rightarrow\) 64 bit
+tabulation hashing bit by bit.</p>
+
+<h2 id="128-rightarrow-64-bit-tabulation-hashing">128 \(\rightarrow\) 64 bit tabulation hashing</h2>
+
+<p>Byte-driven tabulation hashing scales perfectly linearly with the
+number of bytes in the input, until the look-up tables spill out of
+one cache level into the next.  Vectorised bit matrix-vector
+multiplications instead incur a fixed latency overhead when loading
+values in vector registers and when extracting a scalar value from
+accumulators in vector registers.  Thus, while byte tabulation hashing
+needs \(1/3\) as much as time as a vectorised bit matrix-vector
+multiplication for \(64\times 64\) matrices, the 
+different for \(128\times 64\) matrices.</p>
+
+<p>A contemporary x86 can sustain 2 AVX loads per cycle, i.e., 512 bits
+per cycle.  This means we can iterate through the \(128 \cdot 64 =
+8192\) bits of a coefficient matrix in 16 cycles. The remaining
+latency comes from fixed startup and teardown logic.</p>
 
 <h2 id="bit-twisted-tabulation-hashing">Bit-twisted tabulation hashing</h2>
 
@@ -606,6 +679,8 @@ Feb
       
       
       
+      
+        <a class="basic-alignment right" href="/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/" title="Next Post: Hacking tips for Linux perf porcelain">Hacking tips for Linux perf porcelain &raquo;</a>
       
     </p>
   </footer>
