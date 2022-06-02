@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2022-06-01T21:10:25-04:00</updated>
+  <updated>2022-06-01T21:26:53-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -17,7 +17,7 @@
   <entry>
     <title type="html"><![CDATA[Hacking tips for Linux perf porcelain]]></title>
     <link href="https://www.pvk.ca/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/"/>
-    <updated>2022-06-01T21:09:05-04:00</updated>
+    <updated>2022-06-01T21:09:06-04:00</updated>
     <id>https://www.pvk.ca/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain</id>
     <content type="html"><![CDATA[<p>Sometimes you just want to abuse <a href="https://perf.wiki.kernel.org/index.php/Main_Page">Linux <code>perf</code></a>
 to make it do a thing it’s not designed for, and a proper C program
@@ -145,6 +145,12 @@ counter</li>
   <li>which will finally write both the far branch event and its
 associated PT buffer to the perf event ring buffer.</li>
 </ol>
+
+<p>Not only does this work, but it also minimises the trigger latency.
+That’s a big win compared to, e.g., <a href="https://man7.org/linux/man-pages/man1/perf-record.1.html#:~:text=%2D%2Dswitch%2Doutput%2Devent">perf record’s built-in <code>--switch-output-event</code></a>:
+a trigger latency on the order of hundreds of microseconds forces a
+large PT buffer in order to capture the period we’re actually
+interested in, and copying that large buffer slows down everything.</p>
 
 <h2 id="is-this-documented">Is this documented?</h2>
 

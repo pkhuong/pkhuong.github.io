@@ -244,6 +244,12 @@ counter</li>
 associated PT buffer to the perf event ring buffer.</li>
 </ol>
 
+<p>Not only does this work, but it also minimises the trigger latency.
+That’s a big win compared to, e.g., <a href="https://man7.org/linux/man-pages/man1/perf-record.1.html#:~:text=%2D%2Dswitch%2Doutput%2Devent">perf record’s built-in <code>--switch-output-event</code></a>:
+a trigger latency on the order of hundreds of microseconds forces a
+large PT buffer in order to capture the period we’re actually
+interested in, and copying that large buffer slows down everything.</p>
+
 <h2 id="is-this-documented">Is this documented?</h2>
 
 <p>Who knows? (Who cares?) These tricks fulfill a common need in quick
