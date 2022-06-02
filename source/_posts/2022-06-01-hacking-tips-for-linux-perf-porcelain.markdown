@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Hacking tips for Linux perf porcelain"
-date: 2022-06-01 21:09:06 -0400
+date: 2022-06-01 21:09:07 -0400
 comments: true
 categories: 
 ---
@@ -33,8 +33,15 @@ their own line(s).  Now that the output for each address can span
 a variable number of lines, how is one to know when to stop reading?
 
 A simple trick is to always write *two* addresses to `addr2line`'s
-standard input: the address we want to symbolicate, and a dummy one
+standard input: the address we want to symbolicate, and
 that never has debug info (e.g., 0).
+
+EDIT: [Travis Downs reports that it's possible for binaries to have asource location at address 0x0](https://twitter.com/trav_downs/status/1532206949038624768)
+and suggests using a sentinel that doesn't look like an address
+at all. On my older versions of `addr2line`, non-address lines
+are treated like missing debug info; Travis observed that his
+`addr2line` echoes the non-address sentinel verbatim.  It's
+easy enough to stop when either happens.
 
 We now know that the first set of resolution information lines (one
 line when printing only the file and line number, two lines when
