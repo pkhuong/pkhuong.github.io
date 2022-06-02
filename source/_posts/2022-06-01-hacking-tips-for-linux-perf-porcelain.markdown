@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Hacking tips for Linux perf porcelain"
-date: 2022-06-01 21:09:05 -0400
+date: 2022-06-01 21:09:06 -0400
 comments: true
 categories: 
 ---
@@ -137,6 +137,12 @@ counter
 3. which triggers Linux's performance monitoring interrupt handler
 4. which will finally write both the far branch event and its
    associated PT buffer to the perf event ring buffer.
+
+Not only does this work, but it also minimises the trigger latency.
+That's a big win compared to, e.g., [perf record's built-in `--switch-output-event`](https://man7.org/linux/man-pages/man1/perf-record.1.html#:~:text=%2D%2Dswitch%2Doutput%2Devent):
+a trigger latency on the order of hundreds of microseconds forces a
+large PT buffer in order to capture the period we're actually
+interested in, and copying that large buffer slows down everything.
 
 Is this documented?
 -------------------
