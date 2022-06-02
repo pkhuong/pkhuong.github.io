@@ -143,8 +143,15 @@ their own line(s).  Now that the output for each address can span
 a variable number of lines, how is one to know when to stop reading?</p>
 
 <p>A simple trick is to always write <em>two</em> addresses to <code>addr2line</code>’s
-standard input: the address we want to symbolicate, and a dummy one
+standard input: the address we want to symbolicate, and
 that never has debug info (e.g., 0).</p>
+
+<p>EDIT: <a href="https://twitter.com/trav_downs/status/1532206949038624768">Travis Downs reports that it’s possible for binaries to have asource location at address 0x0</a>
+and suggests using a sentinel that doesn’t look like an address
+at all. On my older versions of <code>addr2line</code>, non-address lines
+are treated like missing debug info; Travis observed that his
+<code>addr2line</code> echoes the non-address sentinel verbatim.  It’s
+easy enough to stop when either happens.</p>
 
 <p>We now know that the first set of resolution information lines (one
 line when printing only the file and line number, two lines when
