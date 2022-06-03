@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2022-06-02T08:18:38-04:00</updated>
+  <updated>2022-06-03T08:19:30-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -17,7 +17,7 @@
   <entry>
     <title type="html"><![CDATA[Hacking tips for Linux perf porcelain]]></title>
     <link href="https://www.pvk.ca/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/"/>
-    <updated>2022-06-01T21:09:07-04:00</updated>
+    <updated>2022-06-01T21:09:08-04:00</updated>
     <id>https://www.pvk.ca/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain</id>
     <content type="html"><![CDATA[<p>Sometimes you just want to abuse <a href="https://perf.wiki.kernel.org/index.php/Main_Page">Linux <code>perf</code></a>
 to make it do a thing it’s not designed for, and a proper C program
@@ -48,12 +48,12 @@ a variable number of lines, how is one to know when to stop reading?</p>
 standard input: the address we want to symbolicate, and
 that never has debug info (e.g., 0).</p>
 
-<p>EDIT: <a href="https://twitter.com/trav_downs/status/1532206949038624768">Travis Downs reports that it’s possible for binaries to have asource location at address 0x0</a>
-and suggests using a sentinel that doesn’t look like an address
-at all. On my older versions of <code>addr2line</code>, non-address lines
-are treated like missing debug info; Travis observed that his
-<code>addr2line</code> echoes the non-address sentinel verbatim.  It’s
-easy enough to stop when either happens.</p>
+<p>EDIT: <a href="https://twitter.com/trav_downs/status/1532206949038624768">Travis Downs reports that <code>llvm-addr2line-14</code> finds debug info for 0x0</a>
+(presumably a bug. I don’t see that on llvm-addr2line-12)
+and suggests looking for <code>0x0: .*</code> in addition to <code>??</code>/<code>??:0</code>.  It’s
+easy enough to stop when either happens, and clang’s version of
+<code>addr2line</code> can be a lot faster than binutil’s on files with a lot of
+debug information.</p>
 
 <p>We now know that the first set of resolution information lines (one
 line when printing only the file and line number, two lines when
