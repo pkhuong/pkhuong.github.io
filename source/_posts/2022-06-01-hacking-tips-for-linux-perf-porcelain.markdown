@@ -38,10 +38,12 @@ that never has debug info (e.g., 0).
 
 EDIT: [Travis Downs reports that `llvm-addr2line-14` finds debug info for 0x0](https://twitter.com/trav_downs/status/1532206949038624768)
 (presumably a bug. I don't see that on llvm-addr2line-12)
-and suggests looking for `0x0: .*` in addition to `??`/`??:0`.  It's
+and suggests looking for `0x0.*` in addition to `??`/`??:0`.  It's
 easy enough to stop when either happens, and clang's version of
 `addr2line` can be a lot faster than binutil's on files with a lot of
-debug information.
+debug information.[^more-robust]
+
+[^more-robust]: I ended up generating passing a string suffixed with a UUIDv4 as a sentinel: `llvm-addr2line` just spits back any line that doesn't look addresses.  Alexey Alexandrov on the profiler developers' slack noted that `llvm-symbolizer` cleanly terminates each sequence of frames with an empty line.
 
 We now know that the first set of resolution information lines (one
 line when printing only the file and line number, two lines when
@@ -159,3 +161,5 @@ hacks, and I've been using (and rediscovering) them for years.
 
 I find tightly scoped tools that don't try to generalise have an ideal
 insight:effort ratio.  Go write your own!
+
+<p><hr style="width: 50%"></p>
