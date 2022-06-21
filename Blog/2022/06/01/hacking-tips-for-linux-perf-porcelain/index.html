@@ -147,10 +147,10 @@ that never has debug info (e.g., 0).</p>
 
 <p>EDIT: <a href="https://twitter.com/trav_downs/status/1532206949038624768">Travis Downs reports that <code>llvm-addr2line-14</code> finds debug info for 0x0</a>
 (presumably a bug. I don’t see that on llvm-addr2line-12)
-and suggests looking for <code>0x0: .*</code> in addition to <code>??</code>/<code>??:0</code>.  It’s
+and suggests looking for <code>0x0.*</code> in addition to <code>??</code>/<code>??:0</code>.  It’s
 easy enough to stop when either happens, and clang’s version of
 <code>addr2line</code> can be a lot faster than binutil’s on files with a lot of
-debug information.</p>
+debug information.<sup id="fnref:more-robust" role="doc-noteref"><a href="#fn:more-robust" class="footnote" rel="footnote">1</a></sup></p>
 
 <p>We now know that the first set of resolution information lines (one
 line when printing only the file and line number, two lines when
@@ -263,6 +263,15 @@ hacks, and I’ve been using (and rediscovering) them for years.</p>
 
 <p>I find tightly scoped tools that don’t try to generalise have an ideal
 insight:effort ratio.  Go write your own!</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:more-robust" role="doc-endnote">
+      <p>I ended up generating passing a string suffixed with a UUIDv4 as a sentinel: <code>llvm-addr2line</code> just spits back any line that doesn’t look addresses.  Alexey Alexandrov on the profiler developers’ slack noted that <code>llvm-symbolizer</code> cleanly terminates each sequence of frames with an empty line. <a href="#fnref:more-robust" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
 </div>
 
 

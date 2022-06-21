@@ -1,0 +1,569 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Plan B for UUIDs: double AES-128 - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2022/06/20/plan-b-for-uuids-double-aes-128/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Plan B for UUIDs: double AES-128</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+June
+  
+20th, 
+2022
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2022/06/20/plan-b-for-uuids-double-aes-128/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>It looks like internauts are having another go at the
+<a href="https://brandur.org/nanoglyphs/026-ids">“uuid as primary key”</a>
+debate.  I guess I’m lucky that the systems I’ve worked on mostly fall
+in two classes:</p>
+
+<ol>
+  <li>
+    <p>those with trivial write load (often trivial load in general),
+where the performance implications of UUIDs for primary keys are
+irrelevant.</p>
+  </li>
+  <li>
+    <p>those where performance concerns lead us to heavily partition the
+data, by tenant if not more finely… making information leaks from
+sequentially allocated ids a minor concern.</p>
+  </li>
+</ol>
+
+<p>Of course, there’s always the possibility that a system in the first
+class eventually sees a much higher load.  Until roughly 2016, I
+figured we could eventually switch to 
+<a href="https://www.ietf.org/id/draft-peabody-dispatch-new-uuid-format-03.html#section-1-6.1.1">one of the many k-sorted alternatives</a>
+created by web-scale companies.</p>
+
+<p>By 2016, I felt comfortable assuming <a href="https://en.wikipedia.org/wiki/AES_instruction_set#x86_architecture_processors">AES-NI</a>
+was available on any x86 server,<sup id="fnref:also-arm" role="doc-noteref"><a href="#fn:also-arm" class="footnote" rel="footnote">1</a></sup> and that opens up a different option:
+work with nice “leaky” ids internally, and encrypt/decrypt them at the
+edge (e.g., by printing a <a href="https://www.postgresql.org/docs/current/xtypes.html">user-defined type</a> in the DB server).</p>
+
+<p>I’m not certain why that option has so little mindshare, but I think
+part of the reason must be that developers tend to have an outdated
+mental cost model for strong encryption like AES-128.</p>
+
+<h2 id="hardware-assisted-aes-not-not-fast">Hardware-assisted AES: not not fast</h2>
+
+<p>Intel shipped their first chip with AES-NI in 2010, and AMD in 2013.
+A decade later, it’s anything but exotic, and is available even in
+low-power Goldmont “Atoms”.</p>
+
+<p>The core of the AES-NI extension to the x86-64 instruction set is a
+pair of instructions to perform one round of AES encryption (<code>AESENC</code>)
+or one round of decryption (<code>AESDEC</code>) on a 16-byte block.</p>
+
+<p><a href="https://uops.info/table.html?search=aesenc&amp;cb_lat=on&amp;cb_tp=on&amp;cb_WSM=on&amp;cb_ICL=on&amp;cb_ADLP=on&amp;cb_ADLE=on&amp;cb_ZENp=on&amp;cb_ZEN3=on&amp;cb_measurements=on&amp;cb_aes=on">Andreas Abel’s uops.info</a>
+shows that the first implementation, in Westmere, had a
+6-cycle latency for each round, and that Intel and AMD
+have been optimising the instructions so their latencies
+are now down to 3 (Intel) or 4 (AMD) cycles per round.</p>
+
+<p>That’s pretty good (on the order of a multiplication), but each
+instruction only handles one round. The schedule for AES-128 (the
+fastest option) consists of 10 rounds: 
+<a href="https://www.intel.com/content/dam/doc/white-paper/advanced-encryption-standard-new-instructions-set-paper.pdf#page=17">an initial whitening xor, 9 <code>aesenc</code> / <code>aesdec</code> and 1 <code>aesenclast</code> / <code>aesdeclast</code></a>.
+Multiply 3 cycles per round by 10 “real” rounds, and we find a latency
+of 30 cycles (+ 1 for the whitening <code>xor</code>) on recent Intels and 40
+cycles on recent AMDs, assuming the key material is already available
+in registers or L1 cache.</p>
+
+<p>This might be disappointing given that <a href="https://2013.diac.cr.yp.to/slides/gueron.pdf#page=20">AES128-CTR can achieve more than 1 byte/cycle</a>,
+but that’s because pipelining lets conteporary x86 server chips start
+executing <em>two</em> rounds per cycle, even while prior rounds are in flight.</p>
+
+<p>Still, 35-50 cycles latency to encrypt or decrypt a single 16-byte
+block with AES-128 is similar to a L3 cache hit… really not that bad
+compared to the slow operations involved in a durable DDL statement.</p>
+
+<h2 id="a-trivial-encryption-scheme-for-sequential-ids">A trivial encryption scheme for sequential ids</h2>
+
+<p>AES works on 16 byte blocks, and 16-byte randomish external ids are
+standard.  The simplest approach to convert sequential ids to
+something random looking probably goes as follows:</p>
+
+<ol>
+  <li>Fix a global AES-128 key.</li>
+  <li>Let primary keys consist of a sequential 64-bit id and a randomly
+generated 64-bit integer.<sup id="fnref:not-strictly" role="doc-noteref"><a href="#fn:not-strictly" class="footnote" rel="footnote">2</a></sup></li>
+  <li>Convert a primary key to an external id by encrypting the
+primary key’s 128 bits with AES-128, using the global key (each
+global key defines a unique permutation from 128 bits input to 128
+bit output).</li>
+  <li>Convert an external id to a potential primary key by decrypting
+the external id with AES-128, using the global key.</li>
+</ol>
+
+<pre><code>__m128i encryption_key[11];
+__m128i decryption_key[11];
+
+struct primary_key
+{
+    uint64_t sequence;
+    uint64_t nonce;
+};
+
+struct external_id
+{
+    uint8_t bytes[16];
+};
+
+void derive_decryption_key(void)
+{
+	decryption_key[10] = encryption_key[0];
+    for (size_t i = 1; i &lt; 10; i++)
+        decryption_key[10 - i] = _mm_aesimc_si128(encryption_key[i]);
+    decryption_key[0] = encryption_key[10];
+    return;
+}
+
+struct external_id encode(struct primary_key pk)
+{
+    struct external_id ret;
+	__m128i temp;
+
+    /* Convert to little-endian bytes. */
+    memcpy(&amp;temp, &amp;pk, sizeof(temp));
+    temp = _mm_xor_si128(temp, encryption_key[0]);
+
+    #pragma GCC unroll 10
+    for (size_t i = 1; i &lt; 10; i++)
+        temp = _mm_aesenc_si128(temp, encryption_key[i]);
+    
+    temp = _mm_aesenclast_si128(temp, encryption_key[10]);
+    memcpy(&amp;ret, &amp;temp, sizeof(ret));
+    return ret;
+}
+
+struct primary_key decode(struct external_id eid)
+{
+    struct primary_key ret;
+    __m128i temp;
+
+    memcpy(&amp;temp, &amp;eid, sizeof(temp));
+    temp = _mm_xor_si128(temp, decryption_key[0]);
+    
+    #pragma GCC unroll 10
+    for (size_t i = 1; i &lt; 10; i++)
+        temp = _mm_aesdec_si128(temp, decryption_key[i]);
+        
+    temp = _mm_aesdeclast_si128(temp, decryption_key[10]);
+    /* Convert from little-endian bytes. */
+    memcpy(&amp;ret, &amp;temp, sizeof(ret));
+    return ret;
+}
+</code></pre>
+
+<p>XXX concrete perf (compare with getrandom(2), and a AES128-CTR DRBG).</p>
+
+<p>This works if our external APIs can expose with arbitrary 16-byte ids.
+AES-128 defines permutation, so we could also run this in reverse to
+generate sequence/nonce pairs for preexisting rows to avoid changing
+their external id too much (e.g., pad integer ids with zero bytes).</p>
+
+<p>However, it’s sometimes important to generate valid UUIDs… or to at
+least save one bit in the encoding as an escape hatch for a versioning
+scheme.  We can do that, with <a href="https://en.wikipedia.org/wiki/Format-preserving_encryption">format-preserving encryption</a>.</p>
+
+<h2 id="controlling-one-bit-in-the-external-encrypted-id">Controlling one bit in the external encrypted id</h2>
+
+<p>We view our primary keys as pairs of 64-bit integers, where the first
+integer is the sequential id.  Realistically, the topmost bit of that
+sequential id will always be zero (i.e., the first 64-bit integer’s
+value is less than \(2^{63}\)).  Let’s ask the same thing of our
+external ids.  The code in this post assumes a little-endian encoding,
+for simplicity (and because the world runs on little endian), but the
+same logic works for big endian.</p>
+
+<p><a href="https://www.cs.ucdavis.edu/~rogaway/papers/subset.pdf#page=7">Black and Rogaway’s cycle-walking method</a>
+can efficiently fix one input/output bit:
+we just keep encrypting the data until bit 63 is zero.</p>
+
+<p>When decrypting, we know the initial (fully decrypted) value had a
+zero in bit 63, and we also know that we only re-encrypted when the
+output did <em>not</em> have a zero in bit 63.  This means we can keep
+iterating the decryption function (at least once) until we find a
+value with a zero in bit 63.</p>
+
+<pre><code>bool is_valid_pkey(struct primary_key pk)
+{
+	return pk.sequence &lt;= INT63_MAX;
+}
+
+struct external_id encode_with_zero_bit(struct primary_key pk)
+{
+    union {
+        struct primary_key pk;
+        struct external_id eid;
+    } temp = {
+        .pk = pk,
+    };
+    
+    assert(is_valid_pkey(pk));
+    
+    do {
+        temp.eid = encode(temp.pk);
+    } while (!is_valid_pkey(temp.pk));
+    
+    return temp.external;
+}
+
+struct primary_id decode_with_zero_bit(struct external_id eid)
+{
+    union {
+        struct primary_key pk;
+        struct external_id eid;
+    } temp = {
+		.eid = eid,
+    };
+    
+    assert(is_valid_pkey(temp.pk));
+    
+    do {
+        temp.pk = decode(temp.eid);
+    } while (!is_valid_pkey(temp.pk));
+    
+    return temp.pk;
+}
+</code></pre>
+
+<p>This approach terminate after two rounds of encryption (<code>encode</code>) or
+decryption (<code>decode</code>), in expectation.</p>
+
+<p>XXX concrete perf.</p>
+
+<p>That’s not bad, but some might prefer a deterministic algorithm.  More
+importantly, the expected runtime scales exponentially with the number
+of bits we want to control.  That’s not ideal for UUIDv4, where only
+122 of the 128 bits are defined as payload: we can expect to loop 64
+times in order to fix the remaining 6 bits.</p>
+
+<h2 id="controlling-more-bits-with-a-feistel-network">Controlling more bits with a Feistel network</h2>
+
+<p>A <a href="https://en.wikipedia.org/wiki/Feistel_cipher">Feistel network</a>
+derives a permutation over tuples of values from hash functions over
+the individual values.  There are
+<a href="https://nvlpubs.nist.gov/nistpubs/specialpublications/nist.sp.800-38g.pdf">NIST recommendations for general format-preserving encryption</a>
+with Feistel networks, but they need 8+ calls to AES to encrypt
+one value.</p>
+
+<p>They’re also solving a much harder problem than we are: we only have
+64 bits (not even) of actual payload, the rest is just random bits.
+Full format-preserving encryption must assume everything in the input
+is meaningful payload that must not be leaked.</p>
+
+<p>Our situation is closer to a 64-bit payload (the sequential id) and
+a 64-bit IV (the randomly generated nonce).  It’s tempting to simply
+<code>xor</code> the payload with the low bits of AES-128 (or a <a href="https://en.wikipedia.org/wiki/Pseudorandom_function_family">PRF</a>
+like <a href="https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3">BLAKE3</a>)
+applied to the nonce:</p>
+
+<pre><code>Broken(id, nonce):
+    id ^= AES_k(nonce)[0:len(id)]
+    return (id, nonce)
+</code></pre>
+
+<p>Unfortunately, random 64-bit values <em>could</em> repeat on realistic
+database sizes (a couple billion rows).
+When an attacker observes two external ids with the same IV, they can
+<code>xor</code> the encrypted payloads and find the <code>xor</code> of the two plaintext
+sequential ids.  This might seem like a minor information leak, but
+clever people have been able to amplify similar leaks and fully break
+encryption systems.</p>
+
+<p>Intuitively, we’d want to also mix the randomly generated 64 bits with
+something before returning an external id.</p>
+
+<p>That sounds a lot like a Feistel network, for which
+<a href="https://inst.eecs.berkeley.edu/~cs276/fa20/notes/Luby_Rackoff_paper.pdf">Luby and Rackoff</a>
+have shown that 3 rounds are pretty good:</p>
+
+<pre><code>Encrypt(A, B):
+    B ^= PRF_k1(A)[0:len(b)]  # e.g., AES
+    A ^= PRF_k2(B)[0:len(a)]
+    B ^= PRF_k3(A)[0:len(b)]
+    
+    return (A, B)
+</code></pre>
+
+<p>If we let A be the sequentially allocated id, and B the 64-bit nonce,
+we can also observe that <code>xor</code>ing the uniformly generated B with a a
+pseudorandom function’s output is the same as generating bits
+uniformly.  In our case, we can skip the one round of the Feistel
+network: that means we <em>deterministically</em> only need exactly 2 AES values.</p>
+
+<pre><code>HalfEncrypt(id, nonce):
+    id ^= AES_k1(nonce)[0:len(id)]
+    nonce ^= AES_k2(id)[0:len(nonce)]
+    return (id, nonce)
+</code></pre>
+
+<p>This is a minimal tweak to fix <code>Broken</code>: hide the value of <code>nonce</code>
+before returning it, in order to make it harder to use collisions.
+That Feistel network construction works for arbitrary splits between
+<code>id</code> and <code>nonce</code>, as long as each component is large enough (more than
+20 or 30 bits) and at most 128 bits (the AES block size).</p>
+
+<p>We can work within the
+<a href="https://www.ietf.org/id/draft-peabody-dispatch-new-uuid-format-03.html#v8">layout proposed for UUIDv8</a>
+and assign \(48 + 12 = 60\) bits for the sequential id
+(row id or timestamp), and 62 bits for the uniformly generated value.<sup id="fnref:uuidv7" role="doc-noteref"><a href="#fn:uuidv7" class="footnote" rel="footnote">3</a></sup></p>
+
+<pre><code>XXX C code
+</code></pre>
+
+<p>XXX concrete perf</p>
+
+<h2 id="sortable-internal-ids-pseudo-random-external-ids-also-not-not-fast">Sortable internal ids, pseudo-random external ids: also not not fast</h2>
+
+<p>With hardware-accelerated AES (a version of Blake 3 specialised for
+short inputs might perform similarly), encrypting and decrypting
+128-bit ids takes less than 100 cycles on contemporary x86-64
+servers… faster than a load from main memory!</p>
+
+<p>This post only addressed the question of runtime performance.
+I think the real challenges with encrypting external ids have to do
+with making it hard for programmers to accidentally leak internal ids.
+While I don’t know how that would go, because I’ve never had to use
+this trick in a production system, it seems like it can’t be harder
+than doing the same in a schemas that have explicit internal primary
+keys and external ids on each table.  I’m also hopeful that one could
+do something smart with user-defined types and views.</p>
+
+<p>Either way, I believe the runtime cost of encrypting or decrypting ids
+is a non-issue for the vast majority of database workloads.</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:also-arm" role="doc-endnote">
+      <p>ARMv8’s cryptographic extension offers <a href="https://developer.arm.com/documentation/ddi0596/2021-12/SIMD-FP-Instructions/AESE--AES-single-round-encryption-">similar AESD/AESE instructions</a>. <a href="#fnref:also-arm" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:not-strictly" role="doc-endnote">
+      <p>The output isn’t <em>incorrect</em> if the second integer is always 0 or a table-specific value.  However, losing that entropy makes it easier for an attacker to correlate ids across tables. <a href="#fnref:not-strictly" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:uuidv7" role="doc-endnote">
+      <p>Or follow <a href="https://www.ietf.org/id/draft-peabody-dispatch-new-uuid-format-03.html#v7">UUIDv7</a> with a 48-bit timestamp and 74 bit random value. <a href="#fnref:uuidv7" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+June
+  
+20th, 
+2022
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/" title="Previous Post: Hacking tips for Linux perf porcelain">&laquo; Hacking tips for Linux perf porcelain</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2022 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2022/06/20/plan-b-for-uuids-double-aes-128/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2022/06/20/plan-b-for-uuids-double-aes-128/';
+      this.page.title = 'Plan B for UUIDs: double AES-128';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-20468541-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+</body>
+</html>
