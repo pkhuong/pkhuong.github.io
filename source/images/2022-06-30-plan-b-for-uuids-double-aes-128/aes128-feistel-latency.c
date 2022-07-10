@@ -50,7 +50,8 @@ static struct external_id format_encode(struct primary_key pk)
 	return temp.eid;
 }
 
-__attribute__((noinline)) struct primary_key encode_loop(struct primary_key pk, size_t repeat)
+__attribute__((noinline)) struct primary_key
+encode_loop(struct primary_key pk, size_t repeat)
 {
 	union {
 		struct primary_key pk;
