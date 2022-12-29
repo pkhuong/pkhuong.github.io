@@ -132,7 +132,7 @@ extended to the unspecified “seeded” hash function they use.</p>
 <a href="https://chargueraud.org/research/2009/ln/main.pdf">the locally nameless representation</a>: 
 rather than representing bindings with simple binders and complex
 references, as in de Bruijn indices (lambda is literally just a
-<code>lambda</code> literal, but references count must count how many lambdas to
+<code>lambda</code> literal, but references must count how many lambdas to
 go up in order to find the correct bindings), Maziarz and his
 coauthors use simple references (holes, all identical), and complex
 binders (each lambda tracks the set of paths from the lambda binding
@@ -141,7 +141,7 @@ to the relevant holes).</p>
 <p>The rest all flows naturally from this powerful idea.</p>
 
 <p>Part of the naturally flowing rest are collision probability
-analyses for hashing-based data structures.  Of course it’s not what
+analyses for a few hashing-based data structures.  Of course it’s not what
 <a href="https://en.wikipedia.org/wiki/Programming_Language_Design_and_Implementation">PLDI</a> is about, but that aspect of the paper makes it look like the
 authors are unaware of analysis and design tools for hashing based
 algorithms introduced in the 1970s (a quick Ctrl-F for “universal,”
@@ -163,25 +163,25 @@ practically realisable ones.</p>
 <p>Let’s tackle the first responsibility: incrementally hashing
 trees bottom up.</p>
 
-<p>The paper essentially says the follwoing. Assume we have one truly random n-ary hash function \(h\), and a tag for each constructor (e.g., \(s_{\texttt{Plus}}\) for <code>(Plus a b)</code>);
-we can simply feed the constructor’s arity, its tag, and the subtrees’ hash values to \(h\): \(h(2, s_{\texttt{Plus}}, hv_a, hv_b)\)…
+<p>The paper essentially says the following. Assume we have one <em>truly random n-ary</em> hash function \(h\), and a tag for each constructor (e.g., \(s_{\texttt{Plus}}\) for <code>(Plus a b)</code>);
+we can simply feed the constructor’s arity, its tag, and the subtrees’ hash values to \(h\), e.g., \(h(2, s_{\texttt{Plus}}, hv_a, hv_b)\)…
 and goes on to show a surprisingly weak collision bound
-(the collision rate for two distinct expression trees grows with the
+(the collision rate for two distinct trees grows with the
 <em>sum</em> of the size of both trees).</p>
 
 <p>A non-intuitive fact in hash-based algorithm is that results for truly
-random hash functions often fail to generalise for weaker “salted”
+random hash functions often fail to generalise for the weaker “salted”
 hash functions we can implement in practice.  For example, 
 <a href="https://arxiv.org/abs/cs/0612055">linear probing hash tables need <em>5</em></a>-<a href="https://en.wikipedia.org/wiki/Universal_hashing">universal hash functions</a><sup id="fnref:tabular" role="doc-noteref"><a href="#fn:tabular" class="footnote" rel="footnote">1</a></sup> in
 order to match the performance we expect from a naïve analysis with
 truly random hash functions.  A <a href="https://www.cs.princeton.edu/courses/archive/fall09/cos521/Handouts/universalclasses.pdf">5-universal family of hash functions</a>
 isn’t the kind of thing we use or come up with by accident (such
-families are parameterised on at least 5 words for word-sized outputs, and that’s a lot of salt).</p>
+families are parameterised by at least 5 words for word-sized outputs, and that’s a lot of salt).</p>
 
 <p>The paper’s assumption that the collision bound it gets for a truly
 random function \(h\) holds for practical salted/seeded hash
 functions is thus unwarranted (see, for examples, 
-<a href="https://www.cs.utexas.edu/~yzhang/papers/hash-alenex10.pdf">these counter examples for linear probing</a>, or <a href="https://en.wikipedia.org/wiki/SipHash">the seed-independent collisions that motivated the development of SipHash</a>;
+<a href="https://www.cs.utexas.edu/~yzhang/papers/hash-alenex10.pdf">these counter examples for linear probing</a>, or <a href="https://en.wikipedia.org/wiki/SipHash">the seed-independent collisions that motivated the development of SipHash</a>);
 strong cryptographic hash functions could work (find a collision, break Bitcoin),
 but we otherwise need a more careful analysis.</p>
 
@@ -190,7 +190,7 @@ classic <a href="https://en.wikipedia.org/wiki/Rolling_hash">incremental hashing
 
 <p>Polynomial string hash functions are computed over a fixed finite
 field \(\mathbb{F}\) (e.g., arithmetic modulo a prime number
-\(p\)), and parameterised with a single point \(x \in \mathbb{F}\).</p>
+\(p\)), and parameterised by a single point \(x \in \mathbb{F}\).</p>
 
 <p>Assuming a string of “characters” \(v_i \in \mathbb{F}\) (e.g., we could
 hash strings of atomic bytes in arithmetic modulo a prime \(p \geq 256\)
@@ -201,30 +201,30 @@ hash value is simply</p>
 
 <p>evaluated in the field \(\mathbb{F}\), e.g., \(\mathbb{Z}/p\mathbb{Z}\).</p>
 
-<p>For more structured atomic values, we can either serialise to bits and
-make sure the field is large enough (or split longer bit serialised
-values into multiple characters).  And of course, we can linearise trees
+<p>For more structured atomic (leaf) values, we can serialise to bits and
+make sure the field is large enough , or split longer bit serialised
+values into multiple characters.  And of course, we can linearise trees
 to strings by encoding them in binary S-expressions, with dedicated
 characters for open <code>(</code> and close <code>)</code> parentheses.<sup id="fnref:rpn" role="doc-noteref"><a href="#fn:rpn" class="footnote" rel="footnote">2</a></sup></p>
 
 <p>The only remaining problem is to commute hashing and string
 concatenation: given two subtrees <code>x</code>, <code>y</code>, we want to compute the
 hash value of <code>(Plus a b)</code>, i.e., hash <code>"(Plus " + a + " " + b + ")"</code>
-in sublinear time, given something of constant size, like hash values
+in constant time, given something of constant size, like hash values
 for <code>a</code> and <code>b</code>.</p>
 
 <p>Polynomials offer a lot of algebraic structure, so it shouldn’t be
 a surprise that there exists a solution.</p>
 
 <p>In addition to computing <code>h(a)</code>, i.e., \(\sum_{i=1}^{|a|} a_i x^i,\)
-we will remember \(x^{|a|}\), i.e., the product <code>x</code> repeated for each
+we will remember \(x^{|a|}\), i.e., the product of <code>x</code> repeated for each
 “character” we fed to the hash function while hashing the subtree <code>a</code>.
 We can obviously compute that power in time linear in the size of <code>a</code>,
 although in practice we might prefer to first compute that size, and later
-exponentiate in time logarithmic in the size of <code>a</code>, by <a href="https://en.wikipedia.org/wiki/Exponentiation_by_squaring">repeated squaring</a>.</p>
+exponentiate in logarithmic time with <a href="https://en.wikipedia.org/wiki/Exponentiation_by_squaring">repeated squaring</a>.</p>
 
-<p>Equipped with this additional power of \(x\in\mathbb{F}\), we can now compute \(h(a \mathtt{++} b)\)
-in constant time.</p>
+<p>Equipped with this additional power of \(x\in\mathbb{F}\), we can now compute the hash for the concatenation of two strings \(h(a \mathtt{++} b)\)
+in constant time, given the hash and power of <code>x</code> for the constituent strings \(a\) and \(b\).</p>
 
 <p>Expanding \(h(a \mathtt{++} b)\) and letting \(m = |a|, \) \(n = |b| \) yields:</p>
 
@@ -241,14 +241,14 @@ in constant time.</p>
 <p>and we already have all right-hand side three terms \(h(a),\) \(x^{|a|},\) and \(h(b).\)</p>
 
 <p>Similarly, \(x^{|a \mathtt{++} b|} = x^{|a| + |b|} = x^a \cdot x^b,\)
-which we can compute in constant time as well.</p>
+computable in constant time as well.</p>
 
 <p>This gives us an explicit representation for the hash summary of each
 substring, so it’s easy to handle, e.g., commutative and associative
 operators by sorting the pairs of \((h(\cdot), x^{|\cdot|})\) that
-correspond to each parameter before hashing their concatenation.</p>
+correspond to each argument before hashing their concatenation.</p>
 
-<p>TL;DR: a small addition to classic polynomial string hashing commutes
+<p>TL;DR: a small extension of classic polynomial string hashing commutes
 efficiently with string concatenation.</p>
 
 <p>And the collision rate?  We compute the same <a href="https://arxiv.org/abs/1008.1715">polynomial string hash</a>,
@@ -260,7 +260,7 @@ the generation of the random point \(x \in \mathbb{F}\);<sup id="fnref:sketch" r
 evaluate the polynomial with Horner’s method rather than maintaining
 \(x^i\).  The result computes a different hash function, since it reverses
 the order of the terms in the polynomial, but that’s irrelevant for
-collision analysis.  The concatenation trick is similarly affected:
+collision analysis.  The concatenation trick is similarly little affected:
 we now want \(h(a \mathtt{++} b) = x^{|b|} h(a) + h(b)\).</p>
 
 <h2 id="hashing-unordered-maps-and-sets">Hashing unordered maps and sets</h2>
@@ -283,16 +283,16 @@ with the hash and power of <code>x</code> for the serialised representation of
 subtree rooted at the node.<sup id="fnref:crypto" role="doc-noteref"><a href="#fn:crypto" class="footnote" rel="footnote">5</a></sup></p>
 
 <p>The paper instead takes the treacherously attractive approach of
-hashing individual key-value pairs, and combining them with a group
+hashing individual key-value pairs, and combining them with an abelian group
 operator (commutative and associative, and where each element has an
-inverse)… in their case, bitwise <code>xor</code>.</p>
+inverse)… in their case, bitwise <code>xor</code> over fixed-size words.</p>
 
 <p>Of course, for truly random hash functions, this works well enough,
 and the proof is simple.  Unfortunately, just because a practical
 hash function is well distributed for a single value does not mean
 pairs or triplets of values generated by hashing different inputs
 with a single parameterised functions won’t show any “clumping.”
-That’s what the <a href="https://en.wikipedia.org/wiki/K-independent_hashing">concept of \(k-\)universality is all about</a>.</p>
+That’s what the <a href="https://en.wikipedia.org/wiki/K-independent_hashing">\(k-\)universality is all about</a>.</p>
 
 <p>For key-value pairs, we can do something simple: associate one hash
 function from a (almost-<code>xor</code>)-universal family to each value, and
@@ -305,6 +305,12 @@ were regenerated arbitrarily to ensure uniqueness in a prior linear
 traversal of the expression tree.  The “variable names” could thus
 include (or <em>be</em>) randomly generated parameters for a
 (almost-<code>xor</code>)-universal family.</p>
+
+<p><a href="https://arxiv.org/pdf/1504.06804.pdf#page=12">Multiply-shift is universal</a>,
+so that would work; other approaches <a href="https://thomasahle.com/papers/mersenne.pdf">modulo a Mersenne prime should also be safe to <code>xor</code></a>.</p>
+
+<p>For compilers where hashing speed is more important than compact
+hash values, almost-universal families could make sense.</p>
 
 <p>The <a href="http://cr.yp.to/antiforgery/pema-20071022.pdf#page=6">simplest almost-<code>xor</code>-universal family of hash functions on contemporary hardware is probably <code>PH</code></a>, a 1-universal family that maps
 a pair of words \((x_1, x_2)\) to a pair of output words, and is
@@ -331,8 +337,9 @@ multiplicands into a single \(2w-\)bit product.  The products have the
 similar property of colliding with probability \(w^{-1}\) even once
 combined with addition modulo \(w^2\).</p>
 
-<p>It’s cute. Useful? Maybe not, when we could use purely functional
-balanced trees, and time complexity is already in linearithmic land.</p>
+<p>Regardless of theh hash function, it’s cute. Useful? Maybe not, when
+we could use purely functional balanced trees, and time complexity is
+already in linearithmic land.</p>
 
 <h2 id="unknown-unknowns-and-walking-across-the-campus">Unknown unknowns and walking across the campus</h2>
 
@@ -365,7 +372,7 @@ pointers and quick gut checks when we think it’s all trivial because
       <p>A more efficient option in practice, if maybe idiosyncratic, is to use Robin Hood hashing with linear probing to maintain the key-value pairs sorted by <code>hash(key)</code> (and breaking improbable ties by comparing the keys themselves), but that doesn’t lend itself well to incremental hash maintenance. <a href="#fnref:rhh" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:crypto" role="doc-endnote">
-      <p>Cryptographically-minded readers might find <a href="http://csg.csail.mit.edu/pubs/memos/Memo-464/memo-464.pdf interesting">Incremental Multiset Hashes and their Application to Integrity Checking</a>. <a href="#fnref:crypto" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>Cryptographically-minded readers might like <a href="http://csg.csail.mit.edu/pubs/memos/Memo-464/memo-464.pdf interesting">Incremental Multiset Hashes and their Application to Integrity Checking</a>. <a href="#fnref:crypto" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
