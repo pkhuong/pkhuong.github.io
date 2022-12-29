@@ -282,7 +282,7 @@ balanced trees sorted primarily on the key’s hash value, and secondarily on th
 balanced trees to maintain the tree’s hash value as we add or remove
 entries: <a href="https://www.staff.city.ac.uk/~ross/papers/FingerTree.pdf#page=9">augment each node</a>
 with the hash and power of <code>x</code> for the serialised representation of
-subtree rooted at the node.</p>
+subtree rooted at the node.<sup id="fnref:crypto" role="doc-noteref"><a href="#fn:crypto" class="footnote" rel="footnote">5</a></sup></p>
 
 <p>The paper instead takes the treacherously attractive approach of
 hashing individual key-value pairs, and combining them with a group
@@ -365,6 +365,9 @@ pointers and quick gut checks when we think it’s all trivial because
     </li>
     <li id="fn:rhh" role="doc-endnote">
       <p>A more efficient option in practice, if maybe idiosyncratic, is to use Robin Hood hashing with linear probing to maintain the key-value pairs sorted by <code>hash(key)</code> (and breaking improbable ties by comparing the keys themselves), but that doesn’t lend itself well to incremental hash maintenance. <a href="#fnref:rhh" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:crypto" role="doc-endnote">
+      <p>Cryptographically-minded readers might find <a href="http://csg.csail.mit.edu/pubs/memos/Memo-464/memo-464.pdf interesting">Incremental Multiset Hashes and their Application to Integrity Checking</a>. <a href="#fnref:crypto" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
