@@ -158,7 +158,7 @@ practically realisable ones.</p>
 </ol>
 
 <p>As Per saliently put it, there are two options for formal analysis
-of collision probabilities here: 
+of collision probabilities here:
 we can either assume a cryptographic hash function like <a href="https://en.wikipedia.org/wiki/SHA-3">SHA-3</a> or <a href="https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3">BLAKE3</a>, in which case <em>any collision</em> is world-breaking news,
 so all that matters is serialising data unambiguously when feeding bytes to the hash function,
 or we can work in the <a href="https://www.cs.princeton.edu/courses/archive/fall09/cos521/Handouts/universalclasses.pdf">universal hashing framework</a>.</p>
@@ -170,16 +170,17 @@ or we can work in the <a href="https://www.cs.princeton.edu/courses/archive/fall
 <p>Let’s tackle the first responsibility: incrementally hashing
 trees bottom up.</p>
 
-<p>The paper essentially says the following. Assume we have one <em>truly random n-ary</em> hash function \(h\), and a tag for each constructor (e.g., \(s_{\texttt{Plus}}\) for <code>(Plus a b)</code>);
-we can simply feed the constructor’s arity, its tag, and the subtrees’ hash values to \(h\), e.g., \(h(2, s_{\texttt{Plus}}, hv_a, hv_b)\)…
+<p>The paper essentially says the following in <a href="https://simon.peytonjones.org/assets/pdfs/hashing-modulo-alpha.pdf#page=15">Appendix A</a>.
+Assume we have one <em>truly random variable-arity</em> hash function (“hash combiner”) \(f\), and a tag for each constructor (e.g., \(s_{\texttt{Plus}}\) for <code>(Plus a b)</code>);
+we can simply feed the constructor’s arity, its tag, and the subtrees’ hash values to \(f\), e.g., \(f(2, s_{\texttt{Plus}}, hv_a, hv_b)\)…
 and goes on to show a surprisingly weak collision bound
 (the collision rate for two distinct trees grows with the
-<em>sum</em> of the size of both trees).</p>
+<em>sum</em> of the size of both trees).<sup id="fnref:union-bound" role="doc-noteref"><a href="#fn:union-bound" class="footnote" rel="footnote">1</a></sup></p>
 
-<p>A non-intuitive fact in hash-based algorithm is that results for truly
+<p>A non-intuitive fact in hash-based algorithms is that results for truly
 random hash functions often fail to generalise for the weaker “salted”
 hash functions we can implement in practice.  For example, 
-<a href="https://arxiv.org/abs/cs/0612055">linear probing hash tables need <em>5</em></a>-<a href="https://en.wikipedia.org/wiki/Universal_hashing">universal hash functions</a><sup id="fnref:tabular" role="doc-noteref"><a href="#fn:tabular" class="footnote" rel="footnote">1</a></sup> in
+<a href="https://arxiv.org/abs/cs/0612055">linear probing hash tables need <em>5</em></a>-<a href="https://en.wikipedia.org/wiki/Universal_hashing">universal hash functions</a><sup id="fnref:tabular" role="doc-noteref"><a href="#fn:tabular" class="footnote" rel="footnote">2</a></sup> in
 order to match the performance we expect from a naïve analysis with
 truly random hash functions.  A <a href="https://www.cs.princeton.edu/courses/archive/fall09/cos521/Handouts/universalclasses.pdf">5-universal family of hash functions</a>
 isn’t the kind of thing we use or come up with by accident (such
@@ -209,13 +210,13 @@ hash value is simply</p>
 <p>evaluated in the field \(\mathbb{F}\), e.g., \(\mathbb{Z}/p\mathbb{Z}\).</p>
 
 <p>For more structured atomic (leaf) values, we can serialise to bits and
-make sure the field is large enough , or split longer bit serialised
+make sure the field is large enough, or split longer bit serialised
 values into multiple characters.  And of course, we can linearise trees
 to strings by encoding them in binary S-expressions, with dedicated
-characters for open <code>(</code> and close <code>)</code> parentheses.<sup id="fnref:rpn" role="doc-noteref"><a href="#fn:rpn" class="footnote" rel="footnote">2</a></sup></p>
+characters for open <code>(</code> and close <code>)</code> parentheses.<sup id="fnref:rpn" role="doc-noteref"><a href="#fn:rpn" class="footnote" rel="footnote">3</a></sup></p>
 
 <p>The only remaining problem is to commute hashing and string
-concatenation: given two subtrees <code>x</code>, <code>y</code>, we want to compute the
+concatenation: given two subtrees <code>a</code>, <code>b</code>, we want to compute the
 hash value of <code>(Plus a b)</code>, i.e., hash <code>"(Plus " + a + " " + b + ")"</code>
 in constant time, given something of constant size, like hash values
 for <code>a</code> and <code>b</code>.</p>
@@ -261,7 +262,7 @@ efficiently with string concatenation.</p>
 <p>And the collision rate?  We compute the same <a href="https://arxiv.org/abs/1008.1715">polynomial string hash</a>,
 so two distinct strings of length at most \(n\) collide with
 probability at most \(n/|\mathbb{F}|\) (with the expectation over
-the generation of the random point \(x \in \mathbb{F}\);<sup id="fnref:sketch" role="doc-noteref"><a href="#fn:sketch" class="footnote" rel="footnote">3</a></sup> never worse than Lemma 6.6 of Maziards <em>et al</em>, and up to twice as good.</p>
+the generation of the random point \(x \in \mathbb{F}\);<sup id="fnref:sketch" role="doc-noteref"><a href="#fn:sketch" class="footnote" rel="footnote">4</a></sup> never worse than Lemma 6.6 of Maziarz <em>et al</em>, and up to twice as good.</p>
 
 <p>Practical implementations of polynomial string hashing tend to
 evaluate the polynomial with Horner’s method rather than maintaining
@@ -283,11 +284,11 @@ maybe more like <code>snoc</code> lists with sharing).</p>
 is in maintaining the hash value for a map.</p>
 
 <p>Typically, one hashes unordered sets or maps by storing them in
-balanced trees sorted primarily on the key’s hash value, and secondarily on the key.<sup id="fnref:rhh" role="doc-noteref"><a href="#fn:rhh" class="footnote" rel="footnote">4</a></sup> We can also easily tweak arbitrary
+balanced trees sorted primarily on the key’s hash value, and secondarily on the key.<sup id="fnref:rhh" role="doc-noteref"><a href="#fn:rhh" class="footnote" rel="footnote">5</a></sup> We can also easily tweak arbitrary
 balanced trees to maintain the tree’s hash value as we add or remove
 entries: <a href="https://www.staff.city.ac.uk/~ross/papers/FingerTree.pdf#page=9">augment each node</a>
 with the hash and power of <code>x</code> for the serialised representation of
-subtree rooted at the node.<sup id="fnref:crypto" role="doc-noteref"><a href="#fn:crypto" class="footnote" rel="footnote">5</a></sup></p>
+subtree rooted at the node.<sup id="fnref:crypto" role="doc-noteref"><a href="#fn:crypto" class="footnote" rel="footnote">6</a></sup></p>
 
 <p>The paper instead takes the treacherously attractive approach of
 hashing individual key-value pairs, and combining them with an abelian group
@@ -362,14 +363,19 @@ the others.  Corollary: we should <em>especially</em> ask experts for
 pointers and quick gut checks when we think it’s all trivial because
 <em>we</em> don’t see anything to worry about.</p>
 
+<p><small>Thank you Per for linking to <a href="https://simon.peytonjones.org/assets/pdfs/hashing-modulo-alpha.pdf">Maziarz <em>et al’s</em> nice paper</a> and for quick feedback as I iterated on this post.</small></p>
+
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
   <ol>
+    <li id="fn:union-bound" role="doc-endnote">
+      <p>Perhaps not that surprising given the straightforward union bound. <a href="#fnref:union-bound" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
     <li id="fn:tabular" role="doc-endnote">
       <p><a href="https://dl.acm.org/doi/10.5555/2627817.2627833">Twisted tabular hashing</a> also works despite not being quite 5-universal, and is already at the edge of practicality. <a href="#fnref:tabular" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:rpn" role="doc-endnote">
-      <p>It’s often easier to update a hash function after appending a string, so a reverse polish style could be a bit more efficient. <a href="#fnref:rpn" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>It’s often easier to update a hash value when appending a string, so reverse Polish notation could be a bit more efficient. <a href="#fnref:rpn" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:sketch" role="doc-endnote">
       <p>Two distincts inputs <code>a</code> and <code>b</code> define polynomials \(p_a\) and `\(p_b\) of respective degree \(|a|\) and \(|b|\).  They only collide for a seed \(x\in\mathbb{F}\) when \(p_a(x) = p_b(x),\) i.e., \(p_a(x) - p_b(x) = 0\).  This difference is a non-zero polynomial of degree at most \(\max(|a|, |b|),\) so at most that many of the \(|\mathbb{F}|\) potential values for \(x\) will lead to a collision. <a href="#fnref:sketch" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
