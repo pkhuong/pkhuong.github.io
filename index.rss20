@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2022-12-29T15:56:02-05:00</updated>
+  <updated>2022-12-30T00:54:58-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -17,7 +17,7 @@
   <entry>
     <title type="html"><![CDATA[Fixing the hashing in "Hashing modulo α-equivalence"]]></title>
     <link href="https://www.pvk.ca/Blog/2022/12/29/fixing-hashing-modulo-alpha-equivalence/"/>
-    <updated>2022-12-29T15:12:03-05:00</updated>
+    <updated>2022-12-29T15:12:05-05:00</updated>
     <id>https://www.pvk.ca/Blog/2022/12/29/fixing-hashing-modulo-alpha-equivalence</id>
     <content type="html"><![CDATA[<p><a href="https://mastodon.social/@pervognsen">Per Vognsen</a> sent me a link to <a href="https://simon.peytonjones.org/assets/pdfs/hashing-modulo-alpha.pdf">Maziarz <em>et al’s</em> Hashing Modulo Alpha-Equivalence</a>
 because its Lemma 6.6 claims to solve a thorny problem we have both
@@ -59,7 +59,13 @@ practically realisable ones.</p>
   <li>maintain the hash for a map of variable name to (hash of) trees (that may grow bottom-up as well)</li>
 </ol>
 
-<p>Let’s see where the paper is overly optimistic, and how to fix it.</p>
+<p>As Per saliently put it, there are two options for formal analysis
+of collision probabilities here: 
+we can either assume a cryptographic hash function like <a href="https://en.wikipedia.org/wiki/SHA-3">SHA-3</a> or <a href="https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3">BLAKE3</a>, in which case <em>any collision</em> is world-breaking news,
+so all that matters is serialising data unambiguously when feeding bytes to the hash function,
+or we can work in the <a href="https://www.cs.princeton.edu/courses/archive/fall09/cos521/Handouts/universalclasses.pdf">universal hashing framework</a>.</p>
+
+<p>Collision probability analysis for the former is trivial, so let’s assume we want the latter, pinpoint where the paper is overly optimistic, and figure out how to fix it.</p>
 
 <h2 id="incremental-bottom-up-hashing-without-novelty">Incremental bottom-up hashing, without novelty</h2>
 

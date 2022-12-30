@@ -156,7 +156,13 @@ practically realisable ones.</p>
   <li>maintain the hash for a map of variable name to (hash of) trees (that may grow bottom-up as well)</li>
 </ol>
 
-<p>Let’s see where the paper is overly optimistic, and how to fix it.</p>
+<p>As Per saliently put it, there are two options for formal analysis
+of collision probabilities here: 
+we can either assume a cryptographic hash function like <a href="https://en.wikipedia.org/wiki/SHA-3">SHA-3</a> or <a href="https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3">BLAKE3</a>, in which case <em>any collision</em> is world-breaking news,
+so all that matters is serialising data unambiguously when feeding bytes to the hash function,
+or we can work in the <a href="https://www.cs.princeton.edu/courses/archive/fall09/cos521/Handouts/universalclasses.pdf">universal hashing framework</a>.</p>
+
+<p>Collision probability analysis for the former is trivial, so let’s assume we want the latter, pinpoint where the paper is overly optimistic, and figure out how to fix it.</p>
 
 <h2 id="incremental-bottom-up-hashing-without-novelty">Incremental bottom-up hashing, without novelty</h2>
 
