@@ -58,13 +58,16 @@ Incremental bottom-up hashing, without novelty
 Let's tackle the first responsibility: incrementally hashing
 trees bottom up.
 
-The paper essentially says the following. Assume we have one *truly random n-ary* hash function \\(h\\), and a tag for each constructor (e.g., \\(s_{\texttt{Plus}}\\) for `(Plus a b)`);
-we can simply feed the constructor's arity, its tag, and the subtrees' hash values to \\(h\\), e.g., \\(h(2, s_{\texttt{Plus}}, hv_a, hv_b)\\)...
+The paper essentially says the following in [Appendix A](https://simon.peytonjones.org/assets/pdfs/hashing-modulo-alpha.pdf#page=15).
+Assume we have one *truly random variable-arity* hash function ("hash combiner") \\(f\\), and a tag for each constructor (e.g., \\(s_{\texttt{Plus}}\\) for `(Plus a b)`);
+we can simply feed the constructor's arity, its tag, and the subtrees' hash values to \\(f\\), e.g., \\(f(2, s_{\texttt{Plus}}, hv_a, hv_b)\\)...
 and goes on to show a surprisingly weak collision bound
 (the collision rate for two distinct trees grows with the
-*sum* of the size of both trees).
+*sum* of the size of both trees).[^union-bound]
 
-A non-intuitive fact in hash-based algorithm is that results for truly
+[^union-bound]: Perhaps not that surprising given the straightforward union bound.
+
+A non-intuitive fact in hash-based algorithms is that results for truly
 random hash functions often fail to generalise for the weaker "salted"
 hash functions we can implement in practice.  For example, 
 [linear probing hash tables need *5*](https://arxiv.org/abs/cs/0612055)-[universal hash functions](https://en.wikipedia.org/wiki/Universal_hashing)[^tabular] in
@@ -99,15 +102,15 @@ hash value is simply
 evaluated in the field \\(\mathbb{F}\\), e.g., \\(\mathbb{Z}/p\mathbb{Z}\\).
 
 For more structured atomic (leaf) values, we can serialise to bits and
-make sure the field is large enough , or split longer bit serialised
+make sure the field is large enough, or split longer bit serialised
 values into multiple characters.  And of course, we can linearise trees
 to strings by encoding them in binary S-expressions, with dedicated
 characters for open `(` and close `)` parentheses.[^rpn]
 
-[^rpn]: It's often easier to update a hash function after appending a string, so a reverse polish style could be a bit more efficient.
+[^rpn]: It's often easier to update a hash value when appending a string, so reverse Polish notation could be a bit more efficient.
 
 The only remaining problem is to commute hashing and string
-concatenation: given two subtrees `x`, `y`, we want to compute the
+concatenation: given two subtrees `a`, `b`, we want to compute the
 hash value of `(Plus a b)`, i.e., hash `"(Plus " + a + " " + b + ")"`
 in constant time, given something of constant size, like hash values
 for `a` and `b`.
@@ -154,7 +157,7 @@ efficiently with string concatenation.
 And the collision rate?  We compute the same [polynomial string hash](https://arxiv.org/abs/1008.1715),
 so two distinct strings of length at most \\(n\\) collide with
 probability at most \\(n/\|\mathbb{F}\|\\) (with the expectation over
-the generation of the random point \\(x \in \mathbb{F}\\);[^sketch] never worse than Lemma 6.6 of Maziards _et al_, and up to twice as good.
+the generation of the random point \\(x \in \mathbb{F}\\);[^sketch] never worse than Lemma 6.6 of Maziarz _et al_, and up to twice as good.
 
 [^sketch]: Two distincts inputs `a` and `b` define polynomials \\(p_a\\) and `\\(p_b\\) of respective degree \\(\|a\|\\) and \\(\|b\|\\).  They only collide for a seed \\(x\in\mathbb{F}\\) when \\(p_a(x) = p_b(x),\\) i.e., \\(p_a(x) - p_b(x) = 0\\).  This difference is a non-zero polynomial of degree at most \\(\max(\|a\|, \|b\|),\\) so at most that many of the \\(\|\mathbb{F}\|\\) potential values for \\(x\\) will lead to a collision.
 
@@ -262,5 +265,7 @@ we're not even aware of, unknown unknowns for some, unknown knowns for
 the others.  Corollary: we should *especially* ask experts for
 pointers and quick gut checks when we think it's all trivial because
 *we* don't see anything to worry about.
+
+<small>Thank you Per for linking to [Maziarz _et al's_ nice paper](https://simon.peytonjones.org/assets/pdfs/hashing-modulo-alpha.pdf) and for quick feedback as I iterated on this post.</small>
 
 <p><hr style="width: 50%"></p>
