@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Fixing the hashing in \"Hashing modulo α-equivalence\""
-date: 2022-12-29 15:12:03 -0500
+date: 2022-12-29 15:12:05 -0500
 comments: true
 categories: 
 ---
@@ -44,7 +44,13 @@ There are two core responsibilities for the hashing logic:
 1. incrementally hash trees bottom up (leaf to root)
 2. maintain the hash for a map of variable name to (hash of) trees (that may grow bottom-up as well)
 
-Let's see where the paper is overly optimistic, and how to fix it.
+As Per saliently put it, there are two options for formal analysis
+of collision probabilities here:
+we can either assume a cryptographic hash function like [SHA-3](https://en.wikipedia.org/wiki/SHA-3) or [BLAKE3](https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3), in which case *any collision* is world-breaking news,
+so all that matters is serialising data unambiguously when feeding bytes to the hash function,
+or we can work in the [universal hashing framework](https://www.cs.princeton.edu/courses/archive/fall09/cos521/Handouts/universalclasses.pdf).
+
+Collision probability analysis for the former is trivial, so let's assume we want the latter, pinpoint where the paper is overly optimistic, and figure out how to fix it.
 
 Incremental bottom-up hashing, without novelty
 ----------------------------------------------
