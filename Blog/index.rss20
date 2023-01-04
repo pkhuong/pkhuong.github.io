@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2022-12-30T13:00:09-05:00</updated>
+  <updated>2023-01-04T16:57:54-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -17,7 +17,7 @@
   <entry>
     <title type="html"><![CDATA[Fixing the hashing in "Hashing modulo α-equivalence"]]></title>
     <link href="https://www.pvk.ca/Blog/2022/12/29/fixing-hashing-modulo-alpha-equivalence/"/>
-    <updated>2022-12-29T15:12:05-05:00</updated>
+    <updated>2022-12-29T15:12:06-05:00</updated>
     <id>https://www.pvk.ca/Blog/2022/12/29/fixing-hashing-modulo-alpha-equivalence</id>
     <content type="html"><![CDATA[<p><a href="https://mastodon.social/@pervognsen">Per Vognsen</a> sent me a link to <a href="https://simon.peytonjones.org/assets/pdfs/hashing-modulo-alpha.pdf">Maziarz <em>et al’s</em> Hashing Modulo Alpha-Equivalence</a>
 because its Lemma 6.6 claims to solve a thorny problem we have both
@@ -286,7 +286,7 @@ pointers and quick gut checks when we think it’s all trivial because
       <p>A more efficient option in practice, if maybe idiosyncratic, is to use Robin Hood hashing with linear probing to maintain the key-value pairs sorted by <code>hash(key)</code> (and breaking improbable ties by comparing the keys themselves), but that doesn’t lend itself well to incremental hash maintenance. <a href="#fnref:rhh" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:crypto" role="doc-endnote">
-      <p>Cryptographically-minded readers might like <a href="http://csg.csail.mit.edu/pubs/memos/Memo-464/memo-464.pdf interesting">Incremental Multiset Hashes and their Application to Integrity Checking</a>. <a href="#fnref:crypto" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>Cryptographically-minded readers might find <a href="http://csg.csail.mit.edu/pubs/memos/Memo-464/memo-464.pdf">Incremental Multiset Hashes and their Application to Integrity Checking</a> interesting. <a href="#fnref:crypto" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
