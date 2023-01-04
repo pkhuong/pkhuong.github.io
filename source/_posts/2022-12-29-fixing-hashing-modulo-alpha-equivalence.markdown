@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Fixing the hashing in \"Hashing modulo α-equivalence\""
-date: 2022-12-29 15:12:05 -0500
+date: 2022-12-29 15:12:06 -0500
 comments: true
 categories: 
 ---
@@ -190,7 +190,7 @@ subtree rooted at the node.[^crypto]
 
 [^rhh]: A more efficient option in practice, if maybe idiosyncratic, is to use Robin Hood hashing with linear probing to maintain the key-value pairs sorted by `hash(key)` (and breaking improbable ties by comparing the keys themselves), but that doesn't lend itself well to incremental hash maintenance.
 
-[^crypto]: Cryptographically-minded readers might like [Incremental Multiset Hashes and their Application to Integrity Checking](http://csg.csail.mit.edu/pubs/memos/Memo-464/memo-464.pdf interesting).
+[^crypto]: Cryptographically-minded readers might find [Incremental Multiset Hashes and their Application to Integrity Checking](http://csg.csail.mit.edu/pubs/memos/Memo-464/memo-464.pdf) interesting.
 
 The paper instead takes the treacherously attractive approach of
 hashing individual key-value pairs, and combining them with an abelian group
