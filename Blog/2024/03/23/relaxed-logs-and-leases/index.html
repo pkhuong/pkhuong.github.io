@@ -251,7 +251,11 @@ And, just like transitioning to a new server, changing the sharding scheme can b
 <p>Coordinating with leases separates small and short-lived coordination information from the actual data, which tends to be larger and longer-lived.
 This segregation lets us easily handle leases with a solution specialised for quickly churning through small values.</p>
 
-<h1 id="notice-the-decoupling">Notice the decoupling</h1>
+<p>Adding leases to concurrency control in the storage layer also helps us handle common cases, without errors or conflicts, differently than the general case where a process is paused or terminated.
+That’s hopefully good for performance in the common case, but not ideal for worst case performance;
+we’ll see if the bimodality introduces more problems than it solves.</p>
+
+<h1 id="decoupling-helps">Decoupling helps!</h1>
 
 <p>What I find most exciting about this approach is that organisation of persistent data, any data sharding strategy in particular, is fully decoupled from the lease hierarchy.
 When working with primitives like conditional stores, it’s really hard to update disjoint keys atomically.
@@ -270,17 +274,18 @@ Processes could thus start by tentatively acquiring all the leases they need, an
 With respect to correctness, a tentative lease may be broken for any reason at any time:
 any eventual upgrade to full lease will simply fail, and processes aren’t supposed to write until they hold a full lease.</p>
 
-<h1 id="there-is-a-readwrite-trade-off">There is a read/write trade-off</h1>
+<h1 id="its-all-about-different-trade-offs">It’s all about different trade-offs</h1>
 
-<p>There’s a downside to letting writes for arbitrary logical domains be scattered in unordered bags:
-reads now have to reassemble the state of the world from a lot of different messages.
-I don’t think that’ll create particularly thorny issues.</p>
+<p>There’s a downside to letting writes for arbitrary logical domains be scattered in arbitrary bags:
+reads now have to reassemble the state of the world from a lot of different messages.</p>
+
+<p>I don’t think that’ll create particularly thorny issues.</p>
 
 <p>In practice, there’s often room for some hierarchical consolidation.
 For example, with 100+ cores on one machine, we could try to manage single-writer logs on a per-machine basis rather than per-core or per-service.
 That’s a weak affinity: we don’t need ordering, the consolidation is purely for performance, so it’s always possible to break a local lock and open a new log.</p>
 
-<p>Speeding up reads by aggregating changes in a materialied view also tends to be a simpler problem than coordinating writes.
+<p>Speeding up reads by aggregating changes in a materialied view is idempotent, and so tends to be a simpler problem than coordinating writes.
 If some aggregation process gets stuck, it only means that reads are slow for a while, not paused or, worse, incorrect.
 It should also be easy to make the publication of views idempotent;
 this means we could always spin up another aggregator if the old one is stuck.</p>
@@ -295,7 +300,7 @@ this means we could always spin up another aggregator if the old one is stuck.</
 I’m currently more interested in small (dozens to a few hundred machines) clusters tied together with a shared file system.
 I guess many serverless workloads with a NFS mount look similar.</p>
 
-<p>The bag-of-logs aprooach seems well suited to clustered or networked file systems.
+<p>The bag-of-logs aprooach seems well suited to clustered file systems, or even NFS, with some care (see next section).
 Each log is a directory;
 under that directory is a tree of subdirectories, one leaf subdirectory per time bucket (e.g., one per second);
 each of these leaf subdirectories serves as a closable bag of single-writer logs.
@@ -322,7 +327,7 @@ this assumes some machine-local locking to avoid concurrent writes to the same f
 The operation may also fail because the data file is read-only, or because the time bucket is read-only;
 these are both clear signs that the time bucket’s bag is closed for new write.</p>
 
-<p>Once we have a writable data file, the writer process appends the new message, closes the file, and checks again if it’s read-only;
+<p>Once we have a writable data file, the writer process appends the new message, closes the file, and checks again if it’s read-only by attempting to re-open the file for writing;
 we can skip that step if the current time is clearly not too late, e.g., less than one second after the time bucket’s range.
 If the file is now read-only, some process is trying to close the time bucket, and the writer must help that other process:
 the only way to determine whether the write succeeded is to confirm that its offset made it to the lock file.</p>
@@ -333,6 +338,66 @@ I think a specialised lease service makes more sense here.
 There’s no need for persistence, so we can stick plain SQLite or lmdb files on tmpfs
 (that’s right, not even real in-memory data structures),
 and, with a bit of internal sharding to spread out contention, easily support a couple thousand lease operations per second.</p>
+
+<h1 id="unsurprising-concurrent-operations-on-nfs">Unsurprising concurrent operations on NFS</h1>
+
+<p>NFS has a reputation for mysteriously breaking concurrent accesses from multiple machines.
+It is true that NFS implementations used to have pretty bad caching bugs, 20+ years ago;
+some of the bugs were even baked in NFSv2, with its timestamp-based cache invalidation.</p>
+
+<p>Nowadays, with NFSv3 or v4 in use pretty much everywhere and time-tested code, I think it’s time to give NFS another chance.</p>
+
+<p>Until NFSv4, downgrading a file lock is still broken (not atomic), so I’d avoid anything but the simplest advisory file lock usage (open a file, acquire a lock, release it),
+and definitely steer clear of mandatory file locking.</p>
+
+<p>That leaves us with filesystem metadata for coordination.</p>
+
+<p>The main guarantee we get from contemporary NFSv3 and NFSv4 deployments is <a href="">Close-to-open consistency</a>.
+This means that, when a client (machine) opens a file, it’s guaranteed to see updates made by every other clients (machines) that have closed their handle for that file.
+All bets are off for reads and writes through files that were concurrently opened on different machines.</p>
+
+<p>Close-to-open consistency isn’t too hard to work with for actual files, but it also affects directories!
+NFS clients cache directory entries, and even <em>negative</em> hits (i.e., files absent from a directory) with time-based expiration.
+Luckily, close-to-open consistency also applies to directories, so we can forcibly invalidate (or at least revalidate) cached dentries by <code>open(2)</code>ing (or <code>opendir(3)</code>) the parent directory…
+as implicitly happens when listing a directory’s contents.</p>
+
+<p>Direct metadata writes, like <code>utimes(2)</code>, <code>chmod(2)</code>, <code>link(2)</code>, or <code>rename(2)</code> always execute on the server, so linearise correctly.
+However, <code>rename(2)</code> isn’t necessarily atomic to clients (may cause transient ENOENT), so probably best avoided.</p>
+
+<p>This leaves us with the following small set of unsurprising operations:</p>
+
+<ol>
+  <li>List all the entries in a directory</li>
+  <li><code>link(2)</code> a prepopulated file</li>
+  <li><code>open(2)</code> a file that’s expected to exist (and won’t be re-created once unlinked)</li>
+  <li>Ensure a file exists with <code>open(2)</code> and <code>O_CREAT</code> (<code>O_EXCL</code> also works, because it’s enforced by the server)</li>
+  <li><code>write(2)</code> to a single-writer file and then immediate <code>close(2)</code> the file (the write becomes visible on close)</li>
+  <li><code>open(2)</code> a file (to clear the metadata cache) and <code>stat(2)</code> it</li>
+  <li><code>open(2)</code> a file and <code>read(2)</code> it</li>
+</ol>
+
+<p>Conspicuously absent from this list is <code>rename(2)</code>.
+That’s because renaming files or directories exposes a discrepancy between POSIX semantics and NFS client-side filehandle caching.
+A client might not immediately observe a <code>rename(2)</code>, and instead use the old mapping from path to filehandle (inode).
+Opening the path after a rename invalidates cached information for the filehandle, but not the filehandle mapping itself
+(we’d have to open the parent directory to do that);
+the upshot is that clients will correctly get fresh data and metadata for the file <em>previously</em> at that path, i.e., for the wrong file.
+This can be particularly surprising when renaming directories, since clients cache directory components as well, and use that cache to traverse paths (like applications that work with <code>O_PATH</code> file descriptors).
+After a directory rename, we can thus end up silently creating files under the new destination path instead of getting ENOENT!</p>
+
+<p>We also have something like fences:</p>
+
+<ol>
+  <li>On the read side, clear the dentry and negative cache for a directory by <code>open(2)</code>ing it</li>
+  <li>On the write side, make sure a change is globally visible by waiting long enough for caches to expire; the maximum cache TTL across all NFS client caches is usually 30 or 60 seconds, so waiting 61 or 62 seconds ought to be enough.</li>
+</ol>
+
+<p>The only way to reliably test whether a file or directory exists is to attempt to create that file or directory,
+or to first <code>open(2)</code> the parent directory to clear the client’s cache
+(something that happens implicitly when listing the directory’s contents).
+This means it can be easier to implement a sticky bit with a file at a fixed path that’s non-empty when the bit is set,
+rather than by <code>link(2)</code>ing at a fixed path, as one would on a POSIX filesystem.
+Readers can then check whether the bit is unset by open-or-creating the file, and trying to read one byte.</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
