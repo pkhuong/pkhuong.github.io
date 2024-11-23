@@ -5,7 +5,7 @@
 <!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
 <head>
   <meta charset="utf-8">
-  <title>Paul Khuong: some Lisp</title>
+  <title>VPTERNLOG: when three is 100% more than two - Paul Khuong: some Lisp</title>
   <meta name="author" content="Paul Khuong">
   <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
   
@@ -16,7 +16,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   
-  <link rel="canonical" href="https://www.pvk.ca/posts/56/">
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2024/11/22/vpternlog-ternary-isnt-50-percent/">
   <link href="/favicon.png" rel="icon">
   <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
   <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
@@ -79,15 +79,14 @@
   <div id="main">
     <div id="content">
       
-      <div class="blog-index">
+      <div>
+<article class="hentry" role="article">
   
-  
-  
-    <article>
-      
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2012/08/14/a-one-instruction-write-barrier/">A one-instruction write barrier</a></h1>
+      
+        <h1 class="entry-title" style="font-family: ">VPTERNLOG: when three is 100% more than two</h1>
+      
     
     
       <p class="meta">
@@ -97,17 +96,17 @@
 
 
 
-Aug
+Nov
   
-14th, 
-2012
+22nd, 
+2024
 
 
 
 
         
-         | <a href="/Blog/2012/08/14/a-one-instruction-write-barrier/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2012/08/14/a-one-instruction-write-barrier/"
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2024/11/22/vpternlog-ternary-isnt-50-percent/"
 	      >Comments</a>
         
         
@@ -117,57 +116,77 @@ Aug
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><a href="http://www.hoelzle.org/publications/write-barrier.pdf">Hölzle’s two-instruction write barrier [PDF]</a>
-for garbage collectors looks like</p>
+<div class="entry-content" style="font-family: ; font-size: "><p>Like many, when I first saw <a href="https://www.felixcloutier.com/x86/vpternlogd:vpternlogq">VPTERNLOG</a>,
+my reaction was “\(\log_2(3) \approx 1.58\) is a nice reduction in depth, but
+my code mostly doesn’t have super deep reductions.”</p>
 
-<pre><code> addr = destination
- offset = addr&gt;&gt;k;
- (cards-(heap_base&gt;&gt;k))[offset] = 1 ; mark one byte
- write to addr
-</code></pre>
+<p>A little bit of thinking reveals a big win at smaller (reasonable) scales:
+a binary operator takes two values and outputs one, while a ternary operator takes three and outputs one.
+In a reduction, each application of the binary operator decrements the number of values by \(2 - 1 = 1\),
+but each application of the ternary operator decrements it by \(3 - 1 = 2\)!</p>
 
-<p>Some SBCL users allocate Lisp object lookalikes in the C heap, and we
-have stack-allocated values; I have to test whether the address is in
-range or mask the offset to avoid overflows.</p>
+<p>We thus need <em>half</em> as many ternary operations to reduce a given number of bitvectors,
+compared to binary operations… and it’s not like the
+<a href="https://uops.info/table.html?search=vpternlogd%20ymm&amp;cb_lat=on&amp;cb_tp=on&amp;cb_uops=on&amp;cb_ports=on&amp;cb_ADLP=on&amp;cb_ZEN4=on&amp;cb_measurements=on&amp;cb_base=on&amp;cb_avx512=on">throughput (or latency for that matter) is worse</a>.
+Plus it’s hard to be more orthogonal than a lookup table.</p>
 
-<p>Or, we could exploit X86’s bit-addressing instructions:</p>
-
-<pre><code> addr = destination
- bts cards, addr
- write to addr
-</code></pre>
-
-<p>where <code>cards</code> is a vector of 256 or 512MB (there’s some trickery to handle
-negative offsets). <code>bts</code> will index into that vector of 4G bits, and
-set the corresponding bit to 1.  On X86-64, we can force <code>cards</code> to be
-in the lower 4GB, and stick to 32 bit addressing: the instruction will
-also implicitly mask out the upper 32 bit of <code>addr</code> before indexing
-into <code>cards</code>.  Too bad it’s around twice or thrice as slow as a shift
-and a byte write (or even shift, mask and byte write) and really sucks
-with SMP.</p>
-
-<p>There are also <a href="&lt;http://weinholt.se/scheme/alignment-check.pdf">hacks [PDF]</a>
-to
-<a href="https://groups.google.com/d/msg/comp.lang.lisp/qQdpmfHhJj8/43LfCzBiCJAJ">abuse</a>
-alignment checking as hardware lowtag (tag data in the lower bit of
-addresses) checks.  Who says that contemporary machines don’t support
-safe languages well? (:</p>
+<p>Cute lightweight instruction, two thumbs up!</p>
 </div>
-  
-  
 
 
-    </article>
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Nov
   
-  <div class="pagination">
+22nd, 
+2024
+
+
+
+
+      
+      
+
+
+    </p>
     
-      <a class="prev" href="/posts/57">&larr; Older</a>
+      <div class="sharing">
+  
+  
+  
+</div>
+
     
-    <a href="/Blog/archives">Blog Archives</a>
-    
-    <a class="next" href="/posts/55">Newer &rarr;</a>
-    
-  </div>
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2022/12/29/fixing-hashing-modulo-alpha-equivalence/" title="Previous Post: Fixing the hashing in "Hashing modulo α-equivalence"">&laquo; Fixing the hashing in "Hashing modulo α-equivalence"</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
 </div>
 
     </div>
@@ -180,6 +199,24 @@ safe languages well? (:</p>
   
 
 <script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2024/11/22/vpternlog-ternary-isnt-50-percent/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2024/11/22/vpternlog-ternary-isnt-50-percent/';
+      this.page.title = 'VPTERNLOG: when three is 100% more than two';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
 
 
 
