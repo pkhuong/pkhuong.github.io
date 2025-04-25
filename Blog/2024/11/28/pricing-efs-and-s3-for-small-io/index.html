@@ -1,0 +1,281 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Pricing EFS vs S3 for small I/O - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2024/11/28/pricing-efs-and-s3-for-small-io/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Pricing EFS vs S3 for small I/O</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Nov
+  
+28th, 
+2024
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2024/11/28/pricing-efs-and-s3-for-small-io/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>S3 is finally catching up to its copycats, with support for [conditional PUTs] and [some form of append].
+With that comes renewed interest in using S3, [S3 Express One Zone] in particular,
+for small PUTs and, essentially, concurrency control.</p>
+
+<p>There’s another pay-as-you-go serverless storage service on AWS: EFS
+(and other clouds usually have their own form of NFS offering).
+The comparison is particularly apt when it comes to S3 Express One Zone and EFS One Zone.
+Both storage systems offer 11 nines of durability, the same 99.9% monthyl availability SLA,
+“single-digit millisecond” access latencies, and, most obviously, both are bound to a single AZ.</p>
+
+<p>When does S3 Express One Zone lead to lower COGS than EFS One Zone?</p>
+
+<p>The cost of small S3 Express One Zone operations is fairly clear.  In US East 1, for example:</p>
+
+<ol>
+  <li>each PUT/LIST is $2.5e-6</li>
+  <li>each GET is $2e-7</li>
+  <li>storage is $0.16/GB</li>
+</ol>
+
+<p>We’re concerned with concurrency control, so let’s assume the storage footprint is negligible.</p>
+
+<p>EFS is a bit harder to figure out.
+The “recommended” elastic throughput mode seems to be a very good deal for AWS,
+although it does seem to perform exactly as advertised.
+The legacy Bursting throughput mode is much more cost-effective for a steady flow of updates,
+which is usually what we want to start with for capacity planning and COGS analysis.</p>
+
+<p>EFS doesn’t charge for IOPS per se.  It instead bills / limits performance based on
+throughput, and converts operations to throughput.  More precisely:</p>
+
+<ul>
+  <li><a href="https://docs.aws.amazon.com/efs/latest/ug/performance.html#throughput-modes:~:text=Every%20Network%20File%20System%20(NFS)%20request%20is%20accounted%20for%20as%204%20kilobyte%20(KB)%20of%20throughput%2C%20or%20its%20actual%20request%20and%20response%20size%2C%20whichever%20is%20larger.">Each I/O counts as at least 4 KB</a></li>
+  <li><a href="https://docs.aws.amazon.com/efs/latest/ug/metered-sizes.html#:~:text=The%20metered%20size%20of%20an,8%20AM%20to%209%20AM.">Each metadata access maybe counts as 4 KB</a></li>
+  <li><a href="https://docs.aws.amazon.com/efs/latest/ug/metered-sizes.html">Data may be rounded up to 32 KB</a></li>
+  <li><a href="https://docs.aws.amazon.com/efs/latest/ug/metered-sizes.html#:~:text=Amazon%20EFS%20meters%20the%20throughput%20for%20read%20requests%20at%20one%2Dthird%20the%20rate">Bursting throughput charges reads at 1/3rd their size</a></li>
+  <li><a href="https://docs.aws.amazon.com/efs/latest/ug/performance.html#throughput-modes:~:text=equivalent%20to%2050%20KiBps%20per%20GiB%20of%20storage">Each GB of storage gives us 50 KB/s</a></li>
+</ul>
+
+<p>For EFS one zone, each GB of storage costs us $0.16 per month, and <em>also</em> buys us
+\(50 KB/s * 3600 s/h * 24 h/d * 30.5 d/month = 125 GB\) of throughput, or 781 GB/dollar
+(and the storage is “paid for” as long as bytes survive less than 5.8 hours on average).</p>
+
+<p>Given the granularities above, I expect each write counts as 16 KB
+(4 KB data, 4 KB metadata, plus the request and two reads).</p>
+
+<p>Let’s pessimistically say each write is rounded up to 128 KB of traffic.
+That’s $1.6e-7 worth of throughput, less than 1/10th the cost of an S3 One Zone PUT ($2.5e-6)!</p>
+
+<p>For larger writes, S3 Express One Zone charges all bytes in excess of 512 KB at…
+$0.008/GB, or 125 GB/$, <em>6 times</em> as expensive as EFS!</p>
+
+<p>So, at best, S3 One Zone can hope to asymptotically match the cost of EFS One Zone in bursting throughput mode.</p>
+
+<p>The best case for S3 One Zone is when PUTs are exactly at the 512 KB limit: each such PUT costs $2.5e-6.</p>
+
+<p>When using EFS One Zone, 512 KB of write throughput costs… $6.25e-7, or 25% as much as S3 One Zone.
+Of course there’s metadata overhead, but probably not 300%.</p>
+
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Nov
+  
+28th, 
+2024
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2024/11/22/vpternlog-ternary-isnt-50-percent/" title="Previous Post: VPTERNLOG: when three is 100% more than two">&laquo; VPTERNLOG: when three is 100% more than two</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2025 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2024/11/28/pricing-efs-and-s3-for-small-io/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2024/11/28/pricing-efs-and-s3-for-small-io/';
+      this.page.title = 'Pricing EFS vs S3 for small I/O';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</body>
+</html>

@@ -1,0 +1,338 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Simpler tree hashing with EPH and ENH - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2025/04/25/simpler-tree-hashing-with-eph-and-enh/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Simpler tree hashing with EPH and ENH</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+April
+  
+25th, 
+2025
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2025/04/25/simpler-tree-hashing-with-eph-and-enh/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p>In the past decade (since Intel introduced PCLMULQDQ, and ARM the similar PMULL),
+we’ve seen <a href="https://arxiv.org/abs/1503.03465">a fair</a> <a href="https://arxiv.org/abs/2104.08865">number</a> 
+<a href="https://pvk.ca/Blog/2020/08/24/umash-fast-enough-almost-universal-fingerprinting/">of throughput-oriented</a>
+universal string hash functions,
+all based on the <a href="https://web.cs.ucdavis.edu/~rogaway/umac/umac_thesis.pdf#page=41">NH</a>
+or <a href="https://arxiv.org/pdf/1503.03465#page=6">PH</a>
+mixing functions.
+With AVX-512, <a href="https://arxiv.org/pdf/1503.03465#page=6">Alder Lake can computationally sustain 64 bytes of PH per cycle, and Zen 4 around half that</a>;
+that’s easily memory-bound, making PH an attractive building block.</p>
+
+<p>The main issue with linearly accumulating EH/PH-mixed values (and other universal vector hash functions) is that
+the amount of key material (random parameters) scales linearly with the input size.
+That’s why PH and NH are often restricted to fixed-size block hashing,
+and combined with a polynomial hash to handle larger inputs.
+The downside of such constructions is that the higher-level polynomial hash is usually
+significantly slower than NH/PH due to the polynomial’s finite field (that’s why we first compress blocks with the latter),
+and, more importantly, that the collision probability of such universal string hashes scales linearly with the input size.</p>
+
+<p>The <a href="https://eprint.iacr.org/2004/319">Badger MAC</a> shows that NH is not only almost-universal,
+but almost\(-\Delta-\)universal with respect to integer addition.
+This means we can obtain an almost-universal ENH hash function over pairs of pairs by
+mixing the first pair with NH and adding the result to the second pair.
+That’s obviously attractive for a tree hash, and forms the core of <a href="https://arxiv.org/abs/2104.08865">Halftime Hash</a>.</p>
+
+<p>Unlike vector hashes that accumulate mixed values linearly, parameters for tree hashes scale logarithmically with the input size,
+and unlike polynomial string hashes, the collision probability scales logarithmically with the input size.
+For binary ENH and EPH, 64 distinct mixers (NH or PH parameters) suffice to hash up to \(2^{64}\) input blocks.
+Each reduction in the tree computes one NH or PH, so we end up doing the same amount of work as a
+linear accumulation (e.g., 64 bytes per cycles on Alder Lake), except with exponentially less key material.
+Tree hashing with ENH or EPH addresses the main downside of EH and PH accumulation, while preserving its throughput.</p>
+
+<p>However, there’s another downside: the computation becomes more complex, especially for incremental hashing… or does it?</p>
+
+<h2 id="iterative-tree-hashing-with-enheph">Iterative tree hashing with ENH/EPH</h2>
+
+<p>Let’s abstract out ENH/EPH a little, and say we work with mixers \(M_i\) such that \(M_i(x) \oplus y\) forms
+a family of almost-universal hash functions (from pairs of blocks to blocks).</p>
+
+<ul>
+  <li>Tree hashing one block is simply the identity.</li>
+  <li>Tree hashing two blocks is \(x_1 \oplus M_0(x_0).\)</li>
+  <li>Tree hashing four blocks is \(x_3 \oplus M_0(x_2) \oplus M_1(x_1 \oplus M_0(x_0)).\)</li>
+</ul>
+
+<p>The last example shows how tree hashing reuses parameters:
+\(M_0(x_2)\) doesn’t actually interact with \(M_0(x_0)\), with \(M_1\) in the way.</p>
+
+<p>I’m not sure how to implement this pattern without explicit divide and conquer, or at least a reduction stack,
+and those are hard to micro-optimise (you can inline the leaves, but after that?).</p>
+
+<p>The trick is that we don’t <em>have</em> to implement tree hashing that way, at least when using almost\(-\Delta-\)universal mixers.
+The only thing that prevents us from reusing parameters (e.g., iteratively mixing with the same \(M_0\)) is the assumption, key to universal hashing, that the inputs are generated independently from the parameters.
+That assumption would obviously be violated if we fed the output of \(M_0\) back to \(M_0\), or, in the case of almost\(-\Delta-\)universality, directly combined \(M_0(x) \oplus M_0(y).\)</p>
+
+<p>We can avoid such direct contact by applying a fresh mixer \(M_n\) before reusing \(M_i, 0 \leq i &lt; n.\)</p>
+
+<p>Concretely, start with an accumulator \(a_0 = 0.\)</p>
+
+<ul>
+  <li>Hash in the first block \(x_0\) with \(a_1 = x_0 \oplus a_0 = x_0.\)</li>
+  <li>Hash in the second block \(x_1\) with \(a_2 = x_1 \oplus M_0(a_1).\)</li>
+  <li>Hash in \(x_2\) with \(a_3 = x_2 \oplus M_1(a_2).\)</li>
+  <li>Hash in \(x_3\) with \(a_4 = x_3 \oplus M_0(a_3).\)</li>
+</ul>
+
+<p>Substituting all that yields \(a_4 = x_3 \oplus M_0(x_2 \oplus M_1(x_1 \oplus M_0(x_0)));\)
+similar to tree hashing’s \(x_3 \oplus M_0(x_2) \oplus M_1(x_1 \oplus M_0(x_0))\),
+but definitely not identical.</p>
+
+<p>With ENH and EPH, the danger with respect to the universal hashing model is when we reuse functions.
+The only mixer \(M_i\) used multiple times in \(a_4\) is \(M_0\).
+Why is it safe to do so?</p>
+
+<p>I claim this works because the second time we use \(M_0,\) 
+in \(a_4 = x_3 \oplus M_0(a_3),\)
+the distribution of \(a_3\) is independent from \(M_0,\)
+for the same reason regular tree hashing works:
+\(M_1\)’s independent random parameters broke any dependence on \(M_0.\)</p>
+
+<p>Assume the output of \(M_0\) contains a pattern such that collisions are more likely with
+\(M_0(x_2) \oplus M_\emptyset(\cdot \oplus M_0(\cdot)),\)
+where \(M_\emptyset\) is NH or PH with parameters fixed (without loss of generality) to 0.
+Any such pattern is destroyed when we use \(M_1\) instead of \(M_\emptyset:\)
+the distribution retains all clumpiness from \(M_0,\)
+but the clumps are shifted by a random independently generated parameter,
+so there’s no reason for a set of values that’s more (or less) likely to be generated by \(M_\emptyset\) to also be more (resp. less) probable with \(M_1.\)</p>
+
+<h2 id="generating-indices-for-iterative-tree-hashing">Generating indices for iterative tree hashing</h2>
+
+<p>The new formulation is useful because we always work with one accumulator,
+much simpler than a reduction stack of accumulators.
+It’s not necessarily obvious how to quickly figure out which parameter index to use.</p>
+
+<p>That’s not an issue when everything is unrolled, but does matter if we
+want to handle large inputs, particularly for incremental hashing.
+There’s a simple pattern to the indices:
+when hashing in block \(x_1,\) we first mix the accumulator with \(M_0;\)
+block \(x_2\) mixes the accumulator with \(M_1;\)
+block \(x_3\) mixes with \(M_0\) again.</p>
+
+<p>The mixer index is simply a count of trailing zero bits in the new block’s index!
+The cascading pattern from the carry when we increment by 1 exactly ensures that we use a fresh mixer before reusing lower-indexed mixers,
+with the recursive pattern we need to let the number of mixers (parameters) scale logarithmically with the number of blocks.</p>
+
+<p>In short, the pseudocode for this alternative tree hash looks like:</p>
+
+<pre><code>acc = None
+for idx, block in enumerate(input):
+    if idx == 0:
+        acc = block
+    else:
+        param = params[trailing_zeros(idx)]
+        acc = block ^ mix(param, acc)  # mix is NH or PH
+</code></pre>
+
+<p>We’ll still want to unroll the inner loop a couple times for performance (mostly to cache frequently used parameters in registers), but this is still pretty sweet!</p>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+April
+  
+25th, 
+2025
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2024/11/22/vpternlog-ternary-isnt-50-percent/" title="Previous Post: VPTERNLOG: when three is 100% more than two">&laquo; VPTERNLOG: when three is 100% more than two</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2025 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2025/04/25/simpler-tree-hashing-with-eph-and-enh/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2025/04/25/simpler-tree-hashing-with-eph-and-enh/';
+      this.page.title = 'Simpler tree hashing with EPH and ENH';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</body>
+</html>
