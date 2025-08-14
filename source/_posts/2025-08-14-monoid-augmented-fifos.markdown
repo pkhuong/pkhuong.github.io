@@ -1,7 +1,7 @@
 ---
 layout: post
-title: "Monoid-augmented FIFOs"
-date: 2025-08-14 12:55:22 -0400
+title: "Monoid-augmented FIFOs, deamortised"
+date: 2025-08-14 17:05:22 -0400
 published: true
 comments: true
 draft: true
