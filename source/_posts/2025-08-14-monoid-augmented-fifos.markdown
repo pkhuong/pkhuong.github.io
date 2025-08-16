@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Monoid-augmented FIFOs, deamortised"
-date: 2025-08-14 17:05:22 -0400
+date: 2025-08-14 17:05:24 -0400
 published: true
 comments: true
 draft: true
@@ -9,172 +9,358 @@ hidden: true
 categories:
 ---
 
+<small>Nothing novel, just a different presentation for a [decade-old data structure](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf). I want to nail the presentation because this data structure is useful in many situations.</small>
+
 Augmented FIFOs come up frequently in streaming analytics.
 For example, to compute the sum of the last \\(k\\) values observed in a stream
 (or more generally, in the [turnstile model](https://en.wikipedia.org/wiki/Streaming_algorithm#Turnstile_and_cash_register_models)),
-we can increment an accumulator by the entering value's value when it is observed (it's pushed onto the FIFO),
-and decrement the accumulator by the value's value (increment by the value's additive inverse) when it's popped off the FIFO.
+we can increment an accumulator by each value as it's pushed onto the FIFO,
+and decrement the accumulator by the exiting value (increment by the value's additive inverse) when it's popped off the FIFO.
 
-This simple increment/decrement the accumulator structure works because the underlying algebra is a group
+This simple increment/decrement algorithm works because the underlying algebraic structure is a [group](https://mathworld.wolfram.com/Group.html)
 (addition is associative, and we have inverses).
-Unfortunately, a lot of time, we want windowed aggregates with operators that don't have an inverse (e.g., windowed min or max),
-but are still associative; we want to work with monoids.[^semigroup]
+However, that's often too strong of an assumption: a lot of times, we want windowed aggregates with operators that are associative but lack inverses (e.g., windowed min/max[^min-queue], [top-K](https://en.wikipedia.org/wiki/Selection_algorithm#Sublinear_data_structures), or variance[^Pebay]).
+We want to work with [monoids](https://mathworld.wolfram.com/Monoid.html).[^semigroup]
 
-[^semigroup]: Keeping only associativity yields a semigroup, but we can trivially upgrade a semigroup to a monoid with a sentinel 0 value (e.g., `Option<T>` instead of `T`).
+[^min-queue]: For min/max-augmented queues, [Shachaf linked to](https://gts.y.la/@shachaf/statuses/01K2NBCESQ77VG6CCPARSTV7BA) this [other amortised data structure](https://cp-algorithms.com/data_structures/stack_queue_modification.html#queue-modification-method-1) where we sparsify the queue to hold only values that would be the minimum (resp. maximum) value in the queue if they were at the head. In other words, each value in the queue is less than (resp. greater than) *everything* later in the queue. That's not a property we can enforce by filtering insertions; we must instead drop a suffix of the monotonic queue before appending to it. A lot of queue representations let us do that with a binary search and a constant-time truncation, so it's reasonable as a deamortised implementation. However, the trick doesn't generalise well, and already when tracking extrema (i.e., min *and* max), the constant factors might be better with the deamortised algorithm described here.
+
+[^Pebay]: Aggregation operators are often commutative (e.g., all the examples I used, including [one-pass moments](https://www.osti.gov/servlets/purl/1028931)), but the queue structure apparently makes it hard to exploit commutativity.
+
+[^semigroup]: Assuming only associativity yields a semigroup, but we can trivially upgrade a semigroup to a monoid with a sentinel identity value (e.g., `Option<T>` instead of `T`).
 
 There's a cute and simple construction in the purely functional data structure folklore for a FIFO queue augmented with a monoid.
 The construction builds on two observations:
 
-1. It's trivial to augment a *stack* with a monoid such that we can always get the product of all the values in the stack (multiply the previous product with the new value when pushing, keep a pointer to the previous stack; pop simply dereferences that pointer).
-2. We can construct an amortised queue from a pair of stacks, an ingestion stack and an excretion stack (popping from stack A and pushing onto stack B ends up reversing the contents of A on top of B).
+1. It's trivial to augment a *stack* with a monoid such that we can always get the product of all the values in the stack: multiply the previous product with the new value when pushing, keep a pointer to the previous stack; pop simply dereferences that pointer.
+2. We can construct an amortised queue from two stacks, an ingestion stack and an excretion stack: popping from stack A and pushing onto stack B ends up reversing the contents of A on top of B.
 
-Unfortunately, we hit a wall when we try to deamortise: it's clear that we want to add some sort of work area while keeping the number of stacks bounded, but what should we do when the work area has been fully reversed before the earlier excretion stack is empty?
-That leads to a clearly wasteful mess of copies, redundant push/pop, and general bookkeeping overhead.
+Unfortunately, we hit a wall when we try to deamortise the dual-stack trick:
+it's clear that we want to add some sort of work area while keeping the number of stacks bounded, but what should we do when the work area has been fully reversed before the earlier excretion stack is empty?
+Trying to answer that question with augmented stacks leads to a clearly wasteful mess of copies, redundant push/pop, and generally distasteful bookkeeping overhead.[^okasaki]
 
-Earlier this week, [Shachaf](https://gts.y.la/@shachaf/statuses/01K287S10263ASXE5H97DZ2T8N) linked to an [IBM research report, "Constant-Time Sliding Window Aggregation,"](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf) that describes DABA, a simple deamortised algorithm.
-The key insight: despite (?) its cleverness, the dual-stack construction is an intellectual dead end.
-Unfortunately, I found the paper a bit confusing (I just found this [follow-up, which might be clearer](https://arxiv.org/abs/2009.13768)).
-I hope the alternative presentation in this post is helpful to others.
+[^okasaki]: One could also solve a harder problem and augment a [purely functional deque](https://www.cs.cmu.edu/~rwh/students/okasaki.pdf), and deamortise *that*. I expect less than amazing constant factors out of that approach.
+
+Earlier this week, [Shachaf](https://gts.y.la/@shachaf/statuses/01K287S10263ASXE5H97DZ2T8N) linked to an [IBM research report, "Constant-Time Sliding Window Aggregation,"](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf) that describes DABA, a simple deamortised algorithm for monoid-augmented FIFOs.
+The key insight: despite[^pearls] its cleverness, the dual-stack construction is an intellectual dead end.
+Unfortunately, I found the paper a bit confusing (I just learned about this [follow-up, which might be clearer](https://arxiv.org/abs/2009.13768)).
+I hope the alternative presentation in this post is helpful,
+especially in combination with [the matching Python code](/images/2025-08-14-monoid-augmented-fifos/monoid-fifo.py).
+
+[^pearls]: Your surprise may vary. I find that "magic trick" like this one and others that the Oxford branch of functional programming seems to be fond of is maybe useful to convince one's self of an algorithm's correctness, but not so much when it comes to communicating the sort of insight that leads to discovering new ones (and there are [folks who recognise the issue and want to fix it](https://kolektiva.social/@beka_valentine/114691133676966456)).
 
 Rethinking the amortised augmented FIFO
 ---------------------------------------
 
 In [the DABA paper](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf), we actually want to think of the dual stack data structure as a pair of:
-1. an ingestion list that also computes a running product of its contents (in the [cash register model](https://en.wikipedia.org/wiki/Streaming_algorithm#Turnstile_and_cash_register_models))
-2. an excretion list with a precomputed suffix product (in fact, as [the same authors' follow-up](https://arxiv.org/abs/2009.13768) points out, we *only* need that suffix product)
+1. An ingestion list that also computes a running product of its contents (in the [cash register model](https://en.wikipedia.org/wiki/Streaming_algorithm#Turnstile_and_cash_register_models))
+2. A batch-constructed excretion list with a precomputed suffix product (in fact, as [the same authors' follow-up](https://arxiv.org/abs/2009.13768) points out, we need *only* that suffix product)
 
-Concretely, all new values enter the ingestion FIFO and update a running product of the ingestion FIFO's contents.
-We pop from a separate excretion list; that list holds pairs of value and the suffix product of the current value and all younger values (values that will be popped later) in the excretion list.
+Concretely, all new values enter the ingestion list and update the running product of the ingestion list's contents.
+We pop from a separate excretion list; that list holds the suffix product of the current oldest (next popped) value and all younger values (values that will be popped later) in the excretion list.
 
 This approach is illustrated by the ASCII diagram below.
-The windowed product for `a ... w` is the product of the suffix product at the head of the excretion list (`a*b*c*...*g*h`) and the running product of the ingestion list (`i*j*k*...*w`), `a*b*c*...*g*h*i*j*k*...*w`.
-Pushing a new value `x` on the FIFO appends to the ingestion list and updates the running product to `i*j*k*...*w*x`.
-Popping from the FIFO pops the first value from the excretion list (`a`), and leaves a new windowed product `(b*c*...*g*h)*(i*j*k*...*w)`.
+The windowed product for `a*b*...*v*w` is the product of the suffix product at the head of the excretion list, `a*b*c*...*g*h`, and the running product of the ingestion list, `i*j*k*...*w`, `(a*b*c*...*g*h)*(i*j*k*...*w)`.
 
 ```
-   .----- excretion -----.      .--- ingestion ---.
-  /                       \    /                   \
- [ a   b    c  ...  g    h ]  [ i j k ...          w ]
- [ a   b    c       g    h ]    product: i*j*k*...*w
-   *   *    *       *
-   b   c   ...      h
-   *   *    *
-   c  ...   g
-   *   *    *
-  ...  g    h
-   *   *
-   g   h
-   *
-   h
+     .----- excretion -----.      .---- ingestion ----.
+    /                       \    /                     \
+   [ a   b    c  ...  g    h ]  [ i j k ...      u v w ]
+   ┌ a   b    c       g    h ┐  running product: i*j*k*...*u*v*w
+p  │ *   *    *       *      │
+r  │ b   c   ...      h      │
+o  │ *   *    *              │
+d  │ c  ...   g              │
+u  │ *   *    *              │
+c  │...  g    h              │
+t  │ *   *                   │
+s  │ g   h                   │
+↓  │ *                       │
+   └ h                       ┘
 ```
 
-Towards deamortisation
-----------------------
+I'll use diagrams like the above throughout the post, but the notation for suffix products is a bit bulky, so
+I'll abbreviate products with `!`, e.g., `a!h` instead of `a*b*c*...*g*h`, for the equivalent diagram
+
+```
+    .------ excretion -------.    .----- ingestion -----.
+   /                          \  /                       \
+   [ a   b   c   ...  g    h  ]  [ i j k     ...   u v w ]
+   [a!h b!h c!h  ... g*h   h  ]  running product: i*j*k*...*u*v*w
+```
+Pushing a new value `x` on the FIFO appends to the ingestion list and updates the running product to `i*j*k*...*u*v*w*x`.
+```
+    .------ excretion -------.    .------ ingestion -----.
+   /                          \  /                        \
+   [ a   b   c   ...  g    h  ]  [ i j k    ...   u v w x ]
+   [a!h b!h c!h  ... g*h   h  ]  running product: i*j*k*...*u*v*w*x
+```
+
+Popping from the resulting FIFO pops the first value from the excretion list (`a`), and leaves a new windowed product `(b*c*...*g*h)*(i*j*k*...*u*v*w*x)`.
+
+```
+       .----- excretion ------.    .----- ingestion -----.
+      /                        \  /                       \
+      [  b   c   ...   g    h  ]  [ i j k   ...   u v w x ]
+      [ b!h c!h  ...  g*h   h  ]  running product: i*j*k*...*u*v*w*x
+```
+
+Toward deamortisation
+---------------------
 
 Thinking in terms of ingestion/excretion lists is helpful because
-it's now trivial to append any prefix of the ingestion list to the excretion list at any time,
+it's now trivial to append the whole[^partial] ingestion list to the excretion list at any time,
 even when the excretion list is non-empty:
-concatenate the two lists, and recompute the suffix product for the resulting excretion list
-(the 2020 follow-up notes that we can do that for the old excretion list without keeping the raw values around:
-we only have to multiply the old excretion list's suffix product with the product of all newly appended excretion values).
+concatenate the two lists, and recompute the suffix product for the resulting excretion list.
+[The 2020 follow-up](https://arxiv.org/abs/2009.13768) notes that we can do that for the old excretion list without even keeping the original values around:
+we only have to multiply the old excretion list's suffix product with the product of all newly appended excretion values.
+
+[^partial]: It's tempting to promote only a prefix of the ingestion list, but that introduces a sort of circularity because we'd have to find the monoidal products of both the upgraded prefix and the remaining suffix in constant time.
+
+The excretion and ingest(ion) lists
 
 ```
-[ a   b   c ] + [ d   e   f ]
-[ a   b   c ]
-  *   *
-  b   c
-  *
-  c
+ .- excretion-.      .-ingest-.
+/              \    /          \
+[  a    b   c  ] + [ d   e   f ]
+[ a!c  b*c  c  ]   running product: d*e*f
 ```
 
-Turns into
+turn into
 
 ```
-[ a   b   c   d   e   f ]
-[ a   b   c   d   e   f ]
-  *   *   *   *   *
-  b   c   d   e   f
-  *   *   *   *
-  c   d   e   f
-  *   *   *
-  d   e   f
-  *   *
-  e   f
-  *
-  f
+ .------- excretion --------.      .- ingest -.
+/                            \    /            \
+[  a    b    c    d    e   f ]    [            ]
+[ a!f  b!f  c!f  d!f  e*f  f ]    running product: 1
 ```
 
-Where, for example, `b * c * d * e = (b * c) * (d * e)`,
-the product of the *previous* suffix product at `b` (`b * c`),
-and the total product for the newly appended values (`d * e`).
+where, for example, `a!f = a * b * c * d * e * f = a!c * (d * e * f)`
+is the product of the *previous* suffix product at `a` (`a * b * c`),
+and the total product for the newly appended values (`d * e * f`),
+the old running product for the ingestion list.
 
-The interesting part for deamortisation is figuring out what invariants hold in the middle of recomputing the suffix product.
+The interesting part for deamortisation is figuring out what invariants hold in the middle of recomputing the suffix product for the new excretion list.
 
-Let's call the newly appended values `[d e f]` the staging list.
+Let's call the newly appended values `[d e f]` the staging list and `d*e*f` the staging product.
 
-Early during the suffix product update, we have
+At the beginning of the suffix product update,
+the write cursor points to the last value of the new excretion list (the last value of the staging list).
+We're computing the suffix product up to the last value in the new excretion list,
+so the last base value in the new excretion list is also correct for the suffix product (`f*1 = f`).
 
 ```
-          write cursor (moves left)
-              v
-[ a   b   c   d   e   f ]  staging product: d*e*f
-[ a   b   c       e   f ]
-  *   *           *
-  b   c           f
-  *
-  c
+ .------- new excretion -------.
+/      old                      \
+ .- excretion -.   .- staging -.
+/               \ /             \
+[  a    b    c     d    e    f  ]
+[ a!c  b*c   c     d    e    f  ]   staging product: d!f = d*e*f
+                             ⇧
+                         write cursor
+                         (moves left)
 ```
 
 While the write cursor is in the staging list,
 values in the staging list to the left of the write cursor have a garbage suffix product,
-and those *to the right* of the write cursor have a suffix product equal to the product of all that value and all values to their right (within the excretion list).
-At the same time, values in the old excretion list have a suffix product that considers only the old excretion list.
-Fortunately, that's easy to fixup in constant time: just multiply the old suffix product with the product of values in the staging list (then the product for the ingestion list).
-
-Things are a bit subtle later in the suffix product update, once the write cursor is deeper in the old excretion list:
+and those to the right of or *exactly at* the write cursor have a suffix product equal to the product of the value at that location and all values to their right, within the new excretion list (within the staging list).
+Values in the old excretion list are still useful: they hold the suffix product with respect to the old excretion list.
 
 ```
-    write cursor (moves left)
-      v
-[ a   b   c   d   e   f ]
-[ a   b   c   d   e   f ]
-  *   *   *   *   *
-  b   c   d   e   f
-  *       *   *
-  c       e   f
-          *
-          f
+ .------- new excretion -------.
+/      old                      \
+ .- excretion -.   .- staging -.
+/               \ /             \
+[  a    b    c      d    e    f ]
+[ a!c  b*c   c      d   e*f   f ]   staging product: d!f
+                         ⇧
+                    write cursor
+                    (moves left)
 ```
 
-Now that the write cursor is in the old excretion list, values to the left of the write cursor have a suffix product that's correct for the new excretion list,
-while other values (to the right or at the write cursor) have a suffix product that considers only the old excretion list (and must thus be fixed up to include
-the staging product).
+Eventually, the write cursor gets to the first value in the staging list, and that's where things become a bit subtler.
+
+```
+ .-------- new excretion --------.
+/      old                        \
+ .- excretion -.   .-- staging --.
+/               \ /               \
+[  a    b    c      d      e    f ]
+[ a!c  b*c   c     d!f    e*f   f ]   staging product: d!f
+                    ⇧
+                write cursor
+                (moves left)
+```
+
+At that point, all values at or to the right of the write cursor (i.e., all staging values) hold an updated suffix product with respect to the new excretion list.
+Values in the old excretion list, on the other hand, have a suffix product that considers only the old excretion list.
+Fortunately, that's easy to fix in constant time: multiply the old suffix product with the staging product, the product of all values in the staging list.
+
+```
+ .-------- new excretion --------.
+/      old                        \
+ .- excretion -.    .- staging -.
+/               \  /             \
+[  a    b    c       d     e    f ]
+[ a!c  b*c c*d!f    d!f   e*f   f ]   staging product: d!f
+             ⇧
+        write cursor
+        (moves left)
+```
+
+Now that the write cursor is in the old excretion list, values at or to the right of the write cursor have a suffix product that's correct for the new excretion list (including the old excretion list if applicable),
+while other values (to the left of the write cursor) have a suffix product that considers only the old excretion list (and must thus be adjusted to acount for the staging product).
+Importantly, we can compute the suffix product with respect to the *new* excretion list at any index with at most one monoid multiplication (e.g., `b!f = (b*c)*(d!f)`).
+
+```
+ .------- new excretion --------.
+/      old                       \
+ .- excretion -.   .- staging -.
+/               \ /             \
+[  a    b      c    d     e    f ]
+[ a!c b*c*d!f c!f  d!f   e*f   f ]   staging product: d!f
+        ⇧
+    write cursor
+    (moves left)
+```
+
+Eventually, we get to the first value in the excretion list, and find a fully computed suffix product for the whole (new) excretion list.
+
+```
+ .-------- new excretion -------.
+/      old                       \
+ .- excretion -.   .- staging -.
+/               \ /             \
+[    a     b    c   d     e    f ]
+[a!c*d!f  b!f c!f  d!f   e*f   f ]   staging product: d!f
+    ⇧
+write cursor
+(moves left)
+```
 
 This is interesting for deamortisation because we now have useful invariants at all stages of the suffix product recomputation,
-even while we're updating the old excretion list.
-That in turn is useful because we can now update the old excretion list incrementally until the suffix product has been fully recomputed;
-at that time, we're back to a single excretion list and no staging list, and are ready to accept the ingestion list as the new staging list.
+even (especially) while we're updating the old excretion list.
+That is in turn useful because it means we can update the old excretion list incrementally until the suffix product has been fully recomputed;
+at that point, we're back to a single excretion list and no staging list, and are ready to accept the ingestion list as the new staging list.
 
-The only question left for deamortisation is scheduling: when to perform incremental suffix product updates and when to turn the ingestion list into a staging list.
+The only question left for deamortisation is scheduling: when to perform incremental suffix product updates and when to promote the ingestion list into a new staging list.
 
 Scheduling for constant work
 ----------------------------
 
-We're looking for constant work (suffix product updates) per operation (push and pop)
-without ever getting in a situation where we'd like to pop a value, but the suffix product's write cursor is still in the staging list (i.e., we still have garbage suffix product values).
+We're looking for constant work (constant suffix product updates) per operation (`push` and `pop`)
+without ever getting in a situation where we'd like to pop a value from the staging list, but the suffix product's write cursor is still in the middle of the staging list (i.e., we still have garbage suffix products).
+
+For example, we don't want to get in a situation like trying to pop `c` from the following state
+
+```
+ .-------- new excretion -------.
+/      old                       \
+ .- excretion -.    .- staging -.
+/               \  /             \
+[             c     d     e    f ]
+[             c     d    e*f   f ]   staging product: d!f
+                          ⇧
+                      write cursor
+                      (moves left)
+```
+
+which would leave us with a garbage suffix product as the next value to pop off the new excretion list.
+
+```
+ .-new excretion-.
+/ .-- staging --. \
+ /               \
+ [ d     e    f ]
+ [ d    e*f   f ]
+         ⇧
+      write cursor
+      (moves left)
+```
 
 It's easy to guarantee we'll never pop a value and find the write cursor is still in the staging list:
-advance the write cursor by \\( \left\lceil \frac{\\# \texttt{staging}}{ \\# \texttt{old_excretion}} \right\rceil \\) values for each pop.
+advance the write cursor by \\( \left\lceil \frac{\\# \texttt{staging}}{ \\# \texttt{old_excretion}} \right\rceil \\) values for each `pop`.
 
-Obviously, the goal is to minimise the size of the staging list in order to guarantee, e.g., \\( \\# \texttt{staging} \leq \\# \texttt{old_excretion}. \\)
+Let's see what happens when we bound that fraction to at most 1.
+
+The goal is clearly to minimise the size of the staging list in order to ensure \\( \\# \texttt{staging} \leq \\# \texttt{old_excretion}. \\)
 We should thus promote the whole ingestion list to staging as soon as the suffix product is fully computed
-(once the write cursor all the way past the oldest value in the excretion list).
+(once the write cursor is at or left of the oldest value in the excretion list).
 
-We want to keep the staging to old excretion (ingestion to excretion) ratio to at most 1:1,
+We want to keep the staging-to-old-excretion (ingestion to excretion) ratio to at most 1:1,
 so we must advance the suffix sum by at least one value whenever we push a new value to the ingestion list.
 This guarantees that, by the time the suffix sum is fully recomputed, the ingestion list is never bigger than the new excretion list.
 
-Now that we have a bound on the staging-to-old-excretion ratio, we can also advance the suffix sum by one value whenever we pop a value.
+Starting from this initial state (with total product `a!c * staging_product * ingestion_product`, i.e., `a!c * d!f * g!k`)
+
+```
+ .--------- new excretion --------.
+/      old                         \
+ .- excretion -.    .-- staging --.     .-- ingestion --.
+/               \  /               \   /                 \
+[  a    b     c      d     e    f  ]   [   g    h    k   ]
+[ a!c  b*c  c*d!f   d!f   e*f   f  ]  staging product:   d!f
+              ⇧                      ingestion product: g!k
+          write cursor
+```
+
+and pushing a new value `ℓ` should result in the following updated state.
+The running product for the ingestion list has been updated,
+and the write cursor has made progress towards a fully recomputed suffix product.
+
+```
+ .--------- new excretion ---------.
+/      old                          \
+ .- excretion --.     .- staging --.     .---- ingestion ----.
+/                \   /              \   /                     \
+[  a      b      c    d      e    f ]   [   g    h    k    ℓ  ]
+[ a!c  b*c*d!f  c!f  d!f    e*f   f ]   staging product:   d!f
+         ⇧                             ingestion product: g!ℓ
+    write cursor
+```
+
+Now that we have a bound on the staging-to-old-excretion ratio (at most 1:1),
+we can also advance the suffix sum by one item whenever we pop a value.
+For the same initial state
+
+```
+ .-------- new excretion --------.
+/      old                        \
+ .- excretion -.    .- staging --.    .-- ingestion --.
+/               \  /              \  /                 \
+[  a    b     c      d     e    f ]   [   g    h    k   ]
+[ a!c  b*c c*d!f    d!f   e*f   f ]   staging product:   d!f
+              ⇧                      ingestion product: g!k
+          write cursor
+```
+
+popping the value `a` yields the following state,
+
+```
+ .------- new excretion ------.
+/    old                       \
+ .-excretion-.   .- staging --.     .-- ingestion --.
+/             \ /              \   /                 \
+[  b        c     d     e    f ]   [   g    h    k   ]
+[ b*c*d!f  c!f   d!f   e*f   f ]   staging product:   d!f
+    ⇧                             ingestion product: g!k
+write cursor
+```
+
+where the write cursor has advanced by one item.
+In this example, the write cursor has also reached the beginning of the new excretion list (after removing `a` and advancing the write cursor).
+It's now time to promote the ingestion list to staging, and the cycle continues (with product for the whole FIFO `b!f * g!k * l = b!k`).
+
+```
+ .------------ new excretion ------------.
+/          old                            \
+ .------ excretion -----.   .--staging --.    .-ingestion-.
+/                        \ /              \  /             \
+[  b   c     d     e    f   g    h    k   ]  [             ]
+[ b!f c!f   d!f   e*f   f   g    h    k   ] staging product:   g!k
+                                      ⇧     ingestion product: 1
+                                 write cursor
+```
+
 
 Sample code
 -----------
@@ -182,15 +368,16 @@ Sample code
 I [implemented the data structure in Python](/images/2025-08-14-monoid-augmented-fifos/monoid-fifo.py) with the improvement from the [follow-up paper](https://arxiv.org/abs/2009.13768),
 where we store only a value *or* a suffix product for each slot in the FIFO.
 
-The state is just a bunch of indices in an arbitrary windowed store (e.g., a ring buffer).
+The state is mostly a bunch of indices in an arbitrary windowed store with linear iterators (e.g., a ring buffer).
 
 ```
 class MonoidFifo:
-    def __init__(self, combiner, zero, trace=False):
+    def __init__(self, combiner, identity, trace=False):
         self.combiner = combiner
-        self.zero = zero
+        self.identity = identity
         self.trace = trace
         self.store = dict()  # int -> value or suffix product
+        self._input_values = dict() # int -> value, used only for check_rep and its callees
 
         # values in [pop_index:push_index)
         self.pop_idx = 0
@@ -201,21 +388,82 @@ class MonoidFifo:
 
         # staging list in [first_staging_idx:first_ingestion_idx)
         self.first_staging_idx = 0
-        self.staging_product = zero # product for the staging list
+        self.staging_product = identity # product for the staging list
 
         # ingestion list in [first_ingestion_idx:push_index)
         self.first_ingestion_idx = 0
-        self.ingestion_product = zero # running product for the ingestion list
+        self.ingestion_product = identity # running product for the ingestion list
+        self.check_rep()
+
 ```
 
-We can `push` by pushing to the underlying windowed store,
+With five indices in the backing `store` and two periodically updated products,
+it makes sense to describe our invariants in code and check them on entry and exit.
+
+```
+    def check_rep(self):
+        """Check internal invariants."""
+        self._check_structure()
+        self._check_products()
+        self._check_progress()
+```
+
+The structural check flags state that is clearly nonsensical
+
+```
+    def _check_structure(self):
+        """Look for grossly invalid state."""
+        assert self.pop_idx <= self.first_ingestion_idx <= self.push_idx
+        assert self.write_cursor <= self.first_ingestion_idx
+        assert self.first_staging_idx <= self.first_ingestion_idx
+        assert list(self.store) == list(range(self.pop_idx, self.push_idx))
+        # Drop useless data
+        self._input_values = {idx:self._input_values[idx] for idx in range(self.pop_idx, self.push_idx)}
+        for idx in range(self.first_ingestion_idx, self.push_idx):  # The ingestion list should have the raw values
+            assert self.store[idx] == self._input_values[idx]
+        for idx in range(self.first_staging_idx, self.write_cursor):  # Same for unprocessed staging values
+            assert self.store[idx] == self._input_values[idx]
+```
+
+For any state, we can confirm that the precomputed products are valid,
+and that all entries in the windowed store that we expect to hold a suffix product actually do.
+
+```
+    def _check_products(self):
+        """Make sure our suffix products have the expected values."""
+        def reference(indices):
+            return reduce(self.combiner, (self._input_values[idx] for idx in indices), self.identity)
+        assert reference(range(self.first_ingestion_idx, self.push_idx)) == self.ingestion_product
+        assert reference(range(self.first_staging_idx, self.first_ingestion_idx)) == self.staging_product
+        for idx in range(self.write_cursor, self.first_ingestion_idx):
+            assert reference(range(idx, self.first_ingestion_idx)) == self.store[idx], \
+                "at or greater than write cursor: must have updated product"
+        for idx in range(self.pop_idx, min(self.write_cursor, self.first_staging_idx)):
+            assert reference(range(idx, self.first_staging_idx)) == self.store[idx], \
+                "old excretion, left of write cursor: must have old product"
+```
+
+Finally, we confirm that we're making enough progress on the incremental suffix product.
+
+```
+    def _check_progress(self):
+        """Make sure the suffix product doesn't fall behind."""
+        assert self.push_idx - self.first_ingestion_idx <= self.first_ingestion_idx - self.pop_idx, \
+            "ingestion list <= excretion list"
+        assert self.first_staging_idx - self.pop_idx >= self.first_staging_idx - self.write_cursor, \
+            "old ingestion list >= unupdated staging list"
+```
+
+We `push` by appending to the underlying windowed store,
 updating our state to take the new value into acount,
-and calling the `maintain` method.
+and calling the `maintain` method to incrementally recompute the excretion list's suffix product.
 
 ```
     def push(self, value):
+        self.check_rep()
         assert self.push_idx not in self.store
         self.store[self.push_idx] = value
+        self._input_values[self.push_idx] = value # Only for check_rep
         self.push_idx += 1
         self.ingestion_product = self.combiner(self.ingestion_product, value)
         self.maintain()
@@ -225,8 +473,10 @@ The `peek` method shows how we reassemble up to 3 partial products,
 depending on where the pop index lives (before or after the write cursor).
 
 ```
+    def peek(self):
+        self.check_rep()
         if self.pop_idx == self.push_idx:
-            return self.zero
+            return self.identity
         ret = self.store[self.pop_idx]
         if self.pop_idx < self.write_cursor:
             ret = self.combiner(ret, self.staging_product)
@@ -234,7 +484,7 @@ depending on where the pop index lives (before or after the write cursor).
         return ret
 ```
 
-Finally, we can `pop` by updating the windowed store,
+Finally, we `pop` by updating the windowed store,
 advancing our `pop_idx`, and calling the `maintain` method.
 
 ```
@@ -246,22 +496,26 @@ advancing our `pop_idx`, and calling the `maintain` method.
         return ret
 ```
 
-Now the `maintain` method itself, where all the complexity hides:
+Now the `maintain` method itself, where all the complexity is hidden:
 
 1. advances the suffix product (with one call to the `combiner`) if `write_cursor > pop_idx`
 2. promotes the ingestion list to staging list when the suffix product is fully computed (`write_cursor <= pop_idx`)
 
-Each `push` or `pop` call thus makes exactly one call to the `maintain` method,
-and the `maintain` method itself makes at most one call to the monoid operator (`combiner`).
+Each `push` or `pop` call makes exactly one call to the `maintain` method,
+and the `maintain` method itself makes at most one call to the monoid operator (`combiner`), in `advance`.
+There's also no loop, so we achieved our goal of constant-time worst-case complexity, with at most one monoid operation.
 
 ```
     def maintain(self):
+        self._check_structure()
         if self.write_cursor > self.pop_idx:
-            self.advance()
+            self._advance()
         if self.write_cursor <= self.pop_idx:
-            self.promote()
+            self._promote()
+        self.check_rep()
 
-    def advance(self):
+    def _advance(self):
+        assert self.write_cursor > self.pop_idx
         self.write_cursor -= 1
         curr = self.store[self.write_cursor]
         if self.write_cursor < self.first_staging_idx:
@@ -270,27 +524,56 @@ and the `maintain` method itself makes at most one call to the monoid operator (
         else:
             # in the staging list, we compute a regular suffix product
             update = self.combiner(curr, self.store[self.write_cursor + 1])
+        if self.trace:
+            print(f"advance {curr} => {update}")
         self.store[self.write_cursor] = update
 
-    def promote(self):
-        # pop_idx ... first_staging_idx ... first_ingestion_idx ... push_idx
-        #                                  write_cursor
-        if self.first_ingestion_idx == self.push_idx:  # optional, but might as well
-            assert self.ingestion_product == self.zero
-            return
+    def _promote(self):
         self.staging_product = self.ingestion_product
-        self.ingestion_product = self.zero
+        self.ingestion_product = self.identity
         self.first_staging_idx = self.first_ingestion_idx
 
-        self.write_cursor = self.push_idx - 1 # one free combine with zero
-        self.first_ingestion_idx = self.push_idx
+        if self.trace:
+            print(f"promote {[self.store[idx] for idx in range(self.pop_idx, self.first_staging_idx)]} "
+                  f" {[self.store[idx] for idx in range(self.first_staging_idx, self.push_idx)]} "
+                  f"{self.staging_product}")
+
+        if self.pop_idx == self.push_idx: # empty FIFO -> empty excretion list
+            # If it weren't for `check_rep`, we could execute the next
+            # block unconditionally: the only thing we can do with an empty
+            # FIFO is `peek` (which already guards for empty FIFO), or
+            # `push` (will will immediate promote and overwrite
+            # `write_cursor`/`ingestion_product`).
+            self.write_cursor = self.push_idx
+            self.ingestion_product = self.identity
+        else:
+            self.write_cursor = self.push_idx - 1 # one free combine with identity
+            self.first_ingestion_idx = self.push_idx
 ```
 
-This is pretty complex, so I tested the code by exhaustively enumerating
-all small push/pop sequences for the free (list append) monoid; see
+This is pretty complicated, so I tested the code by exhaustively enumerating
+all short push/pop sequences for the free (list append) monoid; see
 [the bottom of the implementation file](/images/2025-08-14-monoid-augmented-fifos/monoid-fifo.py).
+It seems to work (manually mutating the implementation did flag all the changes I tried),
+and I'm confident it's possible to implement this algorithm so every operation take constant time with respect to the input values!
 
-It seems to work (and manually mutating the implementation did flag all the changes I tried),
-and I even think it would be possible to implement this so every operation is constant time (modulo memory caches)!
+If you're already thinking about how you'd implement something like this in branch-free amd64 or RV64, or even in gateware (I know I am!),
+$DAYJOB might be a good fit. Feel free to send me an email to talk about it!
+
+<small>Thank you
+[Jannis](https://mathstodon.xyz/@jix/115032716870635261),
+[Per](https://mastodon.social/@pervognsen/115031875346937974),
+and [Shachaf](https://gts.y.la/@shachaf/statuses/01K2NB4CX2XC6G0PJ5XWBC7WNX)
+for improving an early draft.</small>
+
+<p><hr style="width: 50%"></p>
+
+### Some references and related literature
+
+* [Constant-Time Sliding Window Aggregation (Tangwongsan, Hirzel, and Schneider, 2015)](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf)
+* [In-Order Sliding-Window Aggregation in Worst-Case Constant Time (idem, 2020)](https://arxiv.org/abs/2009.13768)
+* Chris Okasaki's Purely functional data structures, either [his 1996 dissertation](https://www.cs.cmu.edu/~rwh/students/okasaki.pdf) or his [1999 monograph](https://www.amazon.com/Purely-Functional-Data-Structures-Okasaki/dp/0521663504)
+* [Most of Graham Cormode's oeuvre](https://scholar.google.com/citations?user=gpLVKmEAAAAJ&hl=en)
+* ... including [Synopses for Massive Data: Samples, Histograms, Wavelets, Sketches (Cormode, Garofalakis, Haas, and Jermaine, 2011)](https://www.nowpublishers.com/article/Details/DBS-004). <span style="font-variant: small-caps;">now</span> is expensive but often worth it. You can sometimes finds individual chapters on the author's webpage; the [bibliography at the end of the preview](https://www.nowpublishers.com/article/DownloadSummary/DBS-004) is also useful.
 
 <p><hr style="width: 50%"></p>
