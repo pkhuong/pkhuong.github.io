@@ -1,9 +1,12 @@
+from functools import reduce
+
 class MonoidFifo:
-    def __init__(self, combiner, zero, trace=False):
+    def __init__(self, combiner, identity, trace=False):
         self.combiner = combiner
-        self.zero = zero
+        self.identity = identity
         self.trace = trace
         self.store = dict()  # int -> value or suffix product
+        self._input_values = dict() # int -> value, used only for check_rep and its callees
 
         # values in [pop_index:push_index)
         self.pop_idx = 0
@@ -14,22 +17,65 @@ class MonoidFifo:
 
         # staging list in [first_staging_idx:first_ingestion_idx)
         self.first_staging_idx = 0
-        self.staging_product = zero # product for the staging list
+        self.staging_product = identity # product for the staging list
 
         # ingestion list in [first_ingestion_idx:push_index)
         self.first_ingestion_idx = 0
-        self.ingestion_product = zero # running product for the ingestion list
+        self.ingestion_product = identity # running product for the ingestion list
+        self.check_rep()
+
+    def check_rep(self):
+        """Check internal invariants."""
+        self._check_structure()
+        self._check_products()
+        self._check_progress()
+
+    def _check_structure(self):
+        """Look for grossly invalid state."""
+        assert self.pop_idx <= self.first_ingestion_idx <= self.push_idx
+        assert self.write_cursor <= self.first_ingestion_idx
+        assert self.first_staging_idx <= self.first_ingestion_idx
+        assert list(self.store) == list(range(self.pop_idx, self.push_idx))
+        # Drop useless data
+        self._input_values = {idx:self._input_values[idx] for idx in range(self.pop_idx, self.push_idx)}
+        for idx in range(self.first_ingestion_idx, self.push_idx):  # The ingestion list should have the raw values
+            assert self.store[idx] == self._input_values[idx]
+        for idx in range(self.first_staging_idx, self.write_cursor):  # Same for unprocessed staging values
+            assert self.store[idx] == self._input_values[idx]
+
+    def _check_products(self):
+        """Make sure our suffix products have the expected values."""
+        def reference(indices):
+            return reduce(self.combiner, (self._input_values[idx] for idx in indices), self.identity)
+        assert reference(range(self.first_ingestion_idx, self.push_idx)) == self.ingestion_product
+        assert reference(range(self.first_staging_idx, self.first_ingestion_idx)) == self.staging_product
+        for idx in range(self.write_cursor, self.first_ingestion_idx):
+            assert reference(range(idx, self.first_ingestion_idx)) == self.store[idx], \
+                "at or greater than write cursor: must have updated product"
+        for idx in range(self.pop_idx, min(self.write_cursor, self.first_staging_idx)):
+            assert reference(range(idx, self.first_staging_idx)) == self.store[idx], \
+                "old excretion, left of write cursor: must have old product"
+
+    def _check_progress(self):
+        """Make sure the suffix product doesn't fall behind."""
+        assert self.push_idx - self.first_ingestion_idx <= self.first_ingestion_idx - self.pop_idx, \
+            "ingestion list <= excretion list"
+        assert self.first_staging_idx - self.pop_idx >= self.first_staging_idx - self.write_cursor, \
+            "old ingestion list >= unupdated staging list"
 
     def push(self, value):
+        self.check_rep()
         assert self.push_idx not in self.store
         self.store[self.push_idx] = value
+        self._input_values[self.push_idx] = value # Only for check_rep
         self.push_idx += 1
         self.ingestion_product = self.combiner(self.ingestion_product, value)
         self.maintain()
 
     def peek(self):
+        self.check_rep()
         if self.pop_idx == self.push_idx:
-            return self.zero
+            return self.identity
         ret = self.store[self.pop_idx]
         if self.pop_idx < self.write_cursor:
             ret = self.combiner(ret, self.staging_product)
@@ -44,12 +90,15 @@ class MonoidFifo:
         return ret
 
     def maintain(self):
+        self._check_structure()
         if self.write_cursor > self.pop_idx:
-            self.advance()
+            self._advance()
         if self.write_cursor <= self.pop_idx:
-            self.promote()
+            self._promote()
+        self.check_rep()
 
-    def advance(self):
+    def _advance(self):
+        assert self.write_cursor > self.pop_idx
         self.write_cursor -= 1
         curr = self.store[self.write_cursor]
         if self.write_cursor < self.first_staging_idx:
@@ -62,14 +111,9 @@ class MonoidFifo:
             print(f"advance {curr} => {update}")
         self.store[self.write_cursor] = update
 
-    def promote(self):
-        # pop_idx ... first_staging_idx ... first_ingestion_idx ... push_idx
-        #                                  write_cursor
-        if self.first_ingestion_idx == self.push_idx:  # optional, but might as well
-            assert self.ingestion_product == self.zero
-            return
+    def _promote(self):
         self.staging_product = self.ingestion_product
-        self.ingestion_product = self.zero
+        self.ingestion_product = self.identity
         self.first_staging_idx = self.first_ingestion_idx
 
         if self.trace:
@@ -77,20 +121,31 @@ class MonoidFifo:
                   f" {[self.store[idx] for idx in range(self.first_staging_idx, self.push_idx)]} "
                   f"{self.staging_product}")
 
-        self.write_cursor = self.push_idx - 1 # one free combine with zero
-        self.first_ingestion_idx = self.push_idx
+        if self.pop_idx == self.push_idx: # empty FIFO -> empty excretion list
+            # If it weren't for `check_rep`, we could always run the
+            # next block: the only thing we can do with an empty FIFO
+            # is `peek` (which already guards for empty FIFO), or
+            # `push` (will will immediate promote and overwrite
+            # `write_cursor`/`ingestion_product`).
+            self.write_cursor = self.push_idx
+            self.ingestion_product = self.identity
+        else:
+            self.write_cursor = self.push_idx - 1 # one free combine with identity
+            self.first_ingestion_idx = self.push_idx
 
 
 from collections import deque
 SUT = None
+TEST_CASE = None
 
 
-def test_one(ops):
-    global SUT
+def test_one(ops, trace=False):
+    global SUT, TEST_CASE
     counter = 1
     # free monoid is useless as an agg, but obviously catches issues.
-    sut = MonoidFifo(lambda x, y: x + y, [])
+    sut = MonoidFifo(lambda x, y: x + y, [], trace)
     SUT = sut
+    TEST_CASE = list(ops)
     ref = deque()
 
     assert sut.peek() == list(ref)
@@ -109,18 +164,21 @@ def test_one(ops):
         assert sut.peek() == list(ref), (ops[:idx + 1], sut.peek(), list(ref))
 
 
-def enumerate_test_cases(depth = 20, pop_budget = 0):
-    if depth <= 0:
-        yield []
+def enumerate_test_cases(push_budget = 20, pop_budget = 0):
+    if push_budget == 0:
+        yield [False] * pop_budget
         return
     if pop_budget > 0:
-        for test_case in enumerate_test_cases(depth - 1, pop_budget - 1):
+        for test_case in enumerate_test_cases(push_budget, pop_budget - 1):
             yield [False] + test_case
-    for test_case in enumerate_test_cases(depth - 1, pop_budget + 1):
+    for test_case in enumerate_test_cases(push_budget - 1, pop_budget + 1):
         yield [True] + test_case
 
 
 if __name__ == "__main__":
-    for depth in range(25, 26):  # start at 0 to minimise failures
-        for test_case in enumerate_test_cases(depth):
+    for pushes in range(26):
+        count = 0
+        for test_case in enumerate_test_cases(pushes):
             test_one(test_case)
+            count += 1
+        print(f"Completed {count} at pushes={pushes}")
