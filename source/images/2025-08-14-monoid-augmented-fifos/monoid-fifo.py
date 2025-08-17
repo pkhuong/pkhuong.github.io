@@ -36,8 +36,6 @@ class MonoidFifo:
         assert self.write_cursor <= self.first_ingestion_idx
         assert self.first_staging_idx <= self.first_ingestion_idx
         assert list(self.store) == list(range(self.pop_idx, self.push_idx))
-        # Drop useless data
-        self._input_values = {idx:self._input_values[idx] for idx in range(self.pop_idx, self.push_idx)}
         for idx in range(self.first_ingestion_idx, self.push_idx):  # The ingestion list should have the raw values
             assert self.store[idx] == self._input_values[idx]
         for idx in range(self.first_staging_idx, self.write_cursor):  # Same for unprocessed staging values
@@ -122,9 +120,9 @@ class MonoidFifo:
                   f"{self.staging_product}")
 
         if self.pop_idx == self.push_idx: # empty FIFO -> empty excretion list
-            # If it weren't for `check_rep`, we could always run the
-            # next block: the only thing we can do with an empty FIFO
-            # is `peek` (which already guards for empty FIFO), or
+            # If it weren't for `check_rep`, we could execute the `else`
+            # block unconditionally: the only thing we can do with an empty
+            # FIFO is `peek` (which already guards for empty FIFO), or
             # `push` (will will immediate promote and overwrite
             # `write_cursor`/`ingestion_product`).
             self.write_cursor = self.push_idx
@@ -164,19 +162,62 @@ def test_one(ops, trace=False):
         assert sut.peek() == list(ref), (ops[:idx + 1], sut.peek(), list(ref))
 
 
-def enumerate_test_cases(push_budget = 20, pop_budget = 0):
+def _enumerate_sawtooth_cases(max_pushes):
+    if not max_pushes:
+        yield []
+        return
+    for count in range(1, max_pushes[0] + 1):
+        # Last one always pops as much as possible
+        for pops in (range(1, count + 1) if len(max_pushes) > 1 else range(count, count + 1)):
+            for remainder in _enumerate_sawtooth_cases(max_pushes[1:]):
+                yield [count, -pops] + remainder
+
+def enumerate_sawtooth_cases(*max_pushes):
+    for counts in sorted(set(tuple(counts) for counts in _enumerate_sawtooth_cases(max_pushes)),
+                         key=lambda counts: (sum(abs(count) for count in counts), counts)):
+        acc = []
+        remainder = 0
+        for count in counts:
+            remainder += count
+            if count > 0:
+                acc += [True] * count
+            else:
+                acc += [False] * -count
+        acc += [False] * remainder
+        yield acc
+
+
+def enumerate_test_cases(push_budget=14, pop_budget=0):
     if push_budget == 0:
         yield [False] * pop_budget
         return
     if pop_budget > 0:
-        for test_case in enumerate_test_cases(push_budget, pop_budget - 1):
-            yield [False] + test_case
-    for test_case in enumerate_test_cases(push_budget - 1, pop_budget + 1):
-        yield [True] + test_case
+        for case in enumerate_test_cases(push_budget, pop_budget - 1):
+            yield [False] + case
+    for case in enumerate_test_cases(push_budget - 1, pop_budget + 1):
+        yield [True] + case
 
 
 if __name__ == "__main__":
-    for pushes in range(26):
+    count = 0
+    for test_case in enumerate_sawtooth_cases(100):
+        test_one(test_case)
+        count += 1
+    print(f"Completed {count} in [1..100]")
+
+    count = 0
+    for test_case in enumerate_sawtooth_cases(25, 25):
+        test_one(test_case)
+        count += 1
+    print(f"Completed {count} in [1..25], [1..25]")
+
+    count = 0
+    for test_case in enumerate_sawtooth_cases(10, 10, 10):
+        test_one(test_case)
+        count += 1
+    print(f"Completed {count} in [1..10], [1..10], [1..10]")
+
+    for pushes in range(17):  # up to 16 pushes (and 16 pops)
         count = 0
         for test_case in enumerate_test_cases(pushes):
             test_one(test_case)

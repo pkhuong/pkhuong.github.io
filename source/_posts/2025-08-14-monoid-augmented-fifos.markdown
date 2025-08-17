@@ -19,14 +19,34 @@ and decrement the accumulator by the exiting value (increment by the value's add
 
 This simple increment/decrement algorithm works because the underlying algebraic structure is a [group](https://mathworld.wolfram.com/Group.html)
 (addition is associative, and we have inverses).
-However, that's often too strong of an assumption: a lot of times, we want windowed aggregates with operators that are associative but lack inverses (e.g., windowed min/max[^min-queue], [top-K](https://en.wikipedia.org/wiki/Selection_algorithm#Sublinear_data_structures), or variance[^Pebay]).
-We want to work with [monoids](https://mathworld.wolfram.com/Monoid.html).[^semigroup]
+However, that's often too strong of an assumption: a lot of times, we want windowed aggregates over operators that are associative but lack inverses.
+
+For example, a service could surface its tail latencies by reporting the two longest ([top-K](https://en.wikipedia.org/wiki/Selection_algorithm#Sublinear_data_structures) with \\(k=2\\)) request durations over a sliding 1-second time window (and no preset bound on the number of requests per 1-second window).
+Let's say there was no request in the past second, so the window is initially empty, and requests start trickling in:
+
+1. an initial 2 ms request gives us a worst-case latency of 2 ms
+2. a second 1 ms request gives us top-2 latencies of `{1 ms, 2 ms}`
+3. another 100 ms request (with `[2 ms, 1 ms, 100 ms]` in the 1-second window) gives a top-2 of `{2 ms, 100 ms}`
+4. eventually, the 2 ms request ages out of the 1-second window, so we're left with `[1 ms, 100 ms]` in the window, and a top-2 of `{1 ms, 100 ms}`.
+
+Other common instances of aggregates over inverse-less associative operators are min/max[^min-queue], sample variance[^Pebay], [heavy hitters](https://en.wikipedia.org/wiki/Misra%E2%80%93Gries_heavy_hitters_algorithm), [K-min values cardinality estimators](https://dl.acm.org/doi/10.1145/1247480.1247504), and miscellaneous [statistical sketches](https://cacm.acm.org/practice/data-sketching/).
+In all these cases, we want to work with [monoids](https://mathworld.wolfram.com/Monoid.html).[^semigroup]
 
 [^min-queue]: For min/max-augmented queues, [Shachaf linked to](https://gts.y.la/@shachaf/statuses/01K2NBCESQ77VG6CCPARSTV7BA) this [other amortised data structure](https://cp-algorithms.com/data_structures/stack_queue_modification.html#queue-modification-method-1) where we sparsify the queue to hold only values that would be the minimum (resp. maximum) value in the queue if they were at the head. In other words, each value in the queue is less than (resp. greater than) *everything* later in the queue. That's not a property we can enforce by filtering insertions; we must instead drop a suffix of the monotonic queue before appending to it. A lot of queue representations let us do that with a binary search and a constant-time truncation, so it's reasonable as a deamortised implementation. However, the trick doesn't generalise well, and already when tracking extrema (i.e., min *and* max), the constant factors might be better with the deamortised algorithm described here.
 
 [^Pebay]: Aggregation operators are often commutative (e.g., all the examples I used, including [one-pass moments](https://www.osti.gov/servlets/purl/1028931)), but the queue structure apparently makes it hard to exploit commutativity.
 
 [^semigroup]: Assuming only associativity yields a semigroup, but we can trivially upgrade a semigroup to a monoid with a sentinel identity value (e.g., `Option<T>` instead of `T`).
+
+As the number of values in the window grows, maintaining such aggregates becomes far from trivial;
+adding values is easy, the challenge is handling deletions efficiently.
+This post [reexplains one way](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf) to augment an arbitrary FIFO queue
+such that we can add (push on the FIFO) and remove (pop from the FIFO) values
+while maintaining a monoid-structured aggregate (e.g., top-2 request latencies) over the FIFO's contents *on-the-fly*,
+with constant bookkeeping overhead and constant number of binary aggregate operator calls for each push or pop, even in the worst case.
+
+A purely functional red herring
+-------------------------------
 
 There's a cute and simple construction in the purely functional data structure folklore for a FIFO queue augmented with a monoid.
 The construction builds on two observations:
@@ -78,8 +98,8 @@ s  │ g   h                   │
    └ h                       ┘
 ```
 
-I'll use diagrams like the above throughout the post, but the notation for suffix products is a bit bulky, so
-I'll abbreviate products with `!`, e.g., `a!h` instead of `a*b*c*...*g*h`, for the equivalent diagram
+I'll use diagrams like the above throughout the post, but the vertical notation for products is a bit bulky, so
+I'll abbreviate them with `!`, e.g., `a!h` instead of `a*b*c*...*g*h`, for the equivalent diagram
 
 ```
     .------ excretion -------.    .----- ingestion -----.
@@ -109,7 +129,7 @@ Toward deamortisation
 
 Thinking in terms of ingestion/excretion lists is helpful because
 it's now trivial to append the whole[^partial] ingestion list to the excretion list at any time,
-even when the excretion list is non-empty:
+without emptying the latter:
 concatenate the two lists, and recompute the suffix product for the resulting excretion list.
 [The 2020 follow-up](https://arxiv.org/abs/2009.13768) notes that we can do that for the old excretion list without even keeping the original values around:
 we only have to multiply the old excretion list's suffix product with the product of all newly appended excretion values.
@@ -417,8 +437,6 @@ The structural check flags state that is clearly nonsensical
         assert self.write_cursor <= self.first_ingestion_idx
         assert self.first_staging_idx <= self.first_ingestion_idx
         assert list(self.store) == list(range(self.pop_idx, self.push_idx))
-        # Drop useless data
-        self._input_values = {idx:self._input_values[idx] for idx in range(self.pop_idx, self.push_idx)}
         for idx in range(self.first_ingestion_idx, self.push_idx):  # The ingestion list should have the raw values
             assert self.store[idx] == self._input_values[idx]
         for idx in range(self.first_staging_idx, self.write_cursor):  # Same for unprocessed staging values
@@ -539,7 +557,7 @@ There's also no loop, so we achieved our goal of constant-time worst-case comple
                   f"{self.staging_product}")
 
         if self.pop_idx == self.push_idx: # empty FIFO -> empty excretion list
-            # If it weren't for `check_rep`, we could execute the next
+            # If it weren't for `check_rep`, we could execute the `else`
             # block unconditionally: the only thing we can do with an empty
             # FIFO is `peek` (which already guards for empty FIFO), or
             # `push` (will will immediate promote and overwrite
@@ -558,9 +576,10 @@ It seems to work (manually mutating the implementation did flag all the changes 
 and I'm confident it's possible to implement this algorithm so every operation take constant time with respect to the input values!
 
 If you're already thinking about how you'd implement something like this in branch-free amd64 or RV64, or even in gateware (I know I am!),
-$DAYJOB might be a good fit. Feel free to send me an email to talk about it!
+$DAYJOB might be a good fit. Send me an email if that sounds interesting!
 
 <small>Thank you
+Jacob,
 [Jannis](https://mathstodon.xyz/@jix/115032716870635261),
 [Per](https://mastodon.social/@pervognsen/115031875346937974),
 and [Shachaf](https://gts.y.la/@shachaf/statuses/01K2NB4CX2XC6G0PJ5XWBC7WNX)
