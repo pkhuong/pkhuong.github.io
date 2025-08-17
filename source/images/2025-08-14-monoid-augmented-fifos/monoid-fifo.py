@@ -1,10 +1,13 @@
 from functools import reduce
 
+LAZY = True
+
 class MonoidFifo:
-    def __init__(self, combiner, identity, trace=False):
+    def __init__(self, combiner, identity, trace=False, lazy=LAZY):
         self.combiner = combiner
         self.identity = identity
         self.trace = trace
+        self.lazy = lazy
         self.store = dict()  # int -> value or suffix product
         self._input_values = dict() # int -> value, used only for check_rep and its callees
 
@@ -22,6 +25,7 @@ class MonoidFifo:
         # ingestion list in [first_ingestion_idx:push_index)
         self.first_ingestion_idx = 0
         self.ingestion_product = identity # running product for the ingestion list
+        self.product_count = 0  # Only counts push/pop and maintenance
         self.check_rep()
 
     def check_rep(self):
@@ -32,10 +36,19 @@ class MonoidFifo:
 
     def _check_structure(self):
         """Look for grossly invalid state."""
+        # pop_idx                   first_ingestion    push_idx
+        #   [ old excretion ] [ staging ] [ ingestion ]
         assert self.pop_idx <= self.first_ingestion_idx <= self.push_idx
-        assert self.write_cursor <= self.first_ingestion_idx
+        #           first_staging    first_ingestion
+        #   [ excretion ] [ staging ]
+        # pop_idx can (temporarily) be greater than first_staging_idx,
+        # before we promote in `maintain`.
         assert self.first_staging_idx <= self.first_ingestion_idx
-        assert list(self.store) == list(range(self.pop_idx, self.push_idx))
+        # The write cursor can equal `first_ingestion_idx` when the excretion list is empty.
+        # Otherwise, it's strictly inside the excretion list.
+        assert self.write_cursor <= self.first_ingestion_idx
+        assert list(self.store) == list(range(self.pop_idx, self.push_idx)), \
+            "Must have values for exactly the [pop_idx, push_idx) half-open range"
         for idx in range(self.first_ingestion_idx, self.push_idx):  # The ingestion list should have the raw values
             assert self.store[idx] == self._input_values[idx]
         for idx in range(self.first_staging_idx, self.write_cursor):  # Same for unprocessed staging values
@@ -43,15 +56,18 @@ class MonoidFifo:
 
     def _check_products(self):
         """Make sure our suffix products have the expected values."""
-        def reference(indices):
-            return reduce(self.combiner, (self._input_values[idx] for idx in indices), self.identity)
-        assert reference(range(self.first_ingestion_idx, self.push_idx)) == self.ingestion_product
-        assert reference(range(self.first_staging_idx, self.first_ingestion_idx)) == self.staging_product
+        def reference(begin, end):
+            """Computes the partial product for values [begin, end)."""
+            return reduce(self.combiner, (self._input_values[idx] for idx in range(begin, end)), self.identity)
+        assert reference(self.first_ingestion_idx, self.push_idx) == self.ingestion_product, \
+            "ingestion product must match the product of the ingestion list"
+        assert reference(self.first_staging_idx, self.first_ingestion_idx) == self.staging_product, \
+            "staging product must match the product of the staging list"
         for idx in range(self.write_cursor, self.first_ingestion_idx):
-            assert reference(range(idx, self.first_ingestion_idx)) == self.store[idx], \
+            assert reference(idx, self.first_ingestion_idx) == self.store[idx], \
                 "at or greater than write cursor: must have updated product"
         for idx in range(self.pop_idx, min(self.write_cursor, self.first_staging_idx)):
-            assert reference(range(idx, self.first_staging_idx)) == self.store[idx], \
+            assert reference(idx, self.first_staging_idx) == self.store[idx], \
                 "old excretion, left of write cursor: must have old product"
 
     def _check_progress(self):
@@ -68,6 +84,7 @@ class MonoidFifo:
         self._input_values[self.push_idx] = value # Only for check_rep
         self.push_idx += 1
         self.ingestion_product = self.combiner(self.ingestion_product, value)
+        self.product_count += 1
         self.maintain()
 
     def peek(self):
@@ -84,19 +101,36 @@ class MonoidFifo:
         ret = self.peek()
         del self.store[self.pop_idx]
         self.pop_idx += 1
-        self.maintain()
+        self.maintain(True)
         return ret
 
-    def maintain(self):
+    def maintain(self, for_pop=False):
         self._check_structure()
         if self.write_cursor > self.pop_idx:
-            self._advance()
+            self._advance(for_pop)
         if self.write_cursor <= self.pop_idx:
             self._promote()
         self.check_rep()
 
-    def _advance(self):
+    def _advance(self, for_pop):
         assert self.write_cursor > self.pop_idx
+        if self.lazy:
+            if True: # do it the smart way, we know which constraint might be violated by push/pop
+                if not for_pop and self.push_idx - self.first_ingestion_idx <= self.first_ingestion_idx - self.write_cursor:
+                    # ingestion > updated suffix list, we must keep going
+                    return
+                if for_pop and self.write_cursor - self.first_staging_idx <= self.first_staging_idx - self.pop_idx:
+                    # work left in staging > old excretion, keep going
+                    return
+            else:
+                if self.push_idx - self.first_ingestion_idx > self.first_ingestion_idx - self.write_cursor:
+                    # ingestion > update suffix list, we must grow the latter
+                    pass
+                elif self.write_cursor - self.first_staging_idx > self.first_staging_idx - self.pop_idx:
+                    # work left in the staging list > old excretion, we must shrink the former
+                    pass
+                else:
+                    return
         self.write_cursor -= 1
         curr = self.store[self.write_cursor]
         if self.write_cursor < self.first_staging_idx:
@@ -105,11 +139,23 @@ class MonoidFifo:
         else:
             # in the staging list, we compute a regular suffix product
             update = self.combiner(curr, self.store[self.write_cursor + 1])
+        self.product_count += 1
         if self.trace:
             print(f"advance {curr} => {update}")
         self.store[self.write_cursor] = update
 
     def _promote(self):
+        if self.lazy:
+            if self.push_idx - self.first_ingestion_idx < self.first_ingestion_idx - self.pop_idx:
+                # ingestion < excretion, we can wait before promoting
+                self.staging_product = self.identity
+                self.write_cursor = self.pop_idx
+                self.first_staging_idx = self.first_ingestion_idx
+                if self.trace:
+                    print(f"lazy promote {[self.store[idx] for idx in range(self.pop_idx, self.first_staging_idx)]} "
+                          f" {[self.store[idx] for idx in range(self.first_staging_idx, self.push_idx)]} "
+                          f"{self.staging_product}")
+                return
         self.staging_product = self.ingestion_product
         self.ingestion_product = self.identity
         self.first_staging_idx = self.first_ingestion_idx
@@ -139,7 +185,6 @@ TEST_CASE = None
 
 def test_one(ops, trace=False):
     global SUT, TEST_CASE
-    counter = 1
     # free monoid is useless as an agg, but obviously catches issues.
     sut = MonoidFifo(lambda x, y: x + y, [], trace)
     SUT = sut
@@ -148,8 +193,12 @@ def test_one(ops, trace=False):
 
     assert sut.peek() == list(ref)
 
+    counter = 1
+    ops = tuple(ops)
     for idx, op in enumerate(ops):
         assert sut.peek() == list(ref), (ops[:idx + 1], sut.peek(), list(ref))
+        if trace:
+            print(f"op: {'Push' if op else 'Pop'}")
         if op:
             push = [counter]
             sut.push(push)
@@ -160,6 +209,9 @@ def test_one(ops, trace=False):
             assert ret == list(ref), ops[:idx + 1]
             ref.popleft()
         assert sut.peek() == list(ref), (ops[:idx + 1], sut.peek(), list(ref))
+
+    if trace:
+        print(f"num products {sut.product_count}")
 
 
 def _enumerate_sawtooth_cases(max_pushes):
