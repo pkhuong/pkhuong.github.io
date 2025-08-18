@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Monoid-augmented FIFOs, deamortised"
-date: 2025-08-14 17:05:24 -0400
+date: 2025-08-14 17:05:25 -0400
 published: true
 comments: true
 draft: true
@@ -21,29 +21,29 @@ This simple increment/decrement algorithm works because the underlying algebraic
 (addition is associative, and we have inverses).
 However, that's often too strong of an assumption: a lot of times, we want windowed aggregates over operators that are associative but lack inverses.
 
-For example, a service could surface its tail latencies by reporting the two longest ([top-K](https://en.wikipedia.org/wiki/Selection_algorithm#Sublinear_data_structures) with \\(k=2\\)) request durations over a sliding 1-second time window (and no preset bound on the number of requests per 1-second window).
+For a toy example, a service could summarise its tail latencies by tracking the two longest ([top-K](https://en.wikipedia.org/wiki/Selection_algorithm#Sublinear_data_structures) with \\(k=2\\)) request durations over a sliding 1-second time window (and no preset bound on the number of requests per 1-second window).
 Let's say there was no request in the past second, so the window is initially empty, and requests start trickling in:
 
-1. an initial 2 ms request gives us a worst-case latency of 2 ms
-2. a second 1 ms request gives us top-2 latencies of `{1 ms, 2 ms}`
-3. another 100 ms request (with `[2 ms, 1 ms, 100 ms]` in the 1-second window) gives a top-2 of `{2 ms, 100 ms}`
-4. eventually, the 2 ms request ages out of the 1-second window, so we're left with `[1 ms, 100 ms]` in the window, and a top-2 of `{1 ms, 100 ms}`.
+1. An initial 2 ms request gives us a worst-case latency of 2 ms
+2. A second 1 ms request gives us top-2 latencies of `{1 ms, 2 ms}`
+3. Another 100 ms request (with `[2 ms, 1 ms, 100 ms]` in the 1-second window) gives a top-2 of `{2 ms, 100 ms}`
+4. Eventually, the 2 ms request ages out of the 1-second window, so we're left with `[1 ms, 100 ms]` in the window, and a top-2 of `{1 ms, 100 ms}`.
 
-Other common instances of aggregates over inverse-less associative operators are min/max[^min-queue], sample variance[^Pebay], [heavy hitters](https://en.wikipedia.org/wiki/Misra%E2%80%93Gries_heavy_hitters_algorithm), [K-min values cardinality estimators](https://dl.acm.org/doi/10.1145/1247480.1247504), and miscellaneous [statistical sketches](https://cacm.acm.org/practice/data-sketching/).
+Common instances of aggregates over inverse-less associative operators include min/max[^min-queue], sample variance[^Pebay], [heavy hitters](https://en.wikipedia.org/wiki/Misra%E2%80%93Gries_heavy_hitters_algorithm), [K-min values cardinality estimators](https://dl.acm.org/doi/10.1145/1247480.1247504), and miscellaneous [statistical sketches](https://cacm.acm.org/practice/data-sketching/).
 In all these cases, we want to work with [monoids](https://mathworld.wolfram.com/Monoid.html).[^semigroup]
 
-[^min-queue]: For min/max-augmented queues, [Shachaf linked to](https://gts.y.la/@shachaf/statuses/01K2NBCESQ77VG6CCPARSTV7BA) this [other amortised data structure](https://cp-algorithms.com/data_structures/stack_queue_modification.html#queue-modification-method-1) where we sparsify the queue to hold only values that would be the minimum (resp. maximum) value in the queue if they were at the head. Equivalently, each value in the queue is less than (resp. greater than) everything *later* in the queue. That's not a property we can enforce by filtering insertions; we must instead drop a variable-length suffix of the monotonic queue before appending to it. A lot of queue representations let us do that with a binary search and a constant-time truncation, so it's reasonable as a deamortised implementation. However, the trick doesn't generalise well, and already when tracking extrema (i.e., min *and* max, which would require one min-queue and another distinct max-queue), the constant factors might be better with a single instance of the deamortised data structure described here.
+[^min-queue]: For min/max-augmented queues, [Shachaf links to](https://gts.y.la/@shachaf/statuses/01K2NBCESQ77VG6CCPARSTV7BA) this [other amortised data structure](https://cp-algorithms.com/data_structures/stack_queue_modification.html#queue-modification-method-1) that sparsifies the queue to hold only values that would be the minimum (resp. maximum) value in the queue if they were at the head. Equivalently, each value in the queue is less than (resp. greater than) everything *later* in the queue. That's not a property we can enforce by filtering insertions; we must instead drop a variable-length suffix of the monotonic queue before appending to it. A lot of queue representations let us do that with a (rotated) binary search and a constant-time truncation, so it's reasonable as a deamortised implementation. However, the trick doesn't generalise well, and already when tracking extrema (i.e., min *and* max, which would require one min-queue and another distinct max-queue), the constant factors might be better with a single instance of the deamortised data structure described here.
 
-[^Pebay]: Aggregation operators are often commutative (e.g., all the examples I used, including [one-pass moments](https://www.osti.gov/servlets/purl/1028931)), but the queue structure apparently makes it hard to exploit commutativity.
+[^Pebay]: Aggregation operators are often commutative (e.g., all the examples I used, including [one-pass moments](https://www.osti.gov/servlets/purl/1028931)), but FIFO queues apparently makes it hard to exploit commutativity.
 
 [^semigroup]: Assuming only associativity yields a semigroup, but we can trivially upgrade a semigroup to a monoid with a sentinel identity value (e.g., `Option<T>` instead of `T`).
 
 As the number of values in the window grows, maintaining such aggregates becomes far from trivial;
 adding values is easy, the challenge is handling deletions efficiently.
-This post [reexplains one way](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf) to augment an arbitrary FIFO queue
+This post [explains one way](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf) to augment an arbitrary FIFO queue
 such that we can add (push on the FIFO) and remove (pop from the FIFO) values
 while maintaining a monoid-structured aggregate (e.g., top-2 request latencies) over the FIFO's contents *on-the-fly*,
-with constant bookkeeping overhead and constant number of binary aggregate operator calls for each push or pop, even in the worst case.
+with constant bookkeeping overhead and a constant number of binary aggregate operator calls for each push, pop, or query for the aggregate value, even in the worst case.
 
 Purely functional clupeids
 --------------------------
@@ -51,7 +51,7 @@ Purely functional clupeids
 There's a cute and simple construction in the purely functional data structure folklore for a FIFO queue augmented with a monoid.
 The construction builds on two observations:
 
-1. It's trivial to augment a *stack* with a monoid such that we can always get the product of all the values in the stack: multiply the previous product with the new value when pushing, keep a pointer to the previous stack; pop simply dereferences that pointer.
+1. It's trivial to augment a *stack* with a monoid such that we can always get the product of all the values in the stack: multiply the previous product by the new value when pushing, keep a pointer to the previous stack; pop simply dereferences that pointer.
 2. We can construct an amortised queue from two stacks, an ingestion stack and an excretion stack: popping from stack A and pushing onto stack B ends up reversing the contents of A on top of B.
 
 Unfortunately, we hit a wall when we try to deamortise the dual-stack trick:
@@ -60,18 +60,21 @@ Trying to answer that question with augmented stacks leads to a clearly wasteful
 
 [^okasaki]: One could also solve a harder problem and augment a [purely functional deque](https://www.cs.cmu.edu/~rwh/students/okasaki.pdf), and deamortise *that*. I expect less than amazing constant factors out of that approach.
 
-Earlier this week, [Shachaf](https://gts.y.la/@shachaf/statuses/01K287S10263ASXE5H97DZ2T8N) linked to an [IBM research report, "Constant-Time Sliding Window Aggregation,"](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf) that describes DABA (De-Amortized Banker's Aggregator),
+Last week on the fediverse, [Shachaf](https://gts.y.la/@shachaf/statuses/01K287S10263ASXE5H97DZ2T8N) linked to an [IBM research report, "Constant-Time Sliding Window Aggregation](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf)," that describes DABA (De-Amortized Banker's Aggregator),
 a simple deamortised algorithm for monoid-augmented FIFOs.
 The key insight: despite[^pearls] its cleverness, the dual-stack construction is an intellectual dead end.
 Unfortunately, I found the paper a bit confusing (I just learned about this [follow-up, which might be clearer](https://arxiv.org/abs/2009.13768)).
 I hope the alternative presentation in this post is helpful,
 especially in combination with [the matching Python code](/images/2025-08-14-monoid-augmented-fifos/monoid-fifo.py).
 
-At the very least, the presentation in this post lead to stronger worst-case bounds than [DABA](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf) or [its 2020 follow-up](https://arxiv.org/abs/2009.13768):
-at most two monoid multiplications per query, two per push, and one per pop (compared to one per query, three per push, two per pop).
-In fact, we'll see at least one realistic case where we can achieve the same average complexity as fully amortised solutions, two products per insert (and three per query).
+[^pearls]: Your surprise may vary. I find "magic tricks" like this one and others that the Oxford branch of functional programming seems to be fond of are maybe useful to convince one's self of an algorithm's correctness, but not so much when it comes to communicating the sort of deep understanding that leads to discovering new ones (and there are [folks who recognise the issue and want to fix it](https://kolektiva.social/@beka_valentine/114691133676966456)).
 
-[^pearls]: Your surprise may vary. I find that "magic trick" like this one and others that the Oxford branch of functional programming seems to be fond of is maybe useful to convince one's self of an algorithm's correctness, but not so much when it comes to communicating the sort of insight that leads to discovering new ones (and there are [folks who recognise the issue and want to fix it](https://kolektiva.social/@beka_valentine/114691133676966456)).
+At the very least, the presentation in this post lead to a streamlined version of DABA with worst-case bounds that are never worse than [the original](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf#page=9) or [its 2020 follow-up](https://arxiv.org/pdf/2009.13768v1#page=15):
+at most two monoid multiplications per query, two per push, and one per pop (compared to one per query, three per push and two per pop for DABA).
+In fact, we'll see at least one realistic case where we can achieve the same average complexity as fully amortised solutions, two multiplications per push (at the cost of up to two multiplications per query, instead of one for dual stacks);
+this is again never worse than [DABA](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf#page=10)'s average of two multiplications per push and one per pop (and still one per query).[^diff]
+
+[^diff]: The reason behind this improvement is a minor difference in scheduling. In this post, query may perform two multiplications instead of one like DABA, because DABA eagerly computes the same product behind the extra multiplication in our `query` (`peek`). That's not a big change to the invariants, but computing the extra product on demand is never worse, at least in terms of complexity, than doing the same ahead of time: if we always query the total product after each pop, we just moved the same work to different subroutines, but laziness pays off where there are multiple pops per query (multiple queries per pop can be handled with a cache).
 
 Rethinking the amortised augmented FIFO
 ---------------------------------------
@@ -81,7 +84,7 @@ In [the DABA paper](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf), we
 2. A batch-constructed excretion list with a precomputed suffix product (in fact, as [the same authors' follow-up](https://arxiv.org/abs/2009.13768) points out, we need *only* that suffix product)
 
 Concretely, all new values enter the ingestion list and update the running product of the ingestion list's contents.
-We pop from a separate excretion list; that list holds the suffix product of the current oldest (next popped) value and all younger values (values that will be popped later) in the excretion list.
+We pop from a separate excretion list; that list holds the suffix product of the current oldest (next to pop) value and all younger values (values that will be popped later) in the excretion list.
 
 This approach is illustrated by the ASCII diagram below.
 The windowed product for `a*b*...*v*w` is the product of the suffix product at the head of the excretion list, `a*b*c*...*g*h`, and the running product of the ingestion list, `i*j*k*...*w`, `(a*b*c*...*g*h)*(i*j*k*...*w)`.
@@ -89,7 +92,7 @@ The windowed product for `a*b*...*v*w` is the product of the suffix product at t
 ```
      .----- excretion -----.      .---- ingestion ----.
     /                       \    /                     \
-   [ a   b    c  ...  g    h ]  [ i j k ...      u v w ]
+   [ a   b    c  ...  g    h ]  [ i j k    ...   u v w ]
    ┌ a   b    c       g    h ┐  running product: i*j*k*...*u*v*w
 p  │ *   *    *       *      │
 r  │ b   c   ...      h      │
@@ -139,7 +142,7 @@ concatenate the two lists, and recompute the suffix product for the resulting ex
 [The 2020 follow-up](https://arxiv.org/abs/2009.13768) notes that we can do that for the old excretion list without even keeping the original values around:
 we only have to multiply the old excretion list's suffix product with the product of all newly appended excretion values.
 
-[^partial]: It's tempting to promote only a prefix of the ingestion list, but that introduces a sort of circularity because we'd have to find the monoidal products of both the upgraded prefix and the remaining suffix in constant time.
+[^partial]: It's tempting to promote only a prefix of the ingestion list, but that introduces a sort of circularity because we'd have to find the monoid products of both the upgraded prefix and the remaining suffix in constant time.
 
 The excretion and ingest(ion) lists
 
@@ -217,7 +220,7 @@ Eventually, the write cursor gets to the first value in the staging list, and th
 ```
 
 At that point, all values at or to the right of the write cursor (i.e., all staging values) hold an updated suffix product with respect to the new excretion list.
-Values in the old excretion list, on the other hand, have a suffix product that considers only the old excretion list.
+Each value in the old excretion list, on the other hand, has a suffix product that considers only the old excretion list.
 Fortunately, that's easy to fix in constant time: multiply the old suffix product with the staging product, the product of all values in the staging list.
 
 ```
@@ -233,7 +236,7 @@ Fortunately, that's easy to fix in constant time: multiply the old suffix produc
 ```
 
 Now that the write cursor is in the old excretion list, values at or to the right of the write cursor have a suffix product that's correct for the new excretion list (including the old excretion list if applicable),
-while other values (to the left of the write cursor) have a suffix product that considers only the old excretion list (and must thus be adjusted to acount for the staging product).
+while other values (to the left of the write cursor) have a suffix product that considers only the old excretion list (and must thus be adjusted to account for the staging product).
 Importantly, we can compute the suffix product with respect to the *new* excretion list at any index with at most one monoid multiplication (e.g., `b!f = (b*c)*(d!f)`).
 
 ```
@@ -267,7 +270,7 @@ even (especially) while we're updating the old excretion list.
 That is in turn useful because it means we can update the old excretion list incrementally until the suffix product has been fully recomputed;
 at that point, we're back to a single excretion list and no staging list, and are ready to accept the ingestion list as the new staging list.
 
-The only question left for deamortisation is scheduling: when to perform incremental suffix product updates and when to promote the ingestion list into a new staging list.
+The only question left for deamortisation is scheduling: when to incrementally update the suffix product and when to promote the ingestion list into a new staging list.
 
 Scheduling for constant work
 ----------------------------
@@ -307,13 +310,13 @@ advance the write cursor by \\( \left\lceil \frac{\\# \texttt{staging}}{ \\# \te
 
 Let's see what happens when we bound that fraction to at most 1.
 
-The goal is clearly to minimise the size of the staging list in order to ensure \\( \\# \texttt{staging} \leq \\# \texttt{old_excretion}. \\)
-We should thus promote the whole ingestion list to staging as soon as the suffix product is fully computed
+The goal is clearly to minimise the size of the staging list so as to ensure \\( \\# \texttt{staging} \leq \\# \texttt{old_excretion}. \\)
+We will thus promote the whole ingestion list to staging as soon as the suffix product is fully computed
 (once the write cursor is at or left of the oldest value in the excretion list).
 
 We want to keep the staging-to-old-excretion (ingestion to excretion) ratio to at most 1:1,
 so we must advance the suffix sum by at least one value whenever we push a new value to the ingestion list.
-This guarantees that, by the time the suffix sum is fully recomputed, the ingestion list is never bigger than the new excretion list.
+This guarantees that, by the time the suffix sum is fully recomputed, the ingestion list is never longer than the new excretion list.
 
 Starting from this initial state (with total product `a!c * staging_product * ingestion_product`, i.e., `a!c * d!f * g!k`)
 
@@ -382,52 +385,51 @@ It's now time to promote the ingestion list to staging, and the cycle continues 
 /                        \ /              \  /             \
 [  b   c     d     e    f   g    h    k   ]  [             ]
 [ b!f c!f   d!f   e*f   f   g    h    k   ] staging product:   g!k
-                                      ⇧     ingestion product: 1
+                                     ⇧     ingestion product: 1
                                  write cursor
 ```
 
 Lazier incremental maintenance
 ------------------------------
 
-Each push and pop advances the write cursor in order to satisfy different constraints:
+Each push and pop advances the write cursor once, in order to satisfy different constraints:
 pushes advance the write cursor in order to ensure \\( \\# \texttt{ingestion} \leq \\# \texttt{excretion}, \\)
 while pops do it to satisfy \\( \\# \texttt{staging} \leq \\# \texttt{old_excretion}.\\)
-They both advance the same write cursor,
-and the constraints won't always be tight (and not necessarily at the same time),
-so there's no need to *always* advance the write cursor after every push or pop,
-nor to promote the ingestion list to staging as soon as the write cursor has reached the beginning of the excretion list.
+They all advance the same write cursor and the constraints won't always be tight,
+so it's not necessary to *always* advance the write cursor after every push or pop.
 
 Depending on the actual aggregation, it might not be beneficial to introduce branches around the suffix product update...
 but it's nice to see how low we can go,
 especially for a common situation like a steady state where pushes and pops are roughly matched.
 
 First, it's clear that we don't have to promote the ingestion list to staging list as soon as the suffix product is fully recomputed:
-we can wait until the ingestion list is as long as the excretion list (or until the excretion list is as short as the ingestion list).
+we can wait until the ingestion list is as long as the excretion list (or the excretion list as short as the ingestion list).
 
 Second, we only have to advance the suffix product (the write cursor) when either:
 
 1. Pushing a new value grew the ingestion list longer than the updated suffix product (write cursor to the ingestion list)
-2. Popping a value out shrunk the remaining size in the old excretion list shorter than  the amount of work left in the staging list (the write cursor to the old excretion list)
+2. Popping a value out shrunk the remaining buffer in the old excretion list to less than  the amount of work left in the staging list (the write cursor to the old excretion list)
 
-These conditions are a bit fiddly, but there's (tested) [code in the Python `maintain` method](/images/2025-08-14-monoid-augmented-fifos/monoid-fifo.py).
+These conditions are a bit fiddly,
+and the fact that each operation can only grow the ingestion list by exactly one value *or* shrink the excretion list by one is load-bearing,
+but there's (tested) [code in the Python `maintain` method](/images/2025-08-14-monoid-augmented-fifos/monoid-fifo.py).
 
 A simpler options (for symmetry), might be to always attempt to advance the write cursor after a pop, but only as needed after a push.
 When pushes and pops are paired (i.e., the FIFO is at steady state),
 this slightly less lazy approach already achieves an average of 2 monoid operations per push (one for the running product after the push, and another to incrementally advance the suffix product after the pop).
 
 We can think of the queue as consisting of three sections, the old excretion list, the staging list, and the ingestion list,
-where the staging list always makes up half the queue, while the old excretion list and the ingestion list (after a pop/push pair) *add up* to the other half.
+where the staging list always makes up half the queue, while the old excretion list and the ingestion list (after a push/pop pair) *add up* to the other half.
 When the ingestion list is empty, the queue is split equally between the old excretion list and the staging list.
 
-* The first pop shrinks the old excretion list to *exactly* the amount of work left in the staging list (the suffix product starts with one correct value),
-so no maintenance yet.
-* The next push doesn't perform any maintenance (the suffix product has one correct value).
-* Popping again shrinks the old excretion list to one less than the amount of work in the staging list, so performs one round of maintenance.
-* Pushing again doesn't perform any maintenance (the suffix product now has two correct values).
-* etc, until the old excretion list is empty, and we promote the ingestion list to staging.
+* The first push doesn't perform any maintenance (the suffix product has one correct value)
+* The first pop shrinks the excretion list (matching the ingestion list's growth), and unconditionally advances the write cursor
+* The next push still doesn't perform any maintenance (two values in the ingestion list, two in the updated suffix product)
+
+etc, until the old excretion list is empty, and we promote the ingestion list to staging.
 
 For this important use case, a queue at steady state with (roughly) matched pushes and pops, we find the same amortised complexity as the amortised two-stack dead end.
-A fresh point of view and tight invariants yielded a data structure with constant worst-case complexity *and* amortised complexity that sometimes matches a natively amortised solution!
+A fresh point of view and tight invariants lead to a data structure with reasonable constant worst-case complexity *and* amortised complexity that sometimes matches a natively amortised solution!
 
 Sample code
 -----------
@@ -532,7 +534,7 @@ Finally, we confirm that we're making enough progress on the incremental suffix 
 ```
 
 We `push` by appending to the underlying windowed store,
-updating our state to take the new value into acount,
+updating our state to take the new value into account,
 and calling the `maintain` method to incrementally recompute the excretion list's suffix product.
 
 ```
@@ -575,8 +577,8 @@ advancing our `pop_idx`, and calling the `maintain` method.
 
 Now the `maintain` method itself, where all the complexity is hidden:
 
-1. advances the suffix product (with one call to the `combiner`) if `write_cursor > pop_idx`
-2. promotes the ingestion list to staging list when the suffix product is fully computed (`write_cursor <= pop_idx`)
+1. Advances the suffix product (with one call to the `combiner`) if `write_cursor > pop_idx`
+2. Promotes the ingestion list to staging list when the suffix product is fully computed (`write_cursor <= pop_idx`)
 
 Each `push` or `pop` call makes exactly one call to the `maintain` method,
 and the `maintain` method itself makes at most one call to the monoid operator (`combiner`), in `advance`.

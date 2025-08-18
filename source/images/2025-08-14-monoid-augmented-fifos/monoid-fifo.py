@@ -1,6 +1,6 @@
 from functools import reduce
 
-LAZY = True
+LAZY = False
 
 class MonoidFifo:
     def __init__(self, combiner, identity, trace=False, lazy=LAZY):
