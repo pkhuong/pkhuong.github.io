@@ -127,10 +127,10 @@ we can increment an accumulator by each value as it’s pushed onto the FIFO,
 and decrement the accumulator by the exiting value (increment by the value’s additive inverse) when it’s popped off the FIFO.</p>
 
 <p>This simple increment/decrement algorithm works because the underlying algebraic structure is a <a href="https://mathworld.wolfram.com/Group.html">group</a>
-(addition is associative, and we have inverses).
-However, that’s often too strong of an assumption: a lot of times, we want windowed aggregates over operators that are associative but lack inverses.</p>
+(addition is associative, and we have additive inverses).
+However, that’s can be too strong of an assumption: a lot of times, we want windowed aggregates over operators that are associative but lack inverses.</p>
 
-<p>For a toy example, a service could summarise its tail latencies by tracking the two longest (<a href="https://en.wikipedia.org/wiki/Selection_algorithm#Sublinear_data_structures">top-K</a> with \(k=2\)) request durations over a sliding 1-second time window (and no preset bound on the number of requests per 1-second window).
+<p>For a toy example, a service could summarise its tail latencies by tracking the two longest (<a href="https://en.wikipedia.org/wiki/Selection_algorithm#Sublinear_data_structures">top-K</a> with \(k=2\)) request durations over a sliding 1-second time window.
 Let’s say there was no request in the past second, so the window is initially empty, and requests start trickling in:</p>
 
 <ol>
@@ -148,11 +148,11 @@ adding values is easy, the challenge is handling deletions efficiently.
 This post <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf">explains one way</a> to augment an arbitrary FIFO queue
 such that we can add (push on the FIFO) and remove (pop from the FIFO) values
 while maintaining a monoid-structured aggregate (e.g., top-2 request latencies) over the FIFO’s contents <em>on-the-fly</em>,
-with constant bookkeeping overhead and a constant number of binary aggregate operator calls for each push, pop, or query for the aggregate value, even in the worst case.</p>
+with constant bookkeeping overhead and a constant number of calls to the binary aggregate operator for each push, pop, or query for the aggregate value, even in the worst case.</p>
 
 <h2 id="purely-functional-clupeids">Purely functional clupeids</h2>
 
-<p>There’s a cute and simple construction in the purely functional data structure folklore for a FIFO queue augmented with a monoid.
+<p>There’s a cute construction in the purely functional data structure folklore for a FIFO queue augmented with a monoid.
 The construction builds on two observations:</p>
 
 <ol>
@@ -161,19 +161,20 @@ The construction builds on two observations:</p>
 </ol>
 
 <p>Unfortunately, we hit a wall when we try to deamortise the dual-stack trick:
-it’s clear that we want to add some sort of work area while keeping the number of stacks bounded, but what should we do when the work area has been fully reversed before the earlier excretion stack is empty?
+it’s clear that we want to add some sort of work area while keeping the number of stacks bounded, but what should we do when the work area has been fully reversed before the old excretion stack is empty?
 Trying to answer that question with augmented stacks leads to a clearly wasteful mess of copies, redundant push/pop, and generally distasteful bookkeeping overhead.<sup id="fnref:okasaki" role="doc-noteref"><a href="#fn:okasaki" class="footnote" rel="footnote">4</a></sup></p>
 
 <p>Last week on the fediverse, <a href="https://gts.y.la/@shachaf/statuses/01K287S10263ASXE5H97DZ2T8N">Shachaf</a> linked to an <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf">IBM research report, “Constant-Time Sliding Window Aggregation</a>,” that describes DABA (De-Amortized Banker’s Aggregator),
 a simple deamortised algorithm for monoid-augmented FIFOs.
-The key insight: despite<sup id="fnref:pearls" role="doc-noteref"><a href="#fn:pearls" class="footnote" rel="footnote">5</a></sup> its cleverness, the dual-stack construction is an intellectual dead end.
-Unfortunately, I found the paper a bit confusing (I just learned about this <a href="https://arxiv.org/abs/2009.13768">follow-up, which might be clearer</a>).
+The key insight: despite<sup id="fnref:pearls" role="doc-noteref"><a href="#fn:pearls" class="footnote" rel="footnote">5</a></sup> its cleverness, the dual-stack construction is an intellectual dead end.</p>
+
+<p>Unfortunately, I found the paper a bit confusing (I just learned about this <a href="https://arxiv.org/abs/2009.13768">follow-up, which might be clearer</a>).
 I hope the alternative presentation in this post is helpful,
 especially in combination with <a href="/images/2025-08-14-monoid-augmented-fifos/monoid-fifo.py">the matching Python code</a>.</p>
 
 <p>At the very least, the presentation in this post lead to a streamlined version of DABA with worst-case bounds that are never worse than <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf#page=9">the original</a> or <a href="https://arxiv.org/pdf/2009.13768v1#page=15">its 2020 follow-up</a>:
 at most two monoid multiplications per query, two per push, and one per pop (compared to one per query, three per push and two per pop for DABA).
-In fact, we’ll see at least one realistic case where we can achieve the same average complexity as fully amortised solutions, two multiplications per push (at the cost of up to two multiplications per query, instead of one for dual stacks);
+In fact, we’ll see at least one realistic case where we can achieve the same average complexity as fully amortised solutions, one multiplication per push and one per pop (at the cost of up to two multiplications per query, instead of one for dual stacks);
 this is again never worse than <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf#page=10">DABA</a>’s average of two multiplications per push and one per pop (and still one per query).<sup id="fnref:diff" role="doc-noteref"><a href="#fn:diff" class="footnote" rel="footnote">6</a></sup></p>
 
 <h2 id="rethinking-the-amortised-augmented-fifo">Rethinking the amortised augmented FIFO</h2>
@@ -231,7 +232,7 @@ I’ll abbreviate them with <code>!</code>, e.g., <code>a!h</code> instead of <c
 
 <h2 id="toward-deamortisation">Toward deamortisation</h2>
 
-<p>Thinking in terms of ingestion/excretion lists is helpful because
+<p>Thinking in terms of ingestion and excretion lists is helpful because
 it’s now trivial to append the whole<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">7</a></sup> ingestion list to the excretion list at any time,
 without emptying the latter:
 concatenate the two lists, and recompute the suffix product for the resulting excretion list.
@@ -360,10 +361,10 @@ at that point, we’re back to a single excretion list and no staging list, and 
 
 <h2 id="scheduling-for-constant-work">Scheduling for constant work</h2>
 
-<p>We’re looking for constant work (constant suffix product updates) per operation (<code>push</code> and <code>pop</code>)
+<p>We’re looking for constant work (constant number of suffix product updates) per operation (<code>push</code> and <code>pop</code>)
 without ever getting in a situation where we’d like to pop a value from the staging list, but the suffix product’s write cursor is still in the middle of the staging list (i.e., we still have garbage suffix products).</p>
 
-<p>For example, we don’t want to get in a situation like trying to pop <code>c</code> from the following state</p>
+<p>For example, we wish to avoid popping <code>c</code> from the following state</p>
 
 <pre><code> .-------- new excretion -------.
 /      old                       \
@@ -376,7 +377,7 @@ without ever getting in a situation where we’d like to pop a value from the st
                       (moves left)
 </code></pre>
 
-<p>which would leave us with a garbage suffix product as the next value to pop off the new excretion list.</p>
+<p>which would leave us with a garbage suffix product as the next value to pop off the excretion list.</p>
 
 <pre><code> .-new excretion-.
 / .-- staging --. \
@@ -389,7 +390,7 @@ without ever getting in a situation where we’d like to pop a value from the st
 </code></pre>
 
 <p>It’s easy to guarantee we’ll never pop a value and find the write cursor is still in the staging list:
-advance the write cursor by \( \left\lceil \frac{\# \texttt{staging}}{ \# \texttt{old_excretion}} \right\rceil \) values for each <code>pop</code>.</p>
+advance the write cursor by at least \( \left\lceil \frac{\# \texttt{staging} - \# \texttt{updated_suffix_product}}{ \# \texttt{old_excretion}} \right\rceil \) values for each <code>pop</code>.</p>
 
 <p>Let’s see what happens when we bound that fraction to at most 1.</p>
 
@@ -472,14 +473,14 @@ It’s now time to promote the ingestion list to staging, and the cycle continue
 <p>Each push and pop advances the write cursor once, in order to satisfy different constraints:
 pushes advance the write cursor in order to ensure \( \# \texttt{ingestion} \leq \# \texttt{excretion}, \)
 while pops do it to satisfy \( \# \texttt{staging} \leq \# \texttt{old_excretion}.\)
-They all advance the same write cursor and the constraints won’t always be tight,
+They both advance the same write cursor and the constraints won’t always be tight,
 so it’s not necessary to <em>always</em> advance the write cursor after every push or pop.</p>
 
 <p>Depending on the actual aggregation, it might not be beneficial to introduce branches around the suffix product update…
 but it’s nice to see how low we can go,
 especially for a common situation like a steady state where pushes and pops are roughly matched.</p>
 
-<p>First, it’s clear that we don’t have to promote the ingestion list to staging list as soon as the suffix product is fully recomputed:
+<p>First, it’s clear that we don’t <em>have to</em> promote the ingestion list to staging list as soon as the suffix product is fully recomputed:
 we can wait until the ingestion list is as long as the excretion list (or the excretion list as short as the ingestion list).</p>
 
 <p>Second, we only have to advance the suffix product (the write cursor) when either:</p>
@@ -495,11 +496,12 @@ but there’s (tested) <a href="/images/2025-08-14-monoid-augmented-fifos/monoid
 
 <p>A simpler options (for symmetry), might be to always attempt to advance the write cursor after a pop, but only as needed after a push.
 When pushes and pops are paired (i.e., the FIFO is at steady state),
-this slightly less lazy approach already achieves an average of 2 monoid operations per push (one for the running product after the push, and another to incrementally advance the suffix product after the pop).</p>
+this slightly less lazy approach already achieves an average of 2 monoid multiplications per push (one for the running product after the push, and another to incrementally advance the suffix product after the pop).
+The amortised complexity is also the same (2 monoid multiplications/push) for long runs of push without pop.</p>
 
-<p>We can think of the queue as consisting of three sections, the old excretion list, the staging list, and the ingestion list,
-where the staging list always makes up half the queue, while the old excretion list and the ingestion list (after a push/pop pair) <em>add up</em> to the other half.
-When the ingestion list is empty, the queue is split equally between the old excretion list and the staging list.</p>
+<p>We can think of the queue as consisting of three sections—the old excretion list, the staging list, and the ingestion list—where the staging list always makes up half the queue, while the old excretion list and the ingestion list (after a push/pop pair) <em>add up</em> to the other half.
+When the ingestion list is empty, the queue is split equally between the old excretion list and the staging list.
+Starting from that state,</p>
 
 <ul>
   <li>The first push doesn’t perform any maintenance (the suffix product has one correct value)</li>
@@ -622,10 +624,10 @@ and calling the <code>maintain</code> method to incrementally recompute the excr
         self.maintain()
 </code></pre>
 
-<p>The <code>peek</code> method shows how we reassemble up to 3 partial products,
+<p>The <code>query</code> method shows how we reassemble up to 3 partial products,
 depending on where the pop index lives (before or after the write cursor).</p>
 
-<pre><code>    def peek(self):
+<pre><code>    def query(self):
         self.check_rep()
         if self.pop_idx == self.push_idx:
             return self.identity
@@ -633,6 +635,7 @@ depending on where the pop index lives (before or after the write cursor).</p>
         if self.pop_idx &lt; self.write_cursor:
             ret = self.combiner(ret, self.staging_product)
         ret = self.combiner(ret, self.ingestion_product)
+        # no mutation, no need to check_rep again
         return ret
 </code></pre>
 
@@ -640,11 +643,10 @@ depending on where the pop index lives (before or after the write cursor).</p>
 advancing our <code>pop_idx</code>, and calling the <code>maintain</code> method.</p>
 
 <pre><code>    def pop(self):
-        ret = self.peek()
+        self.check_rep()
         del self.store[self.pop_idx]
         self.pop_idx += 1
         self.maintain()
-        return ret
 </code></pre>
 
 <p>Now the <code>maintain</code> method itself, where all the complexity is hidden:</p>
@@ -698,7 +700,7 @@ In many cases, it’s possible to preserve these worst-case bounds and average o
         if self.pop_idx == self.push_idx: # empty FIFO -&gt; empty excretion list
             # If it weren't for `check_rep`, we could execute the `else`
             # block unconditionally: the only thing we can do with an empty
-            # FIFO is `peek` (which already guards for empty FIFO), or
+            # FIFO is `query` (which already guards for empty FIFO), or
             # `push` (will will immediate promote and overwrite
             # `write_cursor`/`ingestion_product`).
             self.write_cursor = self.push_idx
@@ -712,10 +714,10 @@ In many cases, it’s possible to preserve these worst-case bounds and average o
 all short push/pop sequences for the free (list append) monoid; see
 <a href="/images/2025-08-14-monoid-augmented-fifos/monoid-fifo.py">the bottom of the implementation file</a>.
 It seems to work (manually mutating the implementation did flag all the changes I tried),
-and I’m confident it’s possible to implement this algorithm so every operation take constant time with respect to the input values!</p>
+and I’m confident it’s possible to implement this algorithm (for suitable monoids) so every operation take constant time with respect to the input values!</p>
 
 <p>If you’re already thinking about how you’d implement something like this in branch-free amd64 or RV64, or even in gateware (I know I am!),
-$DAYJOB might be a good fit. Send me an email if that sounds interesting!</p>
+$DAYJOB might be a good fit. Send me an email if that sounds interesting.</p>
 
 <p><small>Thank you
 Jacob,
@@ -731,7 +733,9 @@ for improving an early draft.</small></p>
 <ul>
   <li><a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf">Constant-Time Sliding Window Aggregation (Tangwongsan, Hirzel, and Schneider, 2015)</a></li>
   <li><a href="https://arxiv.org/abs/2009.13768">In-Order Sliding-Window Aggregation in Worst-Case Constant Time (idem, 2020)</a></li>
+  <li><a href="https://www.cambridge.org/core/journals/journal-of-functional-programming/article/simple-and-efficient-purely-functional-queues-and-deques/7B3036772616B39E87BF7FBD119015AB">Simple and efficient purely functional queues and deques (Okasaki, 2008)</a></li>
   <li>Chris Okasaki’s Purely functional data structures, either <a href="https://www.cs.cmu.edu/~rwh/students/okasaki.pdf">his 1996 dissertation</a> or his <a href="https://www.amazon.com/Purely-Functional-Data-Structures-Okasaki/dp/0521663504">1999 monograph</a></li>
+  <li>The “Augmenting Data Structures” chapter of <a href="https://www.amazon.com/Introduction-Algorithms-fourth-Thomas-Cormen/dp/026204630X">CLRS</a></li>
   <li><a href="https://scholar.google.com/citations?user=gpLVKmEAAAAJ&amp;hl=en">Most of Graham Cormode’s oeuvre</a></li>
   <li>… including <a href="https://www.nowpublishers.com/article/Details/DBS-004">Synopses for Massive Data: Samples, Histograms, Wavelets, Sketches (Cormode, Garofalakis, Haas, and Jermaine, 2011)</a>. <span style="font-variant: small-caps;">now</span> is expensive but often worth it. You can sometimes finds individual chapters on the author’s webpage; the <a href="https://www.nowpublishers.com/article/DownloadSummary/DBS-004">bibliography at the end of the preview</a> is also useful.</li>
 </ul>
@@ -740,22 +744,22 @@ for improving an early draft.</small></p>
 <div class="footnotes" role="doc-endnotes">
   <ol>
     <li id="fn:min-queue" role="doc-endnote">
-      <p>For min/max-augmented queues, <a href="https://gts.y.la/@shachaf/statuses/01K2NBCESQ77VG6CCPARSTV7BA">Shachaf links to</a> this <a href="https://cp-algorithms.com/data_structures/stack_queue_modification.html#queue-modification-method-1">other amortised data structure</a> that sparsifies the queue to hold only values that would be the minimum (resp. maximum) value in the queue if they were at the head. Equivalently, each value in the queue is less than (resp. greater than) everything <em>later</em> in the queue. That’s not a property we can enforce by filtering insertions; we must instead drop a variable-length suffix of the monotonic queue before appending to it. A lot of queue representations let us do that with a (rotated) binary search and a constant-time truncation, so it’s reasonable as a deamortised implementation. However, the trick doesn’t generalise well, and already when tracking extrema (i.e., min <em>and</em> max, which would require one min-queue and another distinct max-queue), the constant factors might be better with a single instance of the deamortised data structure described here. <a href="#fnref:min-queue" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>For min/max-augmented queues, <a href="https://gts.y.la/@shachaf/statuses/01K2NBCESQ77VG6CCPARSTV7BA">Shachaf links to</a> this <a href="https://cp-algorithms.com/data_structures/stack_queue_modification.html#queue-modification-method-1">other amortised data structure</a> that sparsifies the queue to hold only values that would be the minimum (resp. maximum) value in the queue if they were at the head. Equivalently, each value in the queue is less than (resp. greater than) everything <em>later</em> in the queue. That’s not a property we can enforce by filtering insertions; we must instead drop a variable-length suffix of the monotonic queue before appending to it. A lot of queue representations let us do that with a (rotated) binary search and a constant-time truncation, so it’s reasonable as a deamortised implementation. However, the trick doesn’t generalise well, and already when tracking extrema (i.e., min <em>and</em> max, which would require one min-queue and another distinct max-queue), the constant factors might be better for a single instance of the data structure described here. <a href="#fnref:min-queue" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:Pebay" role="doc-endnote">
-      <p>Aggregation operators are often commutative (e.g., all the examples I used, including <a href="https://www.osti.gov/servlets/purl/1028931">one-pass moments</a>), but FIFO queues apparently makes it hard to exploit commutativity. <a href="#fnref:Pebay" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>Aggregation operators are often commutative (all the examples I listed commute, including <a href="https://www.osti.gov/servlets/purl/1028931">one-pass moments</a>), but FIFO queues apparently get in the way of exploiting commutativity. <a href="#fnref:Pebay" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:semigroup" role="doc-endnote">
       <p>Assuming only associativity yields a semigroup, but we can trivially upgrade a semigroup to a monoid with a sentinel identity value (e.g., <code>Option&lt;T&gt;</code> instead of <code>T</code>). <a href="#fnref:semigroup" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:okasaki" role="doc-endnote">
-      <p>One could also solve a harder problem and augment a <a href="https://www.cs.cmu.edu/~rwh/students/okasaki.pdf">purely functional deque</a>, and deamortise <em>that</em>. I expect less than amazing constant factors out of that approach. <a href="#fnref:okasaki" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>One could also augment a <a href="https://www.cambridge.org/core/journals/journal-of-functional-programming/article/simple-and-efficient-purely-functional-queues-and-deques/7B3036772616B39E87BF7FBD119015AB">purely functional deque</a>. I expect less than amazing constant factors out of that approach (the DABA papers imply as much, when they explain how Okasaki’s constant-time purely functional deque was the inspiration for the data structure). <a href="#fnref:okasaki" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:pearls" role="doc-endnote">
       <p>Your surprise may vary. I find “magic tricks” like this one and others that the Oxford branch of functional programming seems to be fond of are maybe useful to convince one’s self of an algorithm’s correctness, but not so much when it comes to communicating the sort of deep understanding that leads to discovering new ones (and there are <a href="https://kolektiva.social/@beka_valentine/114691133676966456">folks who recognise the issue and want to fix it</a>). <a href="#fnref:pearls" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:diff" role="doc-endnote">
-      <p>The reason behind this improvement is a minor difference in scheduling. In this post, query may perform two multiplications instead of one like DABA, because DABA eagerly computes the same product behind the extra multiplication in our <code>query</code> (<code>peek</code>). That’s not a big change to the invariants, but computing the extra product on demand is never worse, at least in terms of complexity, than doing the same ahead of time: if we always query the total product after each pop, we just moved the same work to different subroutines, but laziness pays off where there are multiple pops per query (multiple queries per pop can be handled with a cache). <a href="#fnref:diff" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>The improvement stems from a minor difference in scheduling. In this post, <code>query</code> may perform one more multiplications than DABA’s (two instead of one), because DABA incrementally computes the additional product ahead of time. That’s not a big change to the invariants, but computing <code>query</code>’s extra product on demand is never worse, at least in terms of complexity, than doing the same ahead of time: if we always query the total product after each pop, we just moved the same work to different subroutines, but laziness pays off where there are multiple pops per query (multiple queries per pop can be handled with a cache). <a href="#fnref:diff" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:partial" role="doc-endnote">
       <p>It’s tempting to promote only a prefix of the ingestion list, but that introduces a sort of circularity because we’d have to find the monoid products of both the upgraded prefix and the remaining suffix in constant time. <a href="#fnref:partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
