@@ -87,7 +87,7 @@ class MonoidFifo:
         self.product_count += 1
         self.maintain()
 
-    def peek(self):
+    def query(self):
         self.check_rep()
         if self.pop_idx == self.push_idx:
             return self.identity
@@ -95,14 +95,14 @@ class MonoidFifo:
         if self.pop_idx < self.write_cursor:
             ret = self.combiner(ret, self.staging_product)
         ret = self.combiner(ret, self.ingestion_product)
+        # no mutation, no need to check_rep again
         return ret
 
     def pop(self):
-        ret = self.peek()
+        self.check_rep()
         del self.store[self.pop_idx]
         self.pop_idx += 1
         self.maintain(True)
-        return ret
 
     def maintain(self, for_pop=False):
         self._check_structure()
@@ -168,7 +168,7 @@ class MonoidFifo:
         if self.pop_idx == self.push_idx: # empty FIFO -> empty excretion list
             # If it weren't for `check_rep`, we could execute the `else`
             # block unconditionally: the only thing we can do with an empty
-            # FIFO is `peek` (which already guards for empty FIFO), or
+            # FIFO is `query` (which already guards for empty FIFO), or
             # `push` (will will immediate promote and overwrite
             # `write_cursor`/`ingestion_product`).
             self.write_cursor = self.push_idx
@@ -191,12 +191,12 @@ def test_one(ops, trace=False):
     TEST_CASE = list(ops)
     ref = deque()
 
-    assert sut.peek() == list(ref)
+    assert sut.query() == list(ref)
 
     counter = 1
     ops = tuple(ops)
     for idx, op in enumerate(ops):
-        assert sut.peek() == list(ref), (ops[:idx + 1], sut.peek(), list(ref))
+        assert sut.query() == list(ref), (ops[:idx + 1], sut.query(), list(ref))
         if trace:
             print(f"op: {'Push' if op else 'Pop'}")
         if op:
@@ -205,10 +205,11 @@ def test_one(ops, trace=False):
             ref.append(counter)
             counter += 1
         else:
-            ret = sut.pop()
+            ret = sut.query()
             assert ret == list(ref), ops[:idx + 1]
+            sut.pop()
             ref.popleft()
-        assert sut.peek() == list(ref), (ops[:idx + 1], sut.peek(), list(ref))
+        assert sut.query() == list(ref), (ops[:idx + 1], sut.query(), list(ref))
 
     if trace:
         print(f"num products {sut.product_count}")
