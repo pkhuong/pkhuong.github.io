@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2025-08-19T23:18:58-04:00</updated>
+  <updated>2025-08-19T23:34:18-04:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -17,7 +17,7 @@
   <entry>
     <title type="html"><![CDATA[Monoid-augmented FIFOs, deamortised]]></title>
     <link href="https://www.pvk.ca/Blog/2025/08/19/monoid-augmented-fifos/"/>
-    <updated>2025-08-19T23:16:03-04:00</updated>
+    <updated>2025-08-19T23:16:05-04:00</updated>
     <id>https://www.pvk.ca/Blog/2025/08/19/monoid-augmented-fifos</id>
     <content type="html"><![CDATA[<p><small>Nothing novel, just a different presentation for a <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf">decade-old data structure</a>. I want to nail the presentation because this data structure is useful in many situations.</small></p>
 
@@ -50,6 +50,8 @@ This post <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf">expl
 such that we can add (push on the FIFO) and remove (pop from the FIFO) values
 while maintaining a monoid-structured aggregate (e.g., top-2 request latencies) over the FIFO’s contents <em>on-the-fly</em>,
 with constant bookkeeping overhead and a constant number of calls to the binary aggregate operator for each push, pop, or query for the aggregate value, even in the worst case.</p>
+
+<p>Also, <a href="/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py">there’s matching Python code</a> for readers who prefer to start there.</p>
 
 <h2 id="purely-functional-clupeids">Purely functional clupeids</h2>
 

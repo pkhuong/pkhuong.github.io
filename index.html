@@ -149,6 +149,8 @@ such that we can add (push on the FIFO) and remove (pop from the FIFO) values
 while maintaining a monoid-structured aggregate (e.g., top-2 request latencies) over the FIFO’s contents <em>on-the-fly</em>,
 with constant bookkeeping overhead and a constant number of calls to the binary aggregate operator for each push, pop, or query for the aggregate value, even in the worst case.</p>
 
+<p>Also, <a href="/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py">there’s matching Python code</a> for readers who prefer to start there.</p>
+
 <h2 id="purely-functional-clupeids">Purely functional clupeids</h2>
 
 <p>There’s a cute construction in the purely functional data structure folklore for a FIFO queue augmented with a monoid.
