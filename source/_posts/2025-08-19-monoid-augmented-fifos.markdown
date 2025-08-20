@@ -1,13 +1,13 @@
 ---
 layout: post
 title: "Monoid-augmented FIFOs, deamortised"
-date: 2025-08-19 23:16:05 -0400
+date: 2025-08-19 23:16:06 -0400
 published: true
 comments: true
 categories:
 ---
 
-<small>Nothing novel, just a different presentation for a [decade-old data structure](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf). I want to nail the presentation because this data structure is useful in many situations.</small>
+<small>Nothing novel, just a different presentation for a [decade-old data structure](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf). I want to nail the presentation because [this data structure](/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py) is useful in many situations.</small>
 
 Augmented FIFOs come up frequently in streaming analytics.
 For example, to compute the sum of the last \\(k\\) values observed in a stream
@@ -17,7 +17,8 @@ and decrement the accumulator by the exiting value (increment by the value's add
 
 This simple increment/decrement algorithm works because the underlying algebraic structure is a [group](https://mathworld.wolfram.com/Group.html)
 (addition is associative, and we have additive inverses).
-However, that can be too strong of an assumption: a lot of times, we want windowed aggregates over operators that are associative but lack inverses.
+However, that can be too strong of an assumption: a lot of times, we want windowed aggregates over operators that are associative but lack inverses
+(or whose [inverses are annoying to compute](/Blog/2019/11/30/a-multiset-of-observations-with-constant-time-sample-mean-and-variance/)).
 
 For a toy example, a service could summarise its tail latencies by tracking the two longest ([top-K](https://en.wikipedia.org/wiki/Selection_algorithm#Sublinear_data_structures) with \\(k=2\\)) request durations over a sliding 1-second time window.
 Let's say there was no request in the past second, so the window is initially empty, and requests start trickling in:
@@ -45,8 +46,8 @@ with constant bookkeeping overhead and a constant number of calls to the binary 
 
 Also, [there's matching Python code](/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py) for readers who prefer to start there.
 
-Purely functional clupeids
---------------------------
+Purely functional [clupeids](https://en.wikipedia.org/wiki/Red_herring)
+-----------------------------------------------------------------------
 
 There's a cute construction in the purely functional data structure folklore for a FIFO queue augmented with a monoid.
 The construction builds on two observations:
@@ -68,7 +69,7 @@ Unfortunately, I found the paper a bit confusing (I just learned about this [fol
 I hope the alternative presentation in this post is helpful,
 especially in combination with [the matching Python code](/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py).
 
-[^pearls]: Your surprise may vary. I find "magic tricks" like this one and others that the Oxford branch of FP seems to be fond of are maybe useful to convince one's self of an algorithm's correctness, but not so much when it comes to communicating the sort of deep understanding that leads to discovering new ones (and there are [folks who recognise the issue and want to fix it](https://kolektiva.social/@beka_valentine/114691133676966456)).
+[^pearls]: Your surprise may vary. I find clever "magic tricks" like this one and others that the Oxford branch of FP seems to be fond of are maybe useful to convince one's self of an algorithm's correctness, but not so much when it comes to fostering the sort of deep understanding that leads to discovering new ones (and there are [folks who recognise the issue and want to fix it](https://kolektiva.social/@beka_valentine/114691133676966456)).
 
 At the very least, this post's presentation leads to a streamlined version of DABA with worst-case bounds that are never worse than [the original](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf#page=9) or [its 2020 follow-up](https://arxiv.org/pdf/2009.13768v1#page=15):
 at most two monoid multiplications per query, two per push, and one per pop (compared to one per query, three per push and two per pop for DABA).
@@ -430,8 +431,9 @@ Starting from that state,
 
 etc., until the old excretion list is empty, and we promote the ingestion list to staging.
 
-For this important use case, a queue at steady state with (roughly) matched pushes and pops, we find the same amortised complexity for push and pop (one more product for `query`) as the amortised two-stack dead end.
-A fresh point of view and tight invariants lead to a data structure with reasonable constant worst-case complexity *and* amortised complexity that sometimes matches a natively amortised solution!
+For this important use case---a queue at steady state with (roughly) matched pushes and pops---we find the same amortised complexity for push and pop (one more product for `query`) as the amortised two-stack dead end.
+A fresh point of view and tight invariants have lead to a data structure with reasonable constant worst-case complexity...
+and amortised complexity that sometimes matches that of a fully amortised solution!
 
 Sample code
 -----------
@@ -665,7 +667,7 @@ Some references and related literature
 * [Simple and efficient purely functional queues and deques (Okasaki, 2008)](https://www.cambridge.org/core/journals/journal-of-functional-programming/article/simple-and-efficient-purely-functional-queues-and-deques/7B3036772616B39E87BF7FBD119015AB)
 * Chris Okasaki's Purely functional data structures, either [his 1996 dissertation](https://www.cs.cmu.edu/~rwh/students/okasaki.pdf) or his [1999 monograph](https://www.amazon.com/Purely-Functional-Data-Structures-Okasaki/dp/0521663504)
 * The "Augmenting Data Structures" chapter of [CLRS](https://www.amazon.com/Introduction-Algorithms-fourth-Thomas-Cormen/dp/026204630X)
-* [Most of Graham Cormode's oeuvre](https://scholar.google.com/citations?user=gpLVKmEAAAAJ&hl=en)
+* [Most of Graham Cormode's œuvre](https://scholar.google.com/citations?user=gpLVKmEAAAAJ&hl=en)
 * ... including [Synopses for Massive Data: Samples, Histograms, Wavelets, Sketches (Cormode, Garofalakis, Haas, and Jermaine, 2011)](https://www.nowpublishers.com/article/Details/DBS-004). <span style="font-variant: small-caps;">now</span> is expensive but often worth it. You can sometimes finds individual chapters on the author's webpage; the [bibliography at the end of the preview](https://www.nowpublishers.com/article/DownloadSummary/DBS-004) is also useful.
 
 <p><hr style="width: 50%"></p>
