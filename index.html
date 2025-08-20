@@ -117,7 +117,7 @@ Aug
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><small>Nothing novel, just a different presentation for a <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf">decade-old data structure</a>. I want to nail the presentation because this data structure is useful in many situations.</small></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><small>Nothing novel, just a different presentation for a <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf">decade-old data structure</a>. I want to nail the presentation because <a href="/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py">this data structure</a> is useful in many situations.</small></p>
 
 <p>Augmented FIFOs come up frequently in streaming analytics.
 For example, to compute the sum of the last \(k\) values observed in a stream
@@ -127,7 +127,8 @@ and decrement the accumulator by the exiting value (increment by the value’s a
 
 <p>This simple increment/decrement algorithm works because the underlying algebraic structure is a <a href="https://mathworld.wolfram.com/Group.html">group</a>
 (addition is associative, and we have additive inverses).
-However, that can be too strong of an assumption: a lot of times, we want windowed aggregates over operators that are associative but lack inverses.</p>
+However, that can be too strong of an assumption: a lot of times, we want windowed aggregates over operators that are associative but lack inverses
+(or whose <a href="/Blog/2019/11/30/a-multiset-of-observations-with-constant-time-sample-mean-and-variance/">inverses are annoying to compute</a>).</p>
 
 <p>For a toy example, a service could summarise its tail latencies by tracking the two longest (<a href="https://en.wikipedia.org/wiki/Selection_algorithm#Sublinear_data_structures">top-K</a> with \(k=2\)) request durations over a sliding 1-second time window.
 Let’s say there was no request in the past second, so the window is initially empty, and requests start trickling in:</p>
@@ -151,7 +152,7 @@ with constant bookkeeping overhead and a constant number of calls to the binary 
 
 <p>Also, <a href="/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py">there’s matching Python code</a> for readers who prefer to start there.</p>
 
-<h2 id="purely-functional-clupeids">Purely functional clupeids</h2>
+<h2 id="purely-functional-clupeids">Purely functional <a href="https://en.wikipedia.org/wiki/Red_herring">clupeids</a></h2>
 
 <p>There’s a cute construction in the purely functional data structure folklore for a FIFO queue augmented with a monoid.
 The construction builds on two observations:</p>
@@ -512,8 +513,9 @@ Starting from that state,</p>
 
 <p>etc., until the old excretion list is empty, and we promote the ingestion list to staging.</p>
 
-<p>For this important use case, a queue at steady state with (roughly) matched pushes and pops, we find the same amortised complexity for push and pop (one more product for <code>query</code>) as the amortised two-stack dead end.
-A fresh point of view and tight invariants lead to a data structure with reasonable constant worst-case complexity <em>and</em> amortised complexity that sometimes matches a natively amortised solution!</p>
+<p>For this important use case—a queue at steady state with (roughly) matched pushes and pops—we find the same amortised complexity for push and pop (one more product for <code>query</code>) as the amortised two-stack dead end.
+A fresh point of view and tight invariants have lead to a data structure with reasonable constant worst-case complexity…
+and amortised complexity that sometimes matches that of a fully amortised solution!</p>
 
 <h2 id="sample-code">Sample code</h2>
 
@@ -739,7 +741,7 @@ for improving an early draft.</small></p>
   <li><a href="https://www.cambridge.org/core/journals/journal-of-functional-programming/article/simple-and-efficient-purely-functional-queues-and-deques/7B3036772616B39E87BF7FBD119015AB">Simple and efficient purely functional queues and deques (Okasaki, 2008)</a></li>
   <li>Chris Okasaki’s Purely functional data structures, either <a href="https://www.cs.cmu.edu/~rwh/students/okasaki.pdf">his 1996 dissertation</a> or his <a href="https://www.amazon.com/Purely-Functional-Data-Structures-Okasaki/dp/0521663504">1999 monograph</a></li>
   <li>The “Augmenting Data Structures” chapter of <a href="https://www.amazon.com/Introduction-Algorithms-fourth-Thomas-Cormen/dp/026204630X">CLRS</a></li>
-  <li><a href="https://scholar.google.com/citations?user=gpLVKmEAAAAJ&amp;hl=en">Most of Graham Cormode’s oeuvre</a></li>
+  <li><a href="https://scholar.google.com/citations?user=gpLVKmEAAAAJ&amp;hl=en">Most of Graham Cormode’s œuvre</a></li>
   <li>… including <a href="https://www.nowpublishers.com/article/Details/DBS-004">Synopses for Massive Data: Samples, Histograms, Wavelets, Sketches (Cormode, Garofalakis, Haas, and Jermaine, 2011)</a>. <span style="font-variant: small-caps;">now</span> is expensive but often worth it. You can sometimes finds individual chapters on the author’s webpage; the <a href="https://www.nowpublishers.com/article/DownloadSummary/DBS-004">bibliography at the end of the preview</a> is also useful.</li>
 </ul>
 
@@ -759,7 +761,7 @@ for improving an early draft.</small></p>
       <p>One could also augment a <a href="https://www.cambridge.org/core/journals/journal-of-functional-programming/article/simple-and-efficient-purely-functional-queues-and-deques/7B3036772616B39E87BF7FBD119015AB">purely functional deque</a>. I expect less than amazing constant factors out of that approach (the DABA papers imply as much, when they explain how Okasaki’s constant-time purely functional deque was the inspiration for the data structure). <a href="#fnref:okasaki" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:pearls" role="doc-endnote">
-      <p>Your surprise may vary. I find “magic tricks” like this one and others that the Oxford branch of FP seems to be fond of are maybe useful to convince one’s self of an algorithm’s correctness, but not so much when it comes to communicating the sort of deep understanding that leads to discovering new ones (and there are <a href="https://kolektiva.social/@beka_valentine/114691133676966456">folks who recognise the issue and want to fix it</a>). <a href="#fnref:pearls" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+      <p>Your surprise may vary. I find clever “magic tricks” like this one and others that the Oxford branch of FP seems to be fond of are maybe useful to convince one’s self of an algorithm’s correctness, but not so much when it comes to fostering the sort of deep understanding that leads to discovering new ones (and there are <a href="https://kolektiva.social/@beka_valentine/114691133676966456">folks who recognise the issue and want to fix it</a>). <a href="#fnref:pearls" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:diff" role="doc-endnote">
       <p>The improvement stems from a minor difference in scheduling. In this post, <code>query</code> may perform one more multiplications than DABA’s (two instead of one), because DABA incrementally computes the additional product ahead of time. That’s not a big change to the invariants, but computing <code>query</code>’s extra product on demand is never worse, at least in terms of complexity, than doing the same ahead of time: if we always query the total product after each pop, we just moved the same work to different subroutines, but laziness pays off when there are many pops per query (many queries per pop can be handled with a cache). <a href="#fnref:diff" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
