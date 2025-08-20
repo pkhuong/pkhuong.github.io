@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Monoid-augmented FIFOs, deamortised"
-date: 2025-08-19 23:16:03 -0400
+date: 2025-08-19 23:16:05 -0400
 published: true
 comments: true
 categories:
@@ -42,6 +42,8 @@ This post [explains one way](https://hirzels.com/martin/papers/tr15-rc25574-daba
 such that we can add (push on the FIFO) and remove (pop from the FIFO) values
 while maintaining a monoid-structured aggregate (e.g., top-2 request latencies) over the FIFO's contents *on-the-fly*,
 with constant bookkeeping overhead and a constant number of calls to the binary aggregate operator for each push, pop, or query for the aggregate value, even in the worst case.
+
+Also, [there's matching Python code](/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py) for readers who prefer to start there.
 
 Purely functional clupeids
 --------------------------
