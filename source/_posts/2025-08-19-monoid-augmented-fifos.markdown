@@ -4,8 +4,6 @@ title: "Monoid-augmented FIFOs, deamortised"
 date: 2025-08-19 23:16:03 -0400
 published: true
 comments: true
-draft: true
-hidden: true
 categories:
 ---
 
