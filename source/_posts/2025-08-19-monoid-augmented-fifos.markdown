@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Monoid-augmented FIFOs, deamortised"
-date: 2025-08-19 23:16:06 -0400
+date: 2025-08-19 23:16:07 -0400
 published: true
 comments: true
 categories:
@@ -28,7 +28,7 @@ Let's say there was no request in the past second, so the window is initially em
 3. A third 100 ms request (with `[2 ms, 1 ms, 100 ms]` in the 1-second window) gives a top-2 of `{2 ms, 100 ms}`
 4. Eventually, the 2 ms request ages out of the 1-second window, so we're left with `[1 ms, 100 ms]` in the window, and a top-2 of `{1 ms, 100 ms}`.
 
-Common instances of aggregates over inverse-less associative operators include min/max[^min-queue], sample variance[^Pebay], [heavy hitters](https://en.wikipedia.org/wiki/Misra%E2%80%93Gries_heavy_hitters_algorithm), [K-min values cardinality estimators](https://dl.acm.org/doi/10.1145/1247480.1247504), and miscellaneous [statistical sketches](https://cacm.acm.org/practice/data-sketching/).
+Common instances of aggregates over inverse-deprived associative operators include min/max[^min-queue], sample variance[^Pebay], [heavy hitters](https://en.wikipedia.org/wiki/Misra%E2%80%93Gries_heavy_hitters_algorithm), [K-min values cardinality estimators](https://dl.acm.org/doi/10.1145/1247480.1247504), and miscellaneous [statistical sketches](https://cacm.acm.org/practice/data-sketching/).
 In all these cases, we want to work with [monoids](https://mathworld.wolfram.com/Monoid.html).[^semigroup]
 
 [^min-queue]: For min/max-augmented queues, [Shachaf links to](https://gts.y.la/@shachaf/statuses/01K2NBCESQ77VG6CCPARSTV7BA) this [other amortised data structure](https://cp-algorithms.com/data_structures/stack_queue_modification.html#queue-modification-method-1) that sparsifies a queue to hold only values that would be the minimum (resp. maximum) value in the queue if they were at the head. Equivalently, each value in the queue is less than (resp. greater than) everything *later* in the queue. That's not a property we can enforce by filtering insertions; we must instead drop a variable-length suffix of the monotonic queue before appending to it. A lot of queue representations let us do that with a (rotated) binary search and a constant-time truncation, so it's reasonable as a deamortised implementation. However, the trick doesn't generalise well, and already when tracking extrema (i.e., min *and* max, which would require one min-queue and another distinct max-queue), the constant factors might be better for a single instance of the more general data structure described here.
@@ -49,13 +49,15 @@ Also, [there's matching Python code](/images/2025-08-19-monoid-augmented-fifos/m
 Purely functional [clupeids](https://en.wikipedia.org/wiki/Red_herring)
 -----------------------------------------------------------------------
 
-There's a cute construction in the purely functional data structure folklore for a FIFO queue augmented with a monoid.
+There's a cute construction in the purely functional (strict or lazy, doesn't matter) data structure folklore for a FIFO queue augmented with a monoid.
 The construction builds on two observations:
 
 1. It's trivial to augment a *stack* with a monoid such that we can always get the product of all the values in the stack: multiply the previous product by the new value when pushing, and keep a pointer to the previous (cons-)stack. Pop dereferences the [CDR](https://en.wikipedia.org/wiki/CAR_and_CDR).
-2. We can construct an amortised queue from two stacks, an ingestion stack and an excretion stack: popping from stack A and pushing onto stack B ends up reversing the contents of A on top of B.
+2. We can construct an amortised queue from two stacks,[^burton] an ingestion stack that accepts new values and an excretion stack for exiting values: popping from stack A and pushing onto stack B ends up reversing the contents of A on top of B.
 
-Unfortunately, we hit a wall when we try to deamortise the dual-stack trick:
+[^burton]: Apparently, the canonical reference is ["An efficient functional implementation of FIFO queues" (Burton, 1982)](https://www.sciencedirect.com/science/article/abs/pii/0020019082900151).
+
+Unfortunately, we hit a wall when we try to deamortise the dual-stack trick in its strictly evaluated form (i.e., without hidden thunks):
 it's clear that we want to add some sort of work area while keeping the number of stacks bounded, but what should we do when the work area has been fully reversed before the old excretion stack has been emptied?
 Trying to answer that question with augmented stacks leads to a clearly wasteful mess of copies, redundant push/pop, and generally distasteful bookkeeping overhead.[^okasaki]
 
@@ -83,7 +85,7 @@ Rethinking the amortised augmented FIFO
 
 In [the DABA paper](https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf), we actually want to think of the dual stack data structure as a pair of:
 1. An ingestion list that also computes a running product of its contents (in the [cash register model](https://en.wikipedia.org/wiki/Streaming_algorithm#Turnstile_and_cash_register_models))
-2. A batch-constructed excretion list with a precomputed suffix product (in fact, as [the same authors' follow-up](https://arxiv.org/abs/2009.13768) points out, we need *only* that suffix product)
+2. A batch-constructed excretion list with values waiting to be popped, and a precomputed suffix product that reflects the impact of removing each value from the aggregate monoid product (in fact, as [the same authors' follow-up](https://arxiv.org/abs/2009.13768) points out, we need *only* that suffix product)
 
 Concretely, all new values enter the ingestion list and update the running product of the ingestion list's contents.
 We pop from a separate excretion list; that list holds the suffix product of the current oldest (next to pop) value and all younger values (values that will be popped later) in the excretion list.
@@ -435,6 +437,33 @@ For this important use case---a queue at steady state with (roughly) matched pus
 A fresh point of view and tight invariants have lead to a data structure with reasonable constant worst-case complexity...
 and amortised complexity that sometimes matches that of a fully amortised solution!
 
+Another practical extension: batch popping
+------------------------------------------
+
+In practice, we frequently acquire new information incrementally,
+but remove stale data in small batches,
+be it because of delayed timer-based eviction,
+or because bursts of observations come in with identical timestamps and are then evicted as a unit.
+Of course, this isn't very realtime, but can be useful for constant-time pushes and linear-time batch pops.
+
+For batch popping, we can't improve the worst case, but we can always drop the whole batch from the excretion list
+(or however much is available in the excretion list),
+and then see how much maintenance work is left.
+For large batches, we might well find that we removed so much from the excretion list (e.g., the whole list, in the extreme)
+that we have fewer suffix product values left to update than the batch size.
+That's nice, because delaying maintenance *a lot* can save us proportional maintenance work.
+There's some hidden complexity here, because, after the maintenance work, we might have to promote the ingestion list to staging, and perform another round of maintenance.
+
+It's a lot easier to handle bursts of observations that will be evicted as a unit, as long as we can tell on entry.
+The modular solution adds a small buffer in front of the full-blown monoid FIFO,
+and flushes it whenever a new observation won't be evicted at the same time as the current buffer
+(while remembering to consider the buffer when computing the overall monoid product).
+More simply, albeit less efficiently,
+we can also detect when the new observation would definitely be evicted at the same time as the most recent element in the FIFO,
+and merge the two together, directly in the FIFO.
+We still have to update the ingestion list's running product (for a total of two monoid products),
+but we didn't change the number of *values* in the FIFO, so the merge won't incur extra pop-time maintenance work.
+
 Sample code
 -----------
 
@@ -443,7 +472,7 @@ where we store only a value *or* a suffix product for each slot in the FIFO.
 
 The state is mostly a bunch of indices in an arbitrary windowed store with linear iterators (e.g., a ring buffer).
 
-```
+{% codeblock monoid-fifo.py %}
 class MonoidFifo:
     def __init__(self, combiner, identity, trace=False):
         self.combiner = combiner
@@ -467,23 +496,22 @@ class MonoidFifo:
         self.first_ingestion_idx = 0
         self.ingestion_product = identity # running product for the ingestion list
         self.check_rep()
-
-```
+{% endcodeblock %}
 
 With five indices in the backing `store` and two periodically updated products,
 it makes sense to describe our invariants in code and check them on entry and exit.
 
-```
+{% codeblock check_rep.py %}
     def check_rep(self):
         """Check internal invariants."""
         self._check_structure()
         self._check_products()
         self._check_progress()
-```
+{% endcodeblock %}
 
 The structural check flags state that is clearly nonsensical.
 
-```
+{% codeblock check_structure.py %}
     def _check_structure(self):
         """Look for grossly invalid state."""
         # pop_idx                   first_ingestion    push_idx
@@ -503,12 +531,12 @@ The structural check flags state that is clearly nonsensical.
             assert self.store[idx] == self._input_values[idx]
         for idx in range(self.first_staging_idx, self.write_cursor):  # Same for unprocessed staging values
             assert self.store[idx] == self._input_values[idx]
-```
+{% endcodeblock %}
 
 For any state, we can confirm that the precomputed products are valid,
 and that all entries in the windowed store that we expect to hold a suffix product actually do.
 
-```
+{% codeblock check_products.py %}
     def _check_products(self):
         """Make sure our suffix products have the expected values."""
         def reference(begin, end):
@@ -524,24 +552,24 @@ and that all entries in the windowed store that we expect to hold a suffix produ
         for idx in range(self.pop_idx, min(self.write_cursor, self.first_staging_idx)):
             assert reference(idx, self.first_staging_idx) == self.store[idx], \
                 "old excretion, left of write cursor: must have old product"
-```
+{% endcodeblock %}
 
 Finally, we confirm that we're making enough progress on the incremental suffix product.
 
-```
+{% codeblock check_progress.py %}
     def _check_progress(self):
         """Make sure the suffix product doesn't fall behind."""
         assert self.push_idx - self.first_ingestion_idx <= self.first_ingestion_idx - self.pop_idx, \
             "ingestion list <= excretion list"
         assert self.first_staging_idx - self.pop_idx >= self.first_staging_idx - self.write_cursor, \
             "old ingestion list >= unupdated staging list"
-```
+{% endcodeblock %}
 
 We `push` by appending to the underlying windowed store,
 updating our state to take the new value into account,
 and calling the `maintain` method to incrementally recompute the excretion list's suffix product.
 
-```
+{% codeblock push.py %}
     def push(self, value):
         self.check_rep()
         assert self.push_idx not in self.store
@@ -550,12 +578,12 @@ and calling the `maintain` method to incrementally recompute the excretion list'
         self.push_idx += 1
         self.ingestion_product = self.combiner(self.ingestion_product, value)
         self.maintain()
-```
+{% endcodeblock %}
 
 The `query` method shows how we reassemble up to 3 partial products,
 depending on where the pop index lives (before or after the write cursor).
 
-```
+{% codeblock query.py %}
     def query(self):
         self.check_rep()
         if self.pop_idx == self.push_idx:
@@ -566,18 +594,18 @@ depending on where the pop index lives (before or after the write cursor).
         ret = self.combiner(ret, self.ingestion_product)
         # no mutation, no need to check_rep again
         return ret
-```
+{% endcodeblock %}
 
 Finally, we `pop` by updating the windowed store,
 advancing our `pop_idx`, and calling the `maintain` method.
 
-```
+{% codeblock pop.py %}
     def pop(self):
         self.check_rep()
         del self.store[self.pop_idx]
         self.pop_idx += 1
         self.maintain()
-```
+{% endcodeblock %}
 
 Now the `maintain` method itself, where all the complexity is hidden:
 
@@ -593,7 +621,7 @@ one monoid operation per push, and up to two per query.
 The [Python code](/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py) has optional logic in the maintenance methods (omitted here) for lazier maintenance.
 In many cases, it's possible to preserve these worst-case bounds and average one monoid operation per push and one per pop.
 
-```
+{% codeblock maintain.py %}
     def maintain(self):
         self._check_structure()
         if self.write_cursor > self.pop_idx:
@@ -637,7 +665,7 @@ In many cases, it's possible to preserve these worst-case bounds and average one
         else:
             self.write_cursor = self.push_idx - 1 # one free combine with identity
             self.first_ingestion_idx = self.push_idx
-```
+{% endcodeblock %}
 
 This is pretty complicated, so I tested the code by exhaustively enumerating
 all short push/pop sequences for the free (list append) monoid; see
@@ -654,6 +682,7 @@ Send <a href="mailto:p${MY_LAST_NAME}+monoid@jumptrading.com">me an email</a> *a
 Jacob,
 [Jannis](https://mathstodon.xyz/@jix/115032716870635261),
 [Per](https://mastodon.social/@pervognsen/115031875346937974),
+Ruchir,
 and [Shachaf](https://gts.y.la/@shachaf/statuses/01K2NB4CX2XC6G0PJ5XWBC7WNX)
 for improving an early draft.</small>
 
