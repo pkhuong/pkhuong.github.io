@@ -140,7 +140,7 @@ Let’s say there was no request in the past second, so the window is initially 
   <li>Eventually, the 2 ms request ages out of the 1-second window, so we’re left with <code>[1 ms, 100 ms]</code> in the window, and a top-2 of <code>{1 ms, 100 ms}</code>.</li>
 </ol>
 
-<p>Common instances of aggregates over inverse-less associative operators include min/max<sup id="fnref:min-queue" role="doc-noteref"><a href="#fn:min-queue" class="footnote" rel="footnote">1</a></sup>, sample variance<sup id="fnref:Pebay" role="doc-noteref"><a href="#fn:Pebay" class="footnote" rel="footnote">2</a></sup>, <a href="https://en.wikipedia.org/wiki/Misra%E2%80%93Gries_heavy_hitters_algorithm">heavy hitters</a>, <a href="https://dl.acm.org/doi/10.1145/1247480.1247504">K-min values cardinality estimators</a>, and miscellaneous <a href="https://cacm.acm.org/practice/data-sketching/">statistical sketches</a>.
+<p>Common instances of aggregates over inverse-deprived associative operators include min/max<sup id="fnref:min-queue" role="doc-noteref"><a href="#fn:min-queue" class="footnote" rel="footnote">1</a></sup>, sample variance<sup id="fnref:Pebay" role="doc-noteref"><a href="#fn:Pebay" class="footnote" rel="footnote">2</a></sup>, <a href="https://en.wikipedia.org/wiki/Misra%E2%80%93Gries_heavy_hitters_algorithm">heavy hitters</a>, <a href="https://dl.acm.org/doi/10.1145/1247480.1247504">K-min values cardinality estimators</a>, and miscellaneous <a href="https://cacm.acm.org/practice/data-sketching/">statistical sketches</a>.
 In all these cases, we want to work with <a href="https://mathworld.wolfram.com/Monoid.html">monoids</a>.<sup id="fnref:semigroup" role="doc-noteref"><a href="#fn:semigroup" class="footnote" rel="footnote">3</a></sup></p>
 
 <p>As the number of values in the window grows, maintaining such aggregates becomes far from trivial;
@@ -154,21 +154,21 @@ with constant bookkeeping overhead and a constant number of calls to the binary 
 
 <h2 id="purely-functional-clupeids">Purely functional <a href="https://en.wikipedia.org/wiki/Red_herring">clupeids</a></h2>
 
-<p>There’s a cute construction in the purely functional data structure folklore for a FIFO queue augmented with a monoid.
+<p>There’s a cute construction in the purely functional (strict or lazy, doesn’t matter) data structure folklore for a FIFO queue augmented with a monoid.
 The construction builds on two observations:</p>
 
 <ol>
   <li>It’s trivial to augment a <em>stack</em> with a monoid such that we can always get the product of all the values in the stack: multiply the previous product by the new value when pushing, and keep a pointer to the previous (cons-)stack. Pop dereferences the <a href="https://en.wikipedia.org/wiki/CAR_and_CDR">CDR</a>.</li>
-  <li>We can construct an amortised queue from two stacks, an ingestion stack and an excretion stack: popping from stack A and pushing onto stack B ends up reversing the contents of A on top of B.</li>
+  <li>We can construct an amortised queue from two stacks,<sup id="fnref:burton" role="doc-noteref"><a href="#fn:burton" class="footnote" rel="footnote">4</a></sup> an ingestion stack that accepts new values and an excretion stack for exiting values: popping from stack A and pushing onto stack B ends up reversing the contents of A on top of B.</li>
 </ol>
 
-<p>Unfortunately, we hit a wall when we try to deamortise the dual-stack trick:
+<p>Unfortunately, we hit a wall when we try to deamortise the dual-stack trick in its strictly evaluated form (i.e., without hidden thunks):
 it’s clear that we want to add some sort of work area while keeping the number of stacks bounded, but what should we do when the work area has been fully reversed before the old excretion stack has been emptied?
-Trying to answer that question with augmented stacks leads to a clearly wasteful mess of copies, redundant push/pop, and generally distasteful bookkeeping overhead.<sup id="fnref:okasaki" role="doc-noteref"><a href="#fn:okasaki" class="footnote" rel="footnote">4</a></sup></p>
+Trying to answer that question with augmented stacks leads to a clearly wasteful mess of copies, redundant push/pop, and generally distasteful bookkeeping overhead.<sup id="fnref:okasaki" role="doc-noteref"><a href="#fn:okasaki" class="footnote" rel="footnote">5</a></sup></p>
 
 <p>Last week on the fediverse, <a href="https://gts.y.la/@shachaf/statuses/01K287S10263ASXE5H97DZ2T8N">Shachaf</a> linked to an <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf">IBM research report, “Constant-Time Sliding Window Aggregation</a>,” that describes DABA (De-Amortized Banker’s Aggregator),
 a simple deamortised algorithm for monoid-augmented FIFOs.
-The key insight: despite<sup id="fnref:pearls" role="doc-noteref"><a href="#fn:pearls" class="footnote" rel="footnote">5</a></sup> its cleverness, the dual-stack construction is an intellectual dead end.</p>
+The key insight: despite<sup id="fnref:pearls" role="doc-noteref"><a href="#fn:pearls" class="footnote" rel="footnote">6</a></sup> its cleverness, the dual-stack construction is an intellectual dead end.</p>
 
 <p>Unfortunately, I found the paper a bit confusing (I just learned about this <a href="https://arxiv.org/abs/2009.13768">follow-up, which might be clearer</a>).
 I hope the alternative presentation in this post is helpful,
@@ -177,14 +177,14 @@ especially in combination with <a href="/images/2025-08-19-monoid-augmented-fifo
 <p>At the very least, this post’s presentation leads to a streamlined version of DABA with worst-case bounds that are never worse than <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf#page=9">the original</a> or <a href="https://arxiv.org/pdf/2009.13768v1#page=15">its 2020 follow-up</a>:
 at most two monoid multiplications per query, two per push, and one per pop (compared to one per query, three per push and two per pop for DABA).
 In fact, we’ll see one realistic case where we can achieve the same average complexity as fully amortised solutions: one multiplication per push and one per pop (at the cost of up to two multiplications per query, instead of one for dual stacks).
-This is again never worse than <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf#page=10">DABA</a>’s average of two multiplications per push and one per pop (and still one per query).<sup id="fnref:diff" role="doc-noteref"><a href="#fn:diff" class="footnote" rel="footnote">6</a></sup></p>
+This is again never worse than <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf#page=10">DABA</a>’s average of two multiplications per push and one per pop (and still one per query).<sup id="fnref:diff" role="doc-noteref"><a href="#fn:diff" class="footnote" rel="footnote">7</a></sup></p>
 
 <h2 id="rethinking-the-amortised-augmented-fifo">Rethinking the amortised augmented FIFO</h2>
 
 <p>In <a href="https://hirzels.com/martin/papers/tr15-rc25574-daba.pdf">the DABA paper</a>, we actually want to think of the dual stack data structure as a pair of:</p>
 <ol>
   <li>An ingestion list that also computes a running product of its contents (in the <a href="https://en.wikipedia.org/wiki/Streaming_algorithm#Turnstile_and_cash_register_models">cash register model</a>)</li>
-  <li>A batch-constructed excretion list with a precomputed suffix product (in fact, as <a href="https://arxiv.org/abs/2009.13768">the same authors’ follow-up</a> points out, we need <em>only</em> that suffix product)</li>
+  <li>A batch-constructed excretion list with values waiting to be popped, and a precomputed suffix product that reflects the impact of removing each value from the aggregate monoid product (in fact, as <a href="https://arxiv.org/abs/2009.13768">the same authors’ follow-up</a> points out, we need <em>only</em> that suffix product)</li>
 </ol>
 
 <p>Concretely, all new values enter the ingestion list and update the running product of the ingestion list’s contents.
@@ -235,7 +235,7 @@ I’ll abbreviate them with <code>!</code>, e.g., <code>a!h</code> instead of <c
 <h2 id="toward-deamortisation">Toward deamortisation</h2>
 
 <p>Thinking in terms of ingestion and excretion lists is helpful because
-it’s now trivial to append the whole<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">7</a></sup> ingestion list to the excretion list at any time,
+it’s now trivial to append the whole<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">8</a></sup> ingestion list to the excretion list at any time,
 without emptying the latter:
 concatenate the two lists, and recompute the suffix product for the resulting excretion list.
 <a href="https://arxiv.org/abs/2009.13768">The 2020 follow-up</a> notes that we can do that for the old excretion list without even keeping the original values around:
@@ -517,6 +517,32 @@ Starting from that state,</p>
 A fresh point of view and tight invariants have lead to a data structure with reasonable constant worst-case complexity…
 and amortised complexity that sometimes matches that of a fully amortised solution!</p>
 
+<h2 id="another-practical-extension-batch-popping">Another practical extension: batch popping</h2>
+
+<p>In practice, we frequently acquire new information incrementally,
+but remove stale data in small batches,
+be it because of delayed timer-based eviction,
+or because bursts of observations come in with identical timestamps and are then evicted as a unit.
+Of course, this isn’t very realtime, but can be useful for constant-time pushes and linear-time batch pops.</p>
+
+<p>For batch popping, we can’t improve the worst case, but we can always drop the whole batch from the excretion list
+(or however much is available in the excretion list),
+and then see how much maintenance work is left.
+For large batches, we might well find that we removed so much from the excretion list (e.g., the whole list, in the extreme)
+that we have fewer suffix product values left to update than the batch size.
+That’s nice, because delaying maintenance <em>a lot</em> can save us proportional maintenance work.
+There’s some hidden complexity here, because, after the maintenance work, we might have to promote the ingestion list to staging, and perform another round of maintenance.</p>
+
+<p>It’s a lot easier to handle bursts of observations that will be evicted as a unit, as long as we can tell on entry.
+The modular solution adds a small buffer in front of the full-blown monoid FIFO,
+and flushes it whenever a new observation won’t be evicted at the same time as the current buffer
+(while remembering to consider the buffer when computing the overall monoid product).
+More simply, albeit less efficiently,
+we can also detect when the new observation would definitely be evicted at the same time as the most recent element in the FIFO,
+and merge the two together, directly in the FIFO.
+We still have to update the ingestion list’s running product (for a total of two monoid products),
+but we didn’t change the number of <em>values</em> in the FIFO, so the merge won’t incur extra pop-time maintenance work.</p>
+
 <h2 id="sample-code">Sample code</h2>
 
 <p>I <a href="/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py">implemented the data structure in Python</a> with the improvement from the <a href="https://arxiv.org/abs/2009.13768">follow-up paper</a>,
@@ -524,133 +550,231 @@ where we store only a value <em>or</em> a suffix product for each slot in the FI
 
 <p>The state is mostly a bunch of indices in an arbitrary windowed store with linear iterators (e.g., a ring buffer).</p>
 
-<pre><code>class MonoidFifo:
-    def __init__(self, combiner, identity, trace=False):
-        self.combiner = combiner
-        self.identity = identity
-        self.trace = trace
-        self.store = dict()  # int -&gt; value or suffix product
-        self._input_values = dict() # int -&gt; value, used only for check_rep and its callees
-
-        # values in [pop_index:push_index)
-        self.pop_idx = 0
-        self.push_idx = 0
-        # write cursor goes down toward pop_idx (write_cursor &gt;= pop_idx),
-        # and the suffix product is up to date *at* write_cursor inclusively.
-        self.write_cursor = 0
-
-        # staging list in [first_staging_idx:first_ingestion_idx)
-        self.first_staging_idx = 0
-        self.staging_product = identity # product for the staging list
-
-        # ingestion list in [first_ingestion_idx:push_index)
-        self.first_ingestion_idx = 0
-        self.ingestion_product = identity # running product for the ingestion list
-        self.check_rep()
-
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>monoid-fifo.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span><span class="k">class</span> <span class="nc">MonoidFifo</span><span class="p">:</span>
+</span><span class="line">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">combiner</span><span class="p">,</span> <span class="n">identity</span><span class="p">,</span> <span class="n">trace</span><span class="o">=</span><span class="bp">False</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">combiner</span> <span class="o">=</span> <span class="n">combiner</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">identity</span> <span class="o">=</span> <span class="n">identity</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">trace</span> <span class="o">=</span> <span class="n">trace</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">store</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>  <span class="c1"># int -&gt; value or suffix product</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">_input_values</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span> <span class="c1"># int -&gt; value, used only for check_rep and its callees</span>
+</span><span class="line">
+</span><span class="line">        <span class="c1"># values in [pop_index:push_index)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">        <span class="c1"># write cursor goes down toward pop_idx (write_cursor &gt;= pop_idx),</span>
+</span><span class="line">        <span class="c1"># and the suffix product is up to date *at* write_cursor inclusively.</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">
+</span><span class="line">        <span class="c1"># staging list in [first_staging_idx:first_ingestion_idx)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">first_staging_idx</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">staging_product</span> <span class="o">=</span> <span class="n">identity</span> <span class="c1"># product for the staging list</span>
+</span><span class="line">
+</span><span class="line">        <span class="c1"># ingestion list in [first_ingestion_idx:push_index)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_product</span> <span class="o">=</span> <span class="n">identity</span> <span class="c1"># running product for the ingestion list</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">check_rep</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>With five indices in the backing <code>store</code> and two periodically updated products,
 it makes sense to describe our invariants in code and check them on entry and exit.</p>
 
-<pre><code>    def check_rep(self):
-        """Check internal invariants."""
-        self._check_structure()
-        self._check_products()
-        self._check_progress()
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>check_rep.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span>    <span class="k">def</span> <span class="nf">check_rep</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="sd">&quot;&quot;&quot;Check internal invariants.&quot;&quot;&quot;</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">_check_structure</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">_check_products</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">_check_progress</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>The structural check flags state that is clearly nonsensical.</p>
 
-<pre><code>    def _check_structure(self):
-        """Look for grossly invalid state."""
-        # pop_idx                   first_ingestion    push_idx
-        #   [ old excretion ] [ staging ] [ ingestion ]
-        assert self.pop_idx &lt;= self.first_ingestion_idx &lt;= self.push_idx
-        #           first_staging    first_ingestion
-        #   [ excretion ] [ staging ]
-        # pop_idx can (temporarily) be greater than first_staging_idx,
-        # before we promote in `maintain`.
-        assert self.first_staging_idx &lt;= self.first_ingestion_idx
-        # The write cursor can equal `first_ingestion_idx` when the excretion list is empty.
-        # Otherwise, it's strictly inside the excretion list.
-        assert self.write_cursor &lt;= self.first_ingestion_idx
-        assert list(self.store) == list(range(self.pop_idx, self.push_idx)), \
-            "Must have values for exactly the [pop_idx, push_idx) half-open range"
-        for idx in range(self.first_ingestion_idx, self.push_idx):  # The ingestion list should have the raw values
-            assert self.store[idx] == self._input_values[idx]
-        for idx in range(self.first_staging_idx, self.write_cursor):  # Same for unprocessed staging values
-            assert self.store[idx] == self._input_values[idx]
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>check_structure.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span>    <span class="k">def</span> <span class="nf">_check_structure</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="sd">&quot;&quot;&quot;Look for grossly invalid state.&quot;&quot;&quot;</span>
+</span><span class="line">        <span class="c1"># pop_idx                   first_ingestion    push_idx</span>
+</span><span class="line">        <span class="c1">#   [ old excretion ] [ staging ] [ ingestion ]</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span>
+</span><span class="line">        <span class="c1">#           first_staging    first_ingestion</span>
+</span><span class="line">        <span class="c1">#   [ excretion ] [ staging ]</span>
+</span><span class="line">        <span class="c1"># pop_idx can (temporarily) be greater than first_staging_idx,</span>
+</span><span class="line">        <span class="c1"># before we promote in `maintain`.</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_staging_idx</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span>
+</span><span class="line">        <span class="c1"># The write cursor can equal `first_ingestion_idx` when the excretion list is empty.</span>
+</span><span class="line">        <span class="c1"># Otherwise, it&#39;s strictly inside the excretion list.</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span>
+</span><span class="line">        <span class="k">assert</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">)</span> <span class="o">==</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span><span class="p">)),</span> \
+</span><span class="line">            <span class="s2">&quot;Must have values for exactly the [pop_idx, push_idx) half-open range&quot;</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span><span class="p">):</span>  <span class="c1"># The ingestion list should have the raw values</span>
+</span><span class="line">            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">_input_values</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">first_staging_idx</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span><span class="p">):</span>  <span class="c1"># Same for unprocessed staging values</span>
+</span><span class="line">            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">_input_values</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>For any state, we can confirm that the precomputed products are valid,
 and that all entries in the windowed store that we expect to hold a suffix product actually do.</p>
 
-<pre><code>    def _check_products(self):
-        """Make sure our suffix products have the expected values."""
-        def reference(begin, end):
-            """Computes the partial product for values [begin, end)."""
-            return reduce(self.combiner, (self._input_values[idx] for idx in range(begin, end)), self.identity)
-        assert reference(self.first_ingestion_idx, self.push_idx) == self.ingestion_product, \
-            "ingestion product must match the product of the ingestion list"
-        assert reference(self.first_staging_idx, self.first_ingestion_idx) == self.staging_product, \
-            "staging product must match the product of the staging list"
-        for idx in range(self.write_cursor, self.first_ingestion_idx):
-            assert reference(idx, self.first_ingestion_idx) == self.store[idx], \
-                "at or greater than write cursor: must have updated product"
-        for idx in range(self.pop_idx, min(self.write_cursor, self.first_staging_idx)):
-            assert reference(idx, self.first_staging_idx) == self.store[idx], \
-                "old excretion, left of write cursor: must have old product"
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>check_products.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span>    <span class="k">def</span> <span class="nf">_check_products</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="sd">&quot;&quot;&quot;Make sure our suffix products have the expected values.&quot;&quot;&quot;</span>
+</span><span class="line">        <span class="k">def</span> <span class="nf">reference</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span> <span class="n">end</span><span class="p">):</span>
+</span><span class="line">            <span class="sd">&quot;&quot;&quot;Computes the partial product for values [begin, end).&quot;&quot;&quot;</span>
+</span><span class="line">            <span class="k">return</span> <span class="nb">reduce</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">combiner</span><span class="p">,</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_input_values</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span> <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span> <span class="n">end</span><span class="p">)),</span> <span class="bp">self</span><span class="o">.</span><span class="n">identity</span><span class="p">)</span>
+</span><span class="line">        <span class="k">assert</span> <span class="n">reference</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span><span class="p">)</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_product</span><span class="p">,</span> \
+</span><span class="line">            <span class="s2">&quot;ingestion product must match the product of the ingestion list&quot;</span>
+</span><span class="line">        <span class="k">assert</span> <span class="n">reference</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">first_staging_idx</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span><span class="p">)</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">staging_product</span><span class="p">,</span> \
+</span><span class="line">            <span class="s2">&quot;staging product must match the product of the staging list&quot;</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span><span class="p">):</span>
+</span><span class="line">            <span class="k">assert</span> <span class="n">reference</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span><span class="p">)</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">[</span><span class="n">idx</span><span class="p">],</span> \
+</span><span class="line">                <span class="s2">&quot;at or greater than write cursor: must have updated product&quot;</span>
+</span><span class="line">        <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_staging_idx</span><span class="p">)):</span>
+</span><span class="line">            <span class="k">assert</span> <span class="n">reference</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_staging_idx</span><span class="p">)</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">[</span><span class="n">idx</span><span class="p">],</span> \
+</span><span class="line">                <span class="s2">&quot;old excretion, left of write cursor: must have old product&quot;</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>Finally, we confirm that we’re making enough progress on the incremental suffix product.</p>
 
-<pre><code>    def _check_progress(self):
-        """Make sure the suffix product doesn't fall behind."""
-        assert self.push_idx - self.first_ingestion_idx &lt;= self.first_ingestion_idx - self.pop_idx, \
-            "ingestion list &lt;= excretion list"
-        assert self.first_staging_idx - self.pop_idx &gt;= self.first_staging_idx - self.write_cursor, \
-            "old ingestion list &gt;= unupdated staging list"
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>check_progress.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span>    <span class="k">def</span> <span class="nf">_check_progress</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="sd">&quot;&quot;&quot;Make sure the suffix product doesn&#39;t fall behind.&quot;&quot;&quot;</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span><span class="p">,</span> \
+</span><span class="line">            <span class="s2">&quot;ingestion list &lt;= excretion list&quot;</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_staging_idx</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_staging_idx</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span><span class="p">,</span> \
+</span><span class="line">            <span class="s2">&quot;old ingestion list &gt;= unupdated staging list&quot;</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>We <code>push</code> by appending to the underlying windowed store,
 updating our state to take the new value into account,
 and calling the <code>maintain</code> method to incrementally recompute the excretion list’s suffix product.</p>
 
-<pre><code>    def push(self, value):
-        self.check_rep()
-        assert self.push_idx not in self.store
-        self.store[self.push_idx] = value
-        self._input_values[self.push_idx] = value # Only for check_rep
-        self.push_idx += 1
-        self.ingestion_product = self.combiner(self.ingestion_product, value)
-        self.maintain()
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>push.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span>    <span class="k">def</span> <span class="nf">push</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">check_rep</span><span class="p">()</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">store</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">_input_values</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span> <span class="c1"># Only for check_rep</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_product</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">combiner</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion_product</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">maintain</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>The <code>query</code> method shows how we reassemble up to 3 partial products,
 depending on where the pop index lives (before or after the write cursor).</p>
 
-<pre><code>    def query(self):
-        self.check_rep()
-        if self.pop_idx == self.push_idx:
-            return self.identity
-        ret = self.store[self.pop_idx]
-        if self.pop_idx &lt; self.write_cursor:
-            ret = self.combiner(ret, self.staging_product)
-        ret = self.combiner(ret, self.ingestion_product)
-        # no mutation, no need to check_rep again
-        return ret
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>query.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span>    <span class="k">def</span> <span class="nf">query</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">check_rep</span><span class="p">()</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span><span class="p">:</span>
+</span><span class="line">            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">identity</span>
+</span><span class="line">        <span class="n">ret</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span><span class="p">]</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span><span class="p">:</span>
+</span><span class="line">            <span class="n">ret</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">combiner</span><span class="p">(</span><span class="n">ret</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">staging_product</span><span class="p">)</span>
+</span><span class="line">        <span class="n">ret</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">combiner</span><span class="p">(</span><span class="n">ret</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_product</span><span class="p">)</span>
+</span><span class="line">        <span class="c1"># no mutation, no need to check_rep again</span>
+</span><span class="line">        <span class="k">return</span> <span class="n">ret</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>Finally, we <code>pop</code> by updating the windowed store,
 advancing our <code>pop_idx</code>, and calling the <code>maintain</code> method.</p>
 
-<pre><code>    def pop(self):
-        self.check_rep()
-        del self.store[self.pop_idx]
-        self.pop_idx += 1
-        self.maintain()
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>pop.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span>    <span class="k">def</span> <span class="nf">pop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">check_rep</span><span class="p">()</span>
+</span><span class="line">        <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span><span class="p">]</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">maintain</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>Now the <code>maintain</code> method itself, where all the complexity is hidden:</p>
 
@@ -668,50 +792,94 @@ one monoid operation per push, and up to two per query.</p>
 <p>The <a href="/images/2025-08-19-monoid-augmented-fifos/monoid-fifo.py">Python code</a> has optional logic in the maintenance methods (omitted here) for lazier maintenance.
 In many cases, it’s possible to preserve these worst-case bounds and average one monoid operation per push and one per pop.</p>
 
-<pre><code>    def maintain(self):
-        self._check_structure()
-        if self.write_cursor &gt; self.pop_idx:
-            self._advance()
-        if self.write_cursor &lt;= self.pop_idx:
-            self._promote()
-        self.check_rep()
-
-    def _advance(self):
-        assert self.write_cursor &gt; self.pop_idx
-        self.write_cursor -= 1
-        curr = self.store[self.write_cursor]
-        if self.write_cursor &lt; self.first_staging_idx:
-            # outside the staging list, we update the precomputed suffix product
-            update = self.combiner(curr, self.staging_product)
-        else:
-            # in the staging list, we compute a regular suffix product
-            update = self.combiner(curr, self.store[self.write_cursor + 1])
-        if self.trace:
-            print(f"advance {curr} =&gt; {update}")
-        self.store[self.write_cursor] = update
-
-    def _promote(self):
-        self.staging_product = self.ingestion_product
-        self.ingestion_product = self.identity
-        self.first_staging_idx = self.first_ingestion_idx
-
-        if self.trace:
-            print(f"promote {[self.store[idx] for idx in range(self.pop_idx, self.first_staging_idx)]} "
-                  f" {[self.store[idx] for idx in range(self.first_staging_idx, self.push_idx)]} "
-                  f"{self.staging_product}")
-
-        if self.pop_idx == self.push_idx: # empty FIFO -&gt; empty excretion list
-            # If it weren't for `check_rep`, we could execute the `else`
-            # block unconditionally: the only thing we can do with an empty
-            # FIFO is `query` (which already guards for empty FIFO), or
-            # `push` (will will immediate promote and overwrite
-            # `write_cursor`/`ingestion_product`).
-            self.write_cursor = self.push_idx
-            self.ingestion_product = self.identity
-        else:
-            self.write_cursor = self.push_idx - 1 # one free combine with identity
-            self.first_ingestion_idx = self.push_idx
-</code></pre>
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>maintain.py </span></figcaption>
+<div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+</pre></td><td class="code"><pre><code class="py"><span class="line"><span></span>    <span class="k">def</span> <span class="nf">maintain</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">_check_structure</span><span class="p">()</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span><span class="p">:</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">_advance</span><span class="p">()</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span><span class="p">:</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">_promote</span><span class="p">()</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">check_rep</span><span class="p">()</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">_advance</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span> <span class="o">-=</span> <span class="mi">1</span>
+</span><span class="line">        <span class="n">curr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span><span class="p">]</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_staging_idx</span><span class="p">:</span>
+</span><span class="line">            <span class="c1"># outside the staging list, we update the precomputed suffix product</span>
+</span><span class="line">            <span class="n">update</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">combiner</span><span class="p">(</span><span class="n">curr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">staging_product</span><span class="p">)</span>
+</span><span class="line">        <span class="k">else</span><span class="p">:</span>
+</span><span class="line">            <span class="c1"># in the staging list, we compute a regular suffix product</span>
+</span><span class="line">            <span class="n">update</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">combiner</span><span class="p">(</span><span class="n">curr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span> <span class="o">+</span> <span class="mi">1</span><span class="p">])</span>
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">trace</span><span class="p">:</span>
+</span><span class="line">            <span class="k">print</span><span class="p">(</span><span class="n">f</span><span class="s2">&quot;advance {curr} =&gt; {update}&quot;</span><span class="p">)</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">store</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span><span class="p">]</span> <span class="o">=</span> <span class="n">update</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">def</span> <span class="nf">_promote</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">staging_product</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_product</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_product</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">identity</span>
+</span><span class="line">        <span class="bp">self</span><span class="o">.</span><span class="n">first_staging_idx</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">trace</span><span class="p">:</span>
+</span><span class="line">            <span class="k">print</span><span class="p">(</span><span class="n">f</span><span class="s2">&quot;promote {[self.store[idx] for idx in range(self.pop_idx, self.first_staging_idx)]} &quot;</span>
+</span><span class="line">                  <span class="n">f</span><span class="s2">&quot; {[self.store[idx] for idx in range(self.first_staging_idx, self.push_idx)]} &quot;</span>
+</span><span class="line">                  <span class="n">f</span><span class="s2">&quot;{self.staging_product}&quot;</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line">        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop_idx</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span><span class="p">:</span> <span class="c1"># empty FIFO -&gt; empty excretion list</span>
+</span><span class="line">            <span class="c1"># If it weren&#39;t for `check_rep`, we could execute the `else`</span>
+</span><span class="line">            <span class="c1"># block unconditionally: the only thing we can do with an empty</span>
+</span><span class="line">            <span class="c1"># FIFO is `query` (which already guards for empty FIFO), or</span>
+</span><span class="line">            <span class="c1"># `push` (will will immediate promote and overwrite</span>
+</span><span class="line">            <span class="c1"># `write_cursor`/`ingestion_product`).</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_product</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">identity</span>
+</span><span class="line">        <span class="k">else</span><span class="p">:</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">write_cursor</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span> <span class="o">-</span> <span class="mi">1</span> <span class="c1"># one free combine with identity</span>
+</span><span class="line">            <span class="bp">self</span><span class="o">.</span><span class="n">first_ingestion_idx</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">push_idx</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
 
 <p>This is pretty complicated, so I tested the code by exhaustively enumerating
 all short push/pop sequences for the free (list append) monoid; see
@@ -728,6 +896,7 @@ Send <a href="mailto:p${MY_LAST_NAME}+monoid@jumptrading.com">me an email</a> <e
 Jacob,
 <a href="https://mathstodon.xyz/@jix/115032716870635261">Jannis</a>,
 <a href="https://mastodon.social/@pervognsen/115031875346937974">Per</a>,
+Ruchir,
 and <a href="https://gts.y.la/@shachaf/statuses/01K2NB4CX2XC6G0PJ5XWBC7WNX">Shachaf</a>
 for improving an early draft.</small></p>
 
@@ -756,6 +925,9 @@ for improving an early draft.</small></p>
     </li>
     <li id="fn:semigroup" role="doc-endnote">
       <p>Assuming only associativity yields a <a href="https://mathworld.wolfram.com/Semigroup.html">semigroup</a>, but we can trivially upgrade a semigroup to a monoid with a sentinel identity value (e.g., <code>Option&lt;T&gt;</code> instead of <code>T</code>). <a href="#fnref:semigroup" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:burton" role="doc-endnote">
+      <p>Apparently, the canonical reference is <a href="https://www.sciencedirect.com/science/article/abs/pii/0020019082900151">“An efficient functional implementation of FIFO queues” (Burton, 1982)</a>. <a href="#fnref:burton" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:okasaki" role="doc-endnote">
       <p>One could also augment a <a href="https://www.cambridge.org/core/journals/journal-of-functional-programming/article/simple-and-efficient-purely-functional-queues-and-deques/7B3036772616B39E87BF7FBD119015AB">purely functional deque</a>. I expect less than amazing constant factors out of that approach (the DABA papers imply as much, when they explain how Okasaki’s constant-time purely functional deque was the inspiration for the data structure). <a href="#fnref:okasaki" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
