@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2025-08-24T19:57:31-04:00</updated>
+  <updated>2026-01-02T10:28:49-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -13,6 +13,391 @@
   <generator uri="http://octopress.org/">Octopress</generator>
 
   
+  
+  <entry>
+    <title type="html"><![CDATA[Six versions accessing: wait-free protected versions with bounded cardinality]]></title>
+    <link href="https://www.pvk.ca/Blog/2025/12/30/six-versions-accessing/"/>
+    <updated>2025-12-30T10:32:35-05:00</updated>
+    <id>https://www.pvk.ca/Blog/2025/12/30/six-versions-accessing</id>
+    <content type="html"><![CDATA[<p><small>For <a href="https://web.archive.org/web/20251111171856/https://outerproduct.net/">Elijah “moonchild” Stone</a>.</small></p>
+
+<p>This post describes a reader/writer version management scheme I recently came up with.
+I find it interesting because it</p>
+
+<ol>
+  <li>is wait-free for readers and for the writer</li>
+  <li>doesn’t need atomics (including fences) on <a href="https://en.wikipedia.org/wiki/Memory_ordering#In_symmetric_multiprocessing_(SMP)_microprocessor_systems">TSO</a>, or on <a href="https://developer.arm.com/documentation/ddi0487/latest">ARMv8-a</a><sup id="fnref:req" role="doc-noteref"><a href="#fn:req" class="footnote" rel="footnote">1</a></sup> for readers that keep up with the writer</li>
+  <li>supports dynamic reader registration (dually, supports sleeping readers)</li>
+  <li>bounds the number of protected (live) versions as a function of the number of stuck readers, assuming all other readers keep up</li>
+</ol>
+
+<p>The last point is interesting for the higher level system, since it’s now practical to allocate storage for all protected versions statically…
+<a href="https://queue.acm.org/detail.cfm?id=2488549">safe memory reclamation (SMR)</a> makes sense even without dynamic storage management!</p>
+
+<p>We can always build regular <em>memory</em> reclamation on top of the version tracking,
+but we can also directly use the bounded set of protected versions to, e.g., implement multi-version read transactions in constant space.</p>
+
+<p>Even when embedded in vanilla epoch-based memory reclamation,
+the scheme brings something interesting to the table,
+since it combines a QSBR fast path with support for sleeping (disabled) readers, thanks to the hazard pointer slow path.
+The QSBR fast path and its fence-freedom on TSO can be useful even now that we have <a href="https://pvk.ca/Blog/2019/01/09/preemption-is-gc-for-memory-reordering/#:~:text=Asymmetric%20flag%20flip%20with%20interrupts%20on%20Linux">membarrier(2)</a>,
+e.g., when we want to support short epoch update periods (less than every few hundred nanoseconds),
+or when running on isolated cores.</p>
+
+<p>We need at least three protected versions to avoid blocking (i.e., to implement double buffering: one version for the writer, another for readers that are up to date, and the last for readers that are about to switch to the new read version).
+If we’re willing to introduce blocking, we can even make progress with two versions (single buffering).
+Ideally, we’d make progress despite \(k\) blocked readers by allowing up to \(3 + k\) or even \(2 + k\) versions.</p>
+
+<p>Turns out that’s hard to do while preserving property 2 (atomic-free readers on the happy path), 
+so we’ll instead require a footprint of \(3 (k + 1)\) versions, where \(k\) is the number of stuck readers.
+In practice, I find that being robust to just one stuck reader (or a group of readers that got stuck at the same time)
+is pretty useful, for the additional space overhead of three versions,
+especially since the extra three versions don’t even have to be used until there actually are stuck readers.</p>
+
+<p>When there are too many stuck readers for the protected version budget,
+the system keeps running, but the writer’s version is frozen.
+Readers are unaffected, and the writer can still write, but can’t move on to a fresh version;
+in practice, this can mean that the limbo list grows without bound (the usual failure mode for epoch based reclamation),
+or, in a <a href="https://en.wikipedia.org/wiki/Multiversion_concurrency_control">MVCC</a> system, that the writer is unable to make its updates visible to readers
+(they can still be committed to stable storage, they’re just not visible in memory).</p>
+
+<p>That’s yet another animal in the ménagerie of safe memory reclamation (SMR) schemes.
+I like to make sense of all these design options and how they fit in higher level system design with to the following reductionist take on <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf#page=77">SMR</a>:
+it’s all remixes of <a href="https://ieeexplore.ieee.org/document/1291819">hazard pointers</a> (HP), <a href="https://preshing.com/20160726/using-quiescent-states-to-reclaim-memory/">quiescent state based reclamation</a> (QSBR), and <a href="https://mastodon.social/@pervognsen/112447606750157685">proxy collection</a>.<sup id="fnref:proxy-gc" role="doc-noteref"><a href="#fn:proxy-gc" class="footnote" rel="footnote">2</a></sup></p>
+
+<p>For example, casting epoch-based reclamation as a proxy collection system where we manage versions (epochs), and versions hang on to (serve as proxies for) objects makes it clear that the core epoch management logic in EBR is just a specialised version of hazard pointers…
+and thus all the atomic-free read-side tricks with membarrier and interrupt-atomic copy port directly between the pointer protection read-side in hazard pointers and the version (epoch) publishing read side of EBR.</p>
+
+<p>Decoupling the proxy collection piece (what set of objects does each version protect from reclamation) from the version acquisition/protection logic also clarifies the relationship between EBR and QSBR.</p>
+
+<p>In classical EBR, readers protect one version (one epoch), and each version (epoch) hangs on to all objects that weren’t logically deleted before that epoch (before it became the writer’s active epoch).</p>
+
+<p>QSBR looks similar, but I believe it’s illuminating to view it as a dual to EBR.  In QSBR, readers relinquish all versions older than some watermark, and implicitly protect all versions at least as recent as the watermark.
+In that world, QSBR readers protect a half-unbounded version range (in practice, it’s bounded to the most recent version used by the writer), and each version V hangs on all objects that were logically deleted while V was the writer’s active version.</p>
+
+<p>The modularisation between version management and proxy collection is imperfect:
+for example, EBR readers can publish an old version without checking that it’s still the writer’s version,
+since publishing a stale version implicitly protects a superset of those protected by the correct version, the writer’s version
+(but that makes invariants harder to check, since readers don’t know the version they were supposed to publish).</p>
+
+<p>That’s the usual for abstractions: imperfect, but still useful as a tool for thought.
+I feel the modularity is particularly helpful when reasoning about SMR mechanisms at a higher level than just deferred destructors, e.g., when combining SMR with heavier weight abstractions like <a href="https://dl.acm.org/doi/10.1145/1233307.1233309">object software transactional memory</a>:
+in OSTMs, it can make sense to manage versions explicitly, at a higher level than physical memory management.</p>
+
+<p>I came up with this version management scheme in a similar context with native versions,
+and ripping out the proxy collection concern
+highlights its nature as a hybrid of QSBR on the happy path and hazard pointer in the general case.</p>
+
+<h2 id="the-basic-setup">The basic setup</h2>
+
+<p>As usual for hazard pointer and EBR approaches, the writer can logically handle each reader in isolation,
+but should process readers in batches to improve efficiency.</p>
+
+<p>For each reader, we have a record in which two fields are logically owned by the writer—the stable version and hazard pointer limit are updated by the writer and read by the reader—and the remaining current version field is <em>usually</em> written by the reader and read by the writer.
+Only when the current version’s HELP flag is set can both the reader and writer update it,
+with atomic compare-and-swap.</p>
+
+<p>When the writer updates the stable version and hazard pointer limit (<code>hp_limit</code>) fields, 
+it always updates the hazard pointer limit first, and the stable version second.
+At first sight, a release store to the stable version would suffice, but
+we’ll see that we also want a store-load fence after the update to the stable version;
+when updating a batch of records on x86oids, 
+we can achieve that with regular release stores for all but the last update to the <code>reader_record.stable_version</code>,
+and updating the <code>stable_version</code> field for the last record in the batch with an atomic exchange.</p>
+
+<p>Symmetrically, the reader always loads the stable version first, with an acquire load,
+followed by the hazard pointer limit.</p>
+
+<pre><code>reader_record:
+  - stable_version: most recent version the reader should try to stick in current_version, non-zero after startup
+  - hp_limit: (hazard pointer limit) we'll get to it later, in the invariants section
+  - current_version: version currently protected by the reader, zero when record is inactive;
+                     lends one bit to a HELP flag.
+</code></pre>
+
+<p>Unlike general hazard pointer records,
+we need only a single HELP flag bit for cooperative wait-freedom:
+we always know what field the reader wants to snapshot in its current version,
+since each reader record owns its stable version field.</p>
+
+<p>In a practical implementation,
+we’ll probably want the stable version and hazard pointer limit<sup id="fnref:dual" role="doc-noteref"><a href="#fn:dual" class="footnote" rel="footnote">3</a></sup> fields in the same cache line,
+and give the current version a dedicated cache line.
+Each reader should also have a private copy of its current version,
+so that each reader only <em>stores</em> to the current version’s cache line
+(e.g., with a blind cache line update, which can avoid <a href="https://en.wikipedia.org/wiki/MESI_protocol#Read_For_Ownership">RFO</a>).</p>
+
+<p>The hazard pointer limit is associated with its reader, so must live in a the reader record,
+but it would be possible to have a global stable version field shared by all readers.
+The analysis would be the same, and the impact on performance depends on a lot of considerations.
+In general though, this protocol is biased towards reader performance,
+and giving each reader its own single-reader/single-writer <code>current_version</code> field
+tends to improve reader performance, at the expense of slowing down the writer…
+exactly the tradeoff we’re looking for.</p>
+
+<h2 id="parameters">Parameters</h2>
+
+<p>There are two global parameters; each affects only the writer’s behaviour.</p>
+
+<p>The QSBR leeway (counted in versions) limits how far a reader’s current version can be behind the stable version
+while letting the reader use the QSBR (atomic-free on TSO) update.
+This leeway must be at least one version, otherwise the QSBR path is always disabled.
+I think setting it to two makes sense, because this means a reader that keeps up in EBR stays on the QSBR fast path.</p>
+
+<p>The version capacity bounds the number of versions that may be protected concurrently,
+including the writer’s current write version
+(which differs from the reader’s stable version in versioned transactions).
+The capacity should be at least three, for non-blocking progress when everyone’s keeping up.
+Increasing the version capacity past three versions lets the system advance the write version (make regular progress, including reclaiming old versions) despite the presence of stuck readers:
+each increment by <em>one more than</em> the QSBR leeway lets us tolerate at least one more stuck reader.</p>
+
+<p>With a QSBR leeway of two and a version capacity of six,
+readers that would keep up (not force the writer to slow down) in EBR stay on the QSBR path,
+and we can tolerate at least one stuck reader.</p>
+
+<p>Readers also apply an arbitrary iteration limit on the basic hazard pointer loop.
+A limit of two iterations ensures that we’ll only enter the fallback wait-free update when the reader is really slow compared to the writer, or keeps getting interrupted.</p>
+
+<h2 id="invariants">Invariants</h2>
+
+<p>The stable version and hazard pointer limit fields increase monotonically, which will simplify reasoning.
+The current version (after discarding the HELP flag) increases monotonically,
+except when it’s reset to 0… and transitioning out of the zero state enters a special slow path.
+TL;DR: we can mostly assume monotonicity.</p>
+
+<p>Unlike traditional EBR, we aim to make progress despite the presence of stuck readers,
+so it’s impossible to bound the maximum distance between any two versions,
+which means we can’t use modular comparisons.</p>
+
+<p>It’s hard to fit strictly monotonic version counters in 32 bits.
+There’s plenty of room in 64-bit integers though, even after stealing one bit
+(e.g., the top/sign bit) for the HELP flag.</p>
+
+<h2 id="protected-versions">Protected versions</h2>
+
+<p>Each reader record protects a set of versions.
+From the writer’s point of view, it’s trivial to take an atomic snapshot of any given reader record,
+since the reader updates only one field in the record (the current version),
+so it makes sense to talk about the set of versions protected by a reader record.</p>
+
+<p>When the reader record’s current version is 0, the record doesn’t protect anything (protects the empty set).</p>
+
+<p>When the reader record’s current version is <em>at most QSBR leeway versions behind</em> the stable version, 
+the record protects versions \([\texttt{current_version}, +\infty).\)
+The writer controls the highest version actually in existence, so we can shrink that to
+\([\texttt{current_version}, \texttt{stable_version}],\)
+which includes at most \(\texttt{QSBR_leeway}\) versions.
+Such a reader record is in QSBR mode, and can advance its current version with only an acquire load, i.e., without any fence or atomic under TSO.</p>
+
+<p>Otherwise, when the record isn’t in QSBR mode and its current version is strictly less than the hazard pointer limit,
+the record is in hazard pointer mode and protects versions \([\texttt{current_version}, \texttt{hp_limit});\)
+the writer ensures this interval spans at most \(\texttt{QSBR_leeway} + 1\) versions.
+In hazard pointer mode, readers must use a full-blown hazard pointer (i.e., fenced) update when advancing the current version to or past the hazard pointer limit.</p>
+
+<p>Finally, in all other cases, the record reflects a reader in the middle of a failed hazard pointer update
+and protects nothing.</p>
+
+<h2 id="reader-logic">Reader logic</h2>
+
+<p>The reader attempts to advance its current version by first loading a somewhat consistent snapshot of the reader record:</p>
+
+<ol>
+  <li>(acquire) load the stable version</li>
+  <li>load the hazard pointer limit</li>
+  <li>grab the current version, from a private copy or with a relaxed load</li>
+</ol>
+
+<p>This load order reverses the writer’s store order, 
+so monotonicity guarantees that the hazard pointer limit loaded in step 2 is at least as high as if we’d taken an atomic snapshot in step 1.
+This is safe because observing a later hazard pointer limit simply means that we may spuriously enter the safe hazard pointer slow path.</p>
+
+<p>If the current version is strictly greater than the hazard pointer limit, we can use a QSBR update:
+just store the stable version from step 1 in the globally visible current version
+(and update the reader’s private copy).
+There is no store-load fence on this QSBR fast path:
+it all works thanks to causal dependencies between the reader’s stores and the writer’s <em>lack of store</em> to the hazard pointer limit
+(which is tied to the writer’s stable version updates).
+That’s the happy path for readers that keep up with the writer.</p>
+
+<p>Otherwise, the reader is too far behind the stable version, and must use a hazard pointer-style update to snap its current version ahead.
+That’s the safe slow path, which also handles the transition out of the zero state.<sup id="fnref:stable-eql-limit" role="doc-noteref"><a href="#fn:stable-eql-limit" class="footnote" rel="footnote">4</a></sup>
+After a hazard pointer update, the postcondition is that there was a time when new current version was globally visible and it was equal to the stable version.
+If the reader later falls off the QSBR range, the writer will first bump the hazard pointer limit, and everything still works out.</p>
+
+<p>We start with a regular hazard pointer update loop, for a bounded number of iterations (a limit of two iterations is plenty).
+The initial guess for the stable version is the value we loaded in step 1.
+We then:</p>
+
+<p>a. store the guessed stable version in current version, with a store-load fence (e.g., atomic exchange)<br />
+b. check if our guess was correct (the stable version is indeed equal to our guess)</p>
+
+<p>If the guess is correct, we successfully performed a hazard pointer update, and return from the advance subroutine (remember to update the reader’s private copy of its current version).
+Otherwise, we try again, up to the iteration bound.</p>
+
+<p>When readers hit the iteration bound, we use a slower wait-free cooperative update.
+This final backstop ensures the advance subroutine is wait-free.</p>
+
+<p>A reader enters the cooperative mode by setting the HELP flag (e.g., the sign bit) in its current version field,
+followed by a store-load fence.
+That’s a regular store and a fence, or, on TSO, an atomic OR to get both in one instruction.</p>
+
+<p>The reader then runs the same hazard pointer loop, except with compare-and-swap and keeping the HELP flag set:</p>
+
+<p>c. compare-and-swap our guess for the stable version (with the HELP flag set) in the current version<br />
+d. check if our guess was correct, otherwise try again in c., with an updated guess<br />
+e. clear the HELP flag (with an atomic AND, or another compare-and-swap)</p>
+
+<p>And, on exit, update the reader’s private copy of its current version and return from the advance subroutine.</p>
+
+<p>The key part is that the check in d. can fail at most twice.</p>
+
+<p>The compare-and-swap in step c. (and e.) can fail because the the current version field doesn’t have the expected value.
+This can only happen if the writer noticed our call for help and CASed in the most up to date stable version
+(without the HELP flag).  In that case, we’re done!</p>
+
+<p>The check in d. can fail only when the writer has updated the stable version in the middle of the advance loop.
+However, the HELP flag is set throughout the final advance loop,
+so the writer is sure to observe the flag during its <em>second</em> update.
+That’s why the check in d. can fail at most twice (once for the initial guess, again for an unlucky writer update that just missed the HELP flag),
+and the whole loop can run at most three times.</p>
+
+<p>All the loops are bounded, by fiat or because they can only fail so many times, so the reader’s advance routine is wait-free.</p>
+
+<h2 id="writer-logic">Writer logic</h2>
+
+<p>The only complicated logic in the writer is collecting the set of all protected versions before incrementing its stable version.</p>
+
+<p>The “protected versions” section explains how to compute that set for any specific reader record;
+the writer has exclusive write ownership over all fields in the reader record except for the current version,
+so it’s trivial to take an atomic snapshot of the record, as long as we remember to mask off the HELP flag.
+We must also keep in mind that the writer is about to increment the stable version by 1, so we must take that
+increment into account when constructing the set of protected versions for a given record…
+and we must prepare for potential hazard pointer updates, so the stable version is always protected.</p>
+
+<p>There is one complication here: we need to detect slow readers that must be forced into hazard pointer mode.</p>
+
+<p>When a reader’s current version is at most \(\texttt{QSBR_leeway}\) versions behind the <em>next</em> stable version,
+it is considered to be in QSBR mode, and protects \([\texttt{current_version}, \texttt{stable_version}].\)
+This interval contains at most \(\texttt{QSBR_leeway}\) versions.</p>
+
+<p>Otherwise, the reader may have <em>just</em> fallen behind by enough to be kicked out of QSBR mode, and must then be switched to hazard pointer mode.</p>
+
+<p>If the reader’s current version is exactly \(\texttt{QSBR_leeway} + 1\) behind the <em>next</em> stable version
+(exactly \(\texttt{QSBR_leeway}\) versions behind the stable version),
+the writer must ensure the reader enters hazard pointer mode:
+when the reader’s current version is greater than or equal to its hazard pointer limit,
+the writer updates the reader’s hazard pointer limit to the next stable version,
+so the record, now in hazard pointer mode, protects \(\texttt{QSBR_leeway} + 1\) versions.</p>
+
+<p>It’s important to execute this transition only when the reader <em>just</em> fell off the QSBR fast path:
+the hazard pointer update loop can temporarily publish trash versions to the current version field,
+and we’d prefer to disregard those.
+Since the transition happens right at the edge, when the reader just falls off the fast path,
+we must always scan readers before incrementing the writer’s stable version.</p>
+
+<p>Notice how the downgrade to hazard pointer modes actually preserves the set of versions protected by the reader record while it was in QSBR mode
+(a sufficiently delayed reader could observe the next stable version, but is then guaranteed to observe the new hazard pointer limit).
+That’s what makes it safe to wait until the reader notices the hazard pointer limit,
+without explicit heavyweight synchronisation on a shared writable cell.</p>
+
+<p>Now that the reader has been diverted to the hazard pointer slow path if needed,
+the record protects \([\texttt{current_version}, \texttt{hp_limit}),\)
+or the empty set when \(\texttt{hp_limit} \leq \texttt{current_version}.\)</p>
+
+<p>We want the union of protected versions across all reader records.
+Naïvely, this would call for an arbitrary set data structure.
+However, we have a bound on the number of protected versions, so we can statically allocate the set’s capacity, and flag a failure when we’d need more than that bound.
+We also perform blind insertions until after the per-reader loop,
+so we can use an amortised integer sort/dedup over a statically allocated array.</p>
+
+<p>When few enough versions are protected to fit in our version budget after adjoining the <em>next</em> stable version,
+we can increment the stable version (otherwise, we must return with failure).</p>
+
+<p>We increment the stable version with a release store to each reader record’s stable version field.
+We also need a store-load fence after the stable version updates, so, on TSO, we can use a regular
+release store for all but the last record, and conclude with an atomic-exchange for the last record.</p>
+
+<p>The fence is obviously important for the wait-free helping scheme.
+More subtly, it’s also load bearing for the hazard pointer scan in the <em>next instance</em> of the per-reader loop above:
+we must guarantee we’ll observe when a reader <em>just</em> falls off the QSBR range.
+Observing a stale current version for a given reader after incrementing the stable version could
+lead to a reader catching up via the hazard pointer path, and the writer failing to notice that,
+potentially until the reader is far from the QSBR range.
+The writer would incorrectly treat that reader as having been stuck in failed hazard pointer updates the whole time.</p>
+
+<p>Finally, we check if any reader record needs help (has the HELP flag bit set).</p>
+
+<p>For each reader record, we load the current version field, and check if the HELP flag is set.
+If the HELP flag is set, we try to atomically clear the flag and update the current version field to the new stable version with a compare-and-swap.
+When the compare-and-swap succeeds, or fails because the actual value didn’t have the HELP flag set,
+we’re done helping that reader record.
+Otherwise, we must try again…
+but the stable version doesn’t change while the writer is helping a reader record make progress,
+so we expect to attempt to help a reader record at most three times in a row.</p>
+
+<h2 id="extra-fanciness-extensions-and-improvements">Extra fanciness, extensions, and improvements</h2>
+
+<p>I already noted where the few store-load fences needed under TSO can be implemented atomic exchanges.</p>
+
+<p>Under RMO, I’m pretty sure it’s possible to avoid the acquire load of the stable version in the read-side code,
+by loading both the stable version and the hazard pointer limit with an <a href="https://reviews.llvm.org/D67485">atomic 16-byte load</a>,
+or by carefully introducing a data dependency between the hazard pointer limit’s <em>load address</em> and the stable version’s value.<sup id="fnref:acquire" role="doc-noteref"><a href="#fn:acquire" class="footnote" rel="footnote">5</a></sup>
+Even the latter should be fine for latency because we want a single predictable conditional branch around the QSBR fast path,
+and the hazard pointer limit isn’t used in the fast path itself (feeds only into a predictable control dependency)…
+but the code that uses the current version probably needs an acquire load anyway.</p>
+
+<p>In the QSBR fast path, we usually prefer to avoid spurious write traffic for no-op updates
+(stable and current versions are already equal) by generating the store destination address with a conditional move,
+and directing useless updates to a core-local location
+(a constant-time conditional move is important, because speculative stores can still cause cache coherence traffic).
+It can also be helpful to use cache line-wide stores (e.g., AVX-512 or <a href="https://git.kernel.org/pub/scm/linux/kernel/git/tip/tip.git/commit/?h=x86/asm&amp;id=f444a5ff95dce07cf4353cbb85fc3e785019d430">FSRM</a> stores) to avoid <a href="https://en.wikipedia.org/wiki/MESI_protocol#Read_For_Ownership">reads for ownership</a>.</p>
+
+<p>When readers care about runtime latency more than having the most recent updates, it can make sense to
+defer updates <em>in the QSBR fast path</em> by one advance call:
+as long as we’re in the fast path, it’s safe to use the maximum of the current version and any older value observed in the stable version field as the stable version we wish to advance to.
+Waiting to advance to a new stable version until we’ve observed it twice gives the writer core more time to evict updates out of its private caches into shared ones.</p>
+
+<p>Readers could also remain on the QSBR fast path when they observe a fresh hazard pointer limit,
+but still have an old stable version lower than the hazard pointer limit,
+a race condition that grows more likely with the number of readers.
+Strictly speaking, we <em>must</em> enter the slow path when either:</p>
+
+<ol>
+  <li>the current version is 0</li>
+  <li>the current version is less than or equal to the hazard pointer limit, and the stable version is strictly greater than the hazard pointer limit</li>
+</ol>
+
+<p>I don’t see much room for fanciness on the write side, except for the aforementioned fence-as-atomic-exchanges.
+On recent Intel machines, it can make sense to <a href="https://www.felixcloutier.com/x86/cldemote">CLDEMOTE</a> after updates to the reader record,
+when readers try to advance their current version infrequently enough (at least a couple hundred cycles between calls).</p>
+
+<p>This all seems to work, and there’s basically no overhead (except for the static footprint) compared to regular double buffering when everyone’s keeping up, so I’m not really thinking about it anymore.
+It might be interesting to simplify the hazard pointer limit system, and maybe replace it with a flag, if only to simplify reasoning about the protocol.
+Otherwise, in terms of performance, the most impactful improvement would probably be to reduce the footprint overhead to handle stuck readers, while preserving the QSBR fast path…
+but I don’t see how to achieve that (yet).</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:req" role="doc-endnote">
+      <p>We really need load-load ordering and a lack of value speculation, which boils down to TSO in practice… but we can fake it on RMO with <a href="https://developer.arm.com/documentation/dui0801/g/A64-Floating-point-Instructions/LDP--SIMD-and-FP-">16-byte atomic loads (LDP)</a> or maybe with a fake data dependency between the first load and the second load’s address. OTOH, the surrounding code would probably need something like acquire semantics for the LDP anyway. <a href="#fnref:req" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:proxy-gc" role="doc-endnote">
+      <p>I don’t have a reference for <a href="https://mastodon.social/@pervognsen/112447606750157685">proxy collection</a>. The best I can think of is Joe Seigh’s Usenet posts on <a href="https://danluu.com/threads-faq">comp.programming.threads</a>, but I can’t remember which one made it click for me. Maybe <a href="https://github.com/jseigh/proxies">Joe’s <code>proxies</code> repo</a> will work for you. <a href="#fnref:proxy-gc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:dual" role="doc-endnote">
+      <p>Assuming we stick the stable version and the hazard pointer limit fields in the same cache line, there is no downside with respect to cache coherence in replacing the hazard pointer limit with a QSBR limit (that tells the reader how far it can advance its current version without entering the hazard pointer slow path) or a mode flag. The result would probably slightly easier to understand, but would have more edge cases where readers are stuck on the slow path when they re-enter the QSBR range, yet the writer fails to acknowledge that fact for a while.  I’m confident we could fix that by adding logic to avoid no-op updates, but that introduces an additional <em>and harder to predict</em> branch condition. <a href="#fnref:dual" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:stable-eql-limit" role="doc-endnote">
+      <p>It’s a bit unsettling that updating the current version to the stable version could leave us with \(\texttt{current_version} = \texttt{hp_limit},\) which yields an empty range for \([\texttt{current_version}, \texttt{hp_limit}).\)  However, a successful hazard pointer update means the current version is within the QSBR leeway of the stable version, so the record protects \([\texttt{current_version}, \texttt{stable_version}].\) <a href="#fnref:stable-eql-limit" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:acquire" role="doc-endnote">
+      <p>Careful though, depending on how the reader’s current version is used, we probably still need acquire semantics for the load from the stable version or the 16-byte load of the stable version and hazard pointer limit. <a href="#fnref:acquire" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Monoid-augmented FIFOs, deamortised]]></title>
@@ -1389,170 +1774,6 @@ Arguments against encrypting structured identifiers should probably focus on sys
     </li>
     <li id="fn:rotation" role="doc-endnote">
       <p>Rotating symmetric keys isn’t hard a technical problem, when generating UUIDs with a Feistel network: we can use 1-2 bits to identify keys, and eventually reuse key ids.  Rotation however must imply that we will eventually fail to decode (reject) old ids, which may be a bug or a feature, depending on who you ask. A saving grace may be that it should be possible for a service to update old external ids to the most recent symmetric key without accessing any information except the symmetric keys. <a href="#fnref:rotation" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-  </ol>
-</div>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Hacking tips for Linux perf porcelain]]></title>
-    <link href="https://www.pvk.ca/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain/"/>
-    <updated>2022-06-01T21:09:08-04:00</updated>
-    <id>https://www.pvk.ca/Blog/2022/06/01/hacking-tips-for-linux-perf-porcelain</id>
-    <content type="html"><![CDATA[<p>Sometimes you just want to abuse <a href="https://perf.wiki.kernel.org/index.php/Main_Page">Linux <code>perf</code></a>
-to make it do a thing it’s not designed for, and a proper C program
-would represent an excessive amount of work.</p>
-
-<p>Here are two tricks I find helpful when jotting down hacky analysis scripts.</p>
-
-<h2 id="programmatically-interacting-with-addr2line--i">Programmatically interacting with <code>addr2line -i</code></h2>
-
-<p>Perf can resolve symbols itself, but <a href="https://sourceware.org/binutils/docs/binutils/addr2line.html">addr2line</a>
-is a lot more flexible (especially when you inflict
-<a href="https://github.com/libhugetlbfs/libhugetlbfs/blob/6b126a4d7da9490fa40fe7e1b962edcb939feddc/HOWTO#L25-L30">subtle things on your executable’s mappings</a>).</p>
-
-<p>It’s already nice that <code>addr2line -Cfe /path/to/binary</code> lets you write
-hex addresses to stdin and spits out the corresponding function name
-on one line, and its source location on the next (or <code>??</code> / <code>??:0</code> if
-debug info is missing).  However, for heavily inlined (<em>cough</em> C++
-<em>cough</em>) programs, you really want the whole callstack that’s encoded
-in the debug info, not just the most deeply inlined function (“oh
-great, it’s in <code>std::vector&lt;Foo&gt;::size()</code>”).</p>
-
-<p><a href="https://sourceware.org/binutils/docs/binutils/addr2line.html#:~:text=%2Di-,%2D%2Dinlines,-If%20the%20address">The <code>--inline</code> flag</a>
-addresses that… by printing source locations for inline callers on
-their own line(s).  Now that the output for each address can span
-a variable number of lines, how is one to know when to stop reading?</p>
-
-<p>A simple trick is to always write <em>two</em> addresses to <code>addr2line</code>’s
-standard input: the address we want to symbolicate, and
-that never has debug info (e.g., 0).</p>
-
-<p>EDIT: <a href="https://twitter.com/trav_downs/status/1532206949038624768">Travis Downs reports that <code>llvm-addr2line-14</code> finds debug info for 0x0</a>
-(presumably a bug. I don’t see that on llvm-addr2line-12)
-and suggests looking for <code>0x0.*</code> in addition to <code>??</code>/<code>??:0</code>.  It’s
-easy enough to stop when either happens, and clang’s version of
-<code>addr2line</code> can be a lot faster than binutil’s on files with a lot of
-debug information.<sup id="fnref:more-robust" role="doc-noteref"><a href="#fn:more-robust" class="footnote" rel="footnote">1</a></sup></p>
-
-<p>We now know that the first set of resolution information lines (one
-line when printing only the file and line number, two lines when
-<a href="https://sourceware.org/binutils/docs/binutils/addr2line.html#:~:text=%2Df-,%2D%2Dfunctions,-Display%20function%20names">printing function names as well with <code>-f</code></a>)
-belongs to the address we want to symbolicate.  We also know to
-expect output for missing information (<code>??:0</code> or <code>??</code> / <code>??:0</code>)
-from the dummy address.  We can thus keep reading until we find
-a set of lines that corresponds to missing information, and 
-disregard that final source info.</p>
-
-<p>For example, passing <code>$IP\n0\n</code> on stdin could yield:</p>
-
-<pre><code>??
-??:0
-??
-??:0
-</code></pre>
-
-<p>or, without <code>-f</code> function names,</p>
-
-<pre><code>??:0
-??:0
-</code></pre>
-
-<p>In both cases we first consume the first set of lines (the output
-for<code>$IP</code> must include at least one record), then consume the next set
-of lines and observe it represent missing information, so we stop
-reading.</p>
-
-<p>When debug information is present, we might instead find</p>
-
-<pre><code>foo()
-src/foo.cc:10
-??
-??:0
-</code></pre>
-
-<p>The same algorithm clearly works.</p>
-
-<p>Finally, with inlining, we might instead observe</p>
-
-<pre><code>inline_function()
-src/bar.h:5
-foo()
-src/foo.cc:12
-??
-??:0
-</code></pre>
-
-<p>We’ll unconditionally assign the first pair of lines to <code>$IP</code>,
-read a second pair of lines, see that it’s not <code>??</code> / <code>??:0</code>
-and push that to the bottom of the inline source location
-stack, and finally stop after reading the third pair of lines.</p>
-
-<h2 id="triggering-pmu-events-from-non-pmu-perf-events">Triggering PMU events from non-PMU perf events</h2>
-
-<p>Performance monitoring events in perf tend to be much more powerful
-than non-PMU events: each perf “driver” works independently, so only
-PMU events can snapshot <a href="https://man7.org/linux/man-pages/man1/perf-intel-pt.1.html">the Processor Trace buffer</a>,
-for example.</p>
-
-<p>However, we sometimes really want to trigger on a non-PMU event.  For
-example, we might want to watch for writes to a specific address with
-a hardware breakpoint, and snapshot the PT buffer to figure out what
-happened in the microseconds preceding that write.  Unfortunately,
-that doesn’t work out of the box: only PMU events can snapshot the
-buffer.  I remember running into a similar limitation when I wanted to
-capture performance counters after non-PMU events.</p>
-
-<p>There is however a way to trigger PMU events from most non-PMU events:
-watch for <a href="https://perfmon-events.intel.com/index.html?pltfrm=snb.html&amp;evnt=BR_INST_RETIRED.FAR_BRANCH">far branches</a>!
-I believe I also found these events much more reliable to detect
-preemption than the scheduler’s software event, many years ago.</p>
-
-<p>Far branches are rare (they certainly don’t happen in regular x86-64
-userspace program), but interrupt usually trigger a far CALL to
-execute the handler in ring 0 (attributed to ring 0), and a far RET to
-switch back to the user program (attributed to ring 3).</p>
-
-<p>We can thus configure</p>
-
-<pre><code>perf record \
-    -e intel_pt//u \
-    -e BR_INST_RETIRED.FAR_BRANCH/aux-sample-size=...,period=1/u \
-    -e mem:0x...:wu ...
-</code></pre>
-
-<p>to:</p>
-
-<ol>
-  <li>trigger a debug interrupt when userspace writes to the watched
-memory address</li>
-  <li>which will increment the <code>far_branch</code> performance monitoring
-counter</li>
-  <li>which triggers Linux’s performance monitoring interrupt handler</li>
-  <li>which will finally write both the far branch event and its
-associated PT buffer to the perf event ring buffer.</li>
-</ol>
-
-<p>Not only does this work, but it also minimises the trigger latency.
-That’s a big win compared to, e.g., <a href="https://man7.org/linux/man-pages/man1/perf-record.1.html#:~:text=%2D%2Dswitch%2Doutput%2Devent">perf record’s built-in <code>--switch-output-event</code></a>:
-a trigger latency on the order of hundreds of microseconds forces a
-large PT buffer in order to capture the period we’re actually
-interested in, and copying that large buffer slows down everything.</p>
-
-<h2 id="is-this-documented">Is this documented?</h2>
-
-<p>Who knows? (Who cares?) These tricks fulfill a common need in quick
-hacks, and I’ve been using (and rediscovering) them for years.</p>
-
-<p>I find tightly scoped tools that don’t try to generalise have an ideal
-insight:effort ratio.  Go write your own!</p>
-
-<p><hr style="width: 50%" /></p>
-<div class="footnotes" role="doc-endnotes">
-  <ol>
-    <li id="fn:more-robust" role="doc-endnote">
-      <p>I ended up generating passing a string suffixed with a UUIDv4 as a sentinel: <code>llvm-addr2line</code> just spits back any line that doesn’t look addresses.  Alexey Alexandrov on the profiler developers’ slack noted that <code>llvm-symbolizer</code> cleanly terminates each sequence of frames with an empty line. <a href="#fnref:more-robust" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>

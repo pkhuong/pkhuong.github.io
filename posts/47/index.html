@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2013/12/19/so-you-want-to-write-an-lp-solver/">So you want to write an LP solver (a.k.a. My Little LP: Cholesky Is Magic)</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/01/16/a-whirlwind-introduction-to-decomposition-methods-in-discrete-optimisation/">A whirlwind introduction to decomposition methods in discrete optimisation</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Dec
+Jan
   
-19th, 
-2013
+16th, 
+2014
 
 
 
 
         
-         | <a href="/Blog/2013/12/19/so-you-want-to-write-an-lp-solver/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2013/12/19/so-you-want-to-write-an-lp-solver/"
+         | <a href="/Blog/2014/01/16/a-whirlwind-introduction-to-decomposition-methods-in-discrete-optimisation/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/01/16/a-whirlwind-introduction-to-decomposition-methods-in-discrete-optimisation/"
 	      >Comments</a>
         
         
@@ -117,584 +117,632 @@ Dec
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><em>In which a <a href="http://www.evanmiller.org/mathematical-hacker.html">Lisp hacker exhibits his ignorance of applied mathematics</a> ;)</em></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>TL;DR: Optimisers compose, satisfiers don’t.</p>
 
-<p>Linear programming (LP) is awesome.  I based my PhD work on solving
-LPs with millions of variables and constraints… instead of integer
-programs a couple orders of magnitude smaller.  However, writing LP
-solvers is an art that should probably be left to experts, or to those
-willing to dedicate a couple years to becoming one.</p>
+<p>One rainy day at Sophia-Antipolis,
+<a href="http://www.constraint-programming.com/people/regin/">a researcher</a>
+told me a story about an optimisation software company.  They’d looked
+into adding explicit support for Dantzig-Wolfe decomposition, but
+market research showed there were a few hundred potential users at
+most: too few people are familiar enough with decomposition methods to
+implement new ones.  The problem is, the strength of these methods is
+that they are guided by domain expertise; useful decompositions are
+custom-made for the target problem, and thus obviously novel.  What
+this story tells me is that we, researchers in decomposition, are
+really bad communicators.</p>
 
-<p>That being said, if one must write their own, an interior point method
-(IPM) is probably the best approach.  This post walks through the
-development of a primal affine scaling method; it doesn’t guarantee
-state-of-the-art practical or theoretical efficiency (it’s not even
-polynomial time), but is simple and easy to understand.</p>
+<p>It’s not like these methods are new or ill understood.  The theory on
+how to break up optimisation problems into smaller ones (for Benders
+and Dantzig-Wolfe decompositions, at least) was fully developed in the
+fifties and sixties.  It’s the same theory that backs state-of-the-art
+solvers for planet-scale planning problems today.  Surprisingly, it
+seems that a single undergraduate or graduate course in optimisation
+methods does not suffice for expertise to trickle down to the wider
+computer science and management communities.</p>
 
-<p>I think interior point methods suffer from an undeserved bad
-reputation: they only <em>seem</em> complicated compared to the nice
-combinatorial Simplex method.  That would explain why I regularly
-(once or twice a year) see hackers implement a (classic!) simplex
-method, but rarely IPMs.</p>
+<p>The divide seems particularly wide with the constraint programming
+(CP) community (despite the work of
+<a href="http://ba.gsia.cmu.edu/jnh/">Hooker</a>,
+<a href="http://users.encs.concordia.ca/~chvatal/">Chvátal</a> and
+<a href="http://www.zib.de/en/people/staff/member.html?mail=achterberg">Achterberg</a>
+[that I know of]).  Perhaps this explains why the
+<a href="http://www.vpri.org/pdf/m2012003_coopsolv.pdf">VPRI’s efforts on cooperating constraint solvers</a>
+are not informed by decomposition methods at all.  Then again, it’s
+not just decomposition people who exchange too little with the CP
+community, but all of mathematical programming.  I only single out
+decomposition because our tools are general enough to work with CP.
+We write and sometimes think in mixed integer linear programming
+(MILP) terms, but mostly for theoretical reasons; implementations may
+(useful ones usually do) include specialised solvers for combinatorial
+problems that only happen to be presented as MILP.</p>
 
-<p>The problem is that simplex only works because world-class
-implementations are marvels of engineering: it’s almost like their
-performance is in spite of the algorithm, only thanks to
-coder-centuries of effort.  Worse, textbooks usually present the
-classic simplex method (the dark force behind simplex tableaux) so
-that’s what unsuspecting hackers implement.  Pretty much no one uses
-that method: it’s slow and doesn’t really exploit sparsity (the fact
-that each constraint tends to only involve a few variables).  Avoiding
-the trap of the classic simplex is only the first step.  Factorising
-the basis — and updating the factors — is essential for efficient
-revised simplex methods, and some clever tricks really help in
-practice (packages like
-<a href="http://web.stanford.edu/group/SOL/software/lusol/">LUSOL</a> mostly
-take care of that); pivot selection (pricing) is fiddly but has a huge
-impact on the number of iterations — never mind degeneracy, which
-complicates everything; and all that must be balanced with minimising
-work per iteration (which explains the edge of dual simplex: there’s
-no primal analogue to <s>devex</s> normalised dual steepest edge
-pricing).  There’s also presolving and crash basis construction, which
-can simplify a problem so much that it’s solved without any simplex
-pivot.  Despite all this sophistication, only 
-<a href="http://www.cs.yale.edu/homes/spielman/Research/SimplexStoc.pdf">recent theoretical advances</a>
-protect against instances going exponential.</p>
+<p>That’s why I spent three months in Nice: I explored how to
+cross-pollinate between CP and decomposition by developing a
+<a href="http://en.wikipedia.org/wiki/Travelling_salesman_problem">TSP</a> solver
+(it’s a simple problem and
+<a href="http://www.math.uwaterloo.ca/tsp/concorde.html">Concorde</a> is an
+impressive baseline).  I have a lot to say about that, certainly more
+than can fit in this buffer.  In this first post of many, I hope to
+communicate an intuition on why Dantzig-Wolfe and Benders
+decomposition work, to relate these methods to work from the
+SAT/CSP/CP community, and to show how to decompose finite domain
+problems.</p>
 
-<p><small>Sidenote: Vasek Chvatal’s
-<a href="http://books.google.ca/books/about/Linear_Programming.html?id=DN20_tW_BV0C&amp;redir_esc=y">Linear Programming</a>
-takes a view that’s closer to the revised simplex algorithm and seems
-more enlightening to me.  Also, it’s been a while since I read about pricing
-in the simplex, but the dual simplex definitely has a computational edge for
-obscure reasons; <a href="http://d-nb.info/978580478/34">this dissertation</a> might have 
-interesting details.</small></p>
+<h1 id="but-first-duality">But first, duality</h1>
 
-<p>There’s also the learning angle.  My perspective is biased (I’ve been
-swimming in this for 5+ years), but I’d say that implementing IPMs
-teaches a lot more optimisation theory than implementing simplex
-methods.  The latter are mostly engineering hacks, and relying on
-tableaux or bases to understand duality is a liability for large scale
-optimisation.</p>
+<p>I noted earlier that we work in MILP terms because it gives a sound
+theoretical basis for decomposition methods.  That basis is duality,
+especially linear programming duality.</p>
 
-<p>I hope to show that IPMs are the better choice, with respect to both the
-performance of naïve implementations and the insights gained by coding
-them, by deriving a decent implementation from an intuitive starting
-point.</p>
+<p>In optimisation, duality refers to the relationship between two
+problems a primal problem (P) and its dual (D).  I’ll assume that
+we’re interested in solving (P), a minimisation problem (minimise
+badness, e.g., costs); (D) is then a maximisation problem (maximise
+goodness, e.g., profits).  These problems are such that the minimal
+(least) value for (P) is always higher or equal to the maximal
+(greatest) value for (D).</p>
 
-<h1 id="affine-scaling-in-30-minutes">Affine scaling in 30 minutes</h1>
+<p><img class="center" src="/images/2014-01-16-a-whirlwind-introduction-to-decomposition-methods-in-discrete-optimisation/primal-dual.jpg" /></p>
 
-<p>I’ll solve linear problems of the form
-\(\min\sb{x} cx\)
+<p>So, even if (P) and (D) are so hard that we can only solve them
+heuristically, a pair of feasible solutions always brackets the
+optimal value for the primal problem (P).  \(\tilde{x}\), the feasible
+solution for (P) might not be optimal, but it’s still a solution.  In
+turn, \(\tilde{y}\), the dual feasible solution, gives us a lower
+bound on the optimal value: we don’t know the optimal value, but we
+know it can’t be lower than that of any solution for (D).  We can then
+compare the value of \(\tilde{x}\) to this lower bound.  If they’re
+close enough, we stop looking; otherwise we use both primal and dual
+information to refine our solutions and tighten the bracket (close the
+gap).</p>
+
+<p>The primal solution is useful: it’s a feasible plan.  However, the
+dual solution is often where we gain insights into the problem.  For
+example, if I wish to minimise my carbon footprint, it’s clear that
+driving less will help me.  However, what is the impact of allowing
+myself more commuting time? and how does that compare with simply
+shortening the distance between my home and work?  That’s what dual
+solutions tell us: they estimate the impact of (the right-hand side
+of) each constraint on the objective value.</p>
+
+<p>Linear programs are a special case: they have a “strong” duality, in
+that we can easily write down an exact dual program for any primal
+linear program.  The dual is exact because its maximal value matches
+the minimal value of the primal; there is no duality gap.  This dual
+is another linear program that’s exactly as large as the primal, and
+the dual of the dual is… the initial primal program.</p>
+
+<p>Decomposition exploits this relationship to extract information about
+simpler subproblems, and translate that into a refined approximation
+of the complete problem.  It would be disappointing if that only
+worked on linear programs, and this is where Lagrangian duality comes
+in.</p>
+
+<p>You may remember Lagrange multipliers from calculus courses. That’s
+exactly what I’m talking about.  For reasons both practical and
+theoretical, I’ll assume that we have a (sub)problem that’s simpler
+once a few linear (affine) constraints are removed, i.e. something
+like 
+\(\min\sb{x} z(x)\)
 subject to
-\(Ax = b\)
-\(l \leq x \leq u.\)</p>
+\(Ax \leq b,\)
+\(x\in X.\)</p>
 
-<p>I will assume that we already have a feasible point that is strictly
-inside the box \([l, u]\) and that <em>A</em> has full row rank.  Full rank
-doesn’t always pan out in practice, but that’s a topic for another
-day.</p>
+<p>This form is general; the objective function \(z\) need only be
+convex and the feasible set \(X\) is arbitrary.</p>
 
-<p>If it weren’t for the box constraint on <em>x</em>, we would be minimising a
-smooth function subject to affine equalities.  We could then easily
-find a feasible descent direction by projecting \(-c\) (the opposite
-of the gradient) in the nullspace of <em>A</em>, i.e., by solving the linear
-equality-constrained least squares
-\(\min\sb{d} \|(-c)-d\|\sb{2}\)
+<p>Lagrangian duality says that we can relax this problem into
+\(\min\sb{x\in X} z(x) + \lambda(Ax-b),\) where \(\lambda\) is any
+vector of non-negative multipliers for each row (constraint) in
+\(A\).  I find such subproblems interesting because minimising over
+\(X\) can be easy with a specialised procedure, but hard as a linear
+program.  For example, \(X\) could represent spanning trees for a
+graph.  That’s how the
+<a href="http://mat.gsia.cmu.edu/classes/mstc/relax/node5.html">one-tree relaxation</a>
+for the TSP works.  Once you remove an arbitrary “one-node” from a
+Hamiltonian cycle, the remaining Hamiltonian path is a special kind of
+spanning tree: the degree of all but two nodes is two, and the
+remaining two nodes are endpoints (would be connected to the
+one-node).  The one-tree relaxation dualises (relaxes into the
+objective function) the constraint that the degree of each node be at
+most two, and solves the remaining minimum spanning tree problem for
+many values of \(\lambda\).</p>
+
+<p>The one-tree subproblem, and Lagrangian subproblems in general,
+is a relaxation because any optimal solution to this problem is a
+lower bound for the optimal value of the initial problem.</p>
+
+<p>To show this, we first notice that the feasible set of the subproblem
+is a superset of that of the initial problem: we only removed a set of
+linear constraints.  Moreover, for any feasible solution \(\bar{x}\)
+for the initial problem,
+\(z(\bar{x}) + \lambda(A\bar{x}-b) \leq z(\bar{x}):\)
+\(A\bar{x} \leq b\), i.e., \(A\bar{x}-b \leq 0\), and
+\(\lambda\geq 0\).  In particular, that is true if \(\bar{x}\) is
+an optimal solution to the initial problem.  Obviously, an optimal
+solution to the relaxed subproblem must be at least as good as
+\(\bar{x}\), and the optimal value of the subproblem is a lower
+bound for that of the initial problem.</p>
+
+<p>This relation between optimal solutions for the initial problem and
+for the relaxed subproblem is true given any \(\lambda\geq 0\).
+However, it’s often useless: bad multipliers (e.g., \(\lambda = 0\))
+lead to trivially weak bounds.  The Lagrangian dual problem with
+respect to \(Ax \leq b\) is to maximise this lower bound:
+\(\max\sb{\lambda\geq 0} \min\sb{x\in X} F(\lambda, x),\) where
+\(F(\lambda, x) = z(x) + \lambda(Ax-b) = z(x) + \lambda Ax - \lambda
+b.\)</p>
+
+<p>Again, we don’t have to maximise this dual exactly.  As long as the
+minisation subproblem is solved to optimality, we have a set of lower
+bounds; we only have to consider the highest lower bound.  Maximising
+this Lagrangian dual, given an oracle that solves the linearly
+penalised subproblem, is an interesting problem in itself that I won’t
+address in this post.  The important bit is that it’s doable, if only
+approximately, even with very little storage and computing power.</p>
+
+<p>There’s some nifty theoretical results that tell us that, when
+\(z(x)\) is a linear function, maximising the Lagrangian dual
+function is equivalent to solving the linear programming dual of
+\(\min z(x)\)
 subject to
-\(Ad = 0,\)
-e.g. with LAPACK’s <a href="http://www.netlib.org/lapack/lug/node28.html">xGGLSE</a>.</p>
+\(Ax \leq b,\)
+\(x\in \textrm{conv}(X),\)
+where \(\textrm{conv}(X)\) is the convex hull of \(X\).</p>
 
-<p>The problem with this direction is that it doesn’t take into account
-the box constraints.  Once some component of <em>x</em> is at its bound, we
-can’t move past that wall, so we should try to avoid getting too close
-to any bound.</p>
+<p><img class="center" src="/images/2014-01-16-a-whirlwind-introduction-to-decomposition-methods-in-discrete-optimisation/conv-x.jpg" /></p>
 
-<p>Interior point methods add a logarithmic penalty on the distance
-between <em>x</em> and its bounds; (the gradient of) the objective function
-then reflects how close each component of <em>x</em> is to its lower or upper
-bound.  As long as <em>x</em> isn’t directly on the border of the box, we’ll
-be able to make a non-trivial step forward without getting too close
-to that border.</p>
+<p>This is a relaxation (the convex hull is superset of \(X\)), but a
+particularly tight one.  For example, if \(X\) is a finite set,
+optimising a linear function over \(\textrm{conv}(X)\) is equivalent
+to doing so over \(X\) itself.  Sadly, this doesn’t hold anymore
+once we add the linear constraint \(Ax \leq b\) <em>after taking the
+convex hull</em>, but still gives an idea of how strong the relaxation can
+be.</p>
 
-<p>There’s a similar interpretation for simpler primal affine scaling
-methods we’ll implement here,
-but I prefer the original explanation.  These methods rescale the
-space in which we solve for <em>d</em> so that <em>x</em> is always far from its
-bounds; rescaling the direction back in the original space means that
-we’ll tend to move more quickly along coordinates that are far from
-their bounds, and less for those close to either bound.  As long as
-we’re strictly inside the box, the transformation is meaningful and
-invertible.</p>
+<p>One key detail here is that the optimality of \(x\) depends on
+\(\lambda\), \(z\), \(X\) and \(A\), but not on \(b\): once
+we have a pair \((\lambda\sp{\star}, x\sp{\star})\) such that
+\(x\sp{\star}\) is minimal for \(F(\lambda\sp{\star},\cdot)\),
+their objective value is always a valid lower bound for the initial
+problem, regardless of the right-hand side \(b\).  Thus, it make
+sense to cache a bunch of multiplier-solution pairs: whenever \(b\)
+changes, we only need to reevaluate their new objective value to
+obtain lower bounds for the modified problem (and interesting pairs
+can serve to warm start the search for better maximising multipliers).</p>
 
-<p><small>It’s a primal method because we only manipulate primal
-variables; dual methods instead work with the dual variables
-associated with the linear constraints. Primal-dual methods
-work on both sets of variables at once.</small></p>
+<h1 id="intermission">Intermission</h1>
 
-<p>This sketch might be useful.  <em>x</em> is close to the left-hand side
-bound, and, after projection in the nullspace, <em>d</em>
-quickly hits the border.  With scaling, <em>d</em> is more vertical, and
-this carries to the unscaled direction.</p>
+<h2 id="why-optimisation-when-satisfaction-is-hard-enough">Why optimisation, when satisfaction is hard enough?</h2>
 
-<p><img class="center" src="/images/2013-12-19-so-you-want-to-write-an-lp-solver/affine-scaling-1.jpg" /></p>
+<p>Because I’m a heartless capitalist.  (I find it interesting how
+economists sometimes seem overly eager to map results based on strong
+duality to the [not obviously convex] world.)</p>
 
-<p>The descent direction may naturally guide us away from a close-by
-bound; scaling is then useless.  However, each jump away from that
-bound makes the next longer, and such situations resolve themselves
-after a couple iterations.</p>
+<p>Seriously, because optimisation composes better than satisfaction.
+For example, imagine that we only had a routine to enumerate elements
+of \(X\).  There’s not a lot we can do to optimise over \(X\)
+(when you seriously consider a British Museum search…), or even just
+to determine if the intersection of \(X\) and \(Ax \leq b\) is empty.</p>
 
-<p>Formally, let
-\(s = \min\\{x-l, u-x\\} &gt; 0\)
-be the slack vector (computed element wise) for the distance from <em>x</em>
-to its bounds.  We’ll just scale <em>d</em> and <em>c</em> elementwise by <em>S</em>
-(<em>S</em> is the diagonal matrix with the elements of <em>s</em> on its diagonal).
-The scaled least square system is
-\(\min\sb{d\sb{s}} \|(-Sc)-d\sb{s}\|\)
-subject to
-\(ASd\sb{s} = 0.\)</p>
+<p>I’ve hinted as to how we can instead exploit an optimisation routine
+over \(X\) to optimise over an outer approximation of that
+intersection.  It’s not exact, but it’s often close enough; when it
+isn’t, that approximation is still useful to guide branch-and-bound
+searches.  A satisfaction problem is simply an optimisation problem
+with \(z(x) = 0\).  Whenever we have a relaxed solution with a
+strictly positive objective value, we can prune a section of the search
+space; at some point we either find a feasible solution or prune away
+all the search space.  Thus, even for pure satisfaction problems, the
+objective function is useful: it replaces a binary indicator (perhaps
+feasible, definitely infeasible) with a continuous one (higher values
+for less clearly feasible parts of the search space).</p>
 
-<p>Now that we have a descent direction \(d=Sd\sb{s}\), we only
-have to decide how far along to go in that direction.  We determine
-the limit, <em>r</em>, with a ratio test.  For each coordinate, look at
-\(d\sb{i}\): if it’s zero, this coordinate doesn’t affect the limit;
-if it’s negative, the limit must be at most \((l-x)\sb{i}/d\sb{i}\);
-if it’s positive, the limit is at most \((u-x)\sb{i}/d\sb{i}\).  We
-then take the minimum of these ratios.</p>
-
-<p>If the minimum doesn’t exist (i.e., \(r=\infty\)), the problem is
-unbounded.</p>
-
-<p>Otherwise, we could go up to \(x+rd\) to improve the solution
-while maintaining feasibility.  However, we want to stay strictly
-inside the feasible space: once we hit a bound, we’re stuck there.
-That’s why we instead take a slightly smaller step, e.g., \(0.9r\).</p>
-
-<p>This drawing shows what’s going on: given <em>d</em>, <em>r</em> takes us exactly to
-the edge, so we take a slightly shorter step.  The new solution is
-still strictly feasible, but has a better objective value than the previous
-one.  In this case, we’re lucky and the new iterate \(x\sp{\prime}\)
-is more isotropic than the previous one; usually, we slide closer
-to the edge, only less so than without scaling.
-<img class="center" src="/images/2013-12-19-so-you-want-to-write-an-lp-solver/affine-scaling-3.jpg" /></p>
-
-<p>We then solve the constrained least squares system again, with a new
-value for <em>S</em>.</p>
-
-<h2 id="finding-a-feasible-solution">Finding a feasible solution</h2>
-
-<p>I assumed that <em>x</em> is a strictly feasible (i.e., interior) solution:
-it satisfies the equality constraint \(Ax=b\) and is strictly inside
-its box \([l, u]\).  That’s not always easy to achieve; in theory,
-finding a feasible solution is as hard as optimising a linear program.</p>
-
-<p>I’ll now assume that <em>x</em> is strictly inside its box and repair it
-toward feasibility, again with a scaled least squares solution.  This
-time, we’re looking for the least norm (the system is underdetermined)
-solution of \(Ad = (b - Ax).\)</p>
-
-<p>We rescale the norm to penalise movements in coordinates that are
-already close to their bound by instead solving
-\(ASd\sb{s} = (b - Ax),\)
-for example with
-<a href="http://www.netlib.org/lapack/lug/node27.html">xGELSD</a>.</p>
-
-<p>If we move in direction \(Sd\sb{s}\) with step \(r=1\), we’ll
-satisfy the equality exactly.  Again, we must also take the box into
-account, and perform a ratio test to determine the step size; if
-\(0.9r &gt; 1\), we instead set \(r=1/0.9\) and the result is a
-strictly feasible solution.</p>
-
-<h2 id="an-initial-implementation">An initial implementation</h2>
-
-<p>I uploaded some hacktastic CL to
-<a href="https://github.com/pkhuong/cholesky-is-magic/commits/master">github</a>.
-The initial affine scaling method corresponds to
-<a href="https://github.com/pkhuong/cholesky-is-magic/tree/507231221a98929e26ab80410d7892f19c6d5bdf">this commit</a>.
-The outer loop looks at the residual \(Ax-b\) to determine whether
-to run a repair (feasibility) or optimisation iteration.</p>
-
-<p>The code depends on a few libraries for the MPS parser and on matlisp,
-and isn’t even ASDF-loadable; I just saved and committed whatever I
-defined in the REPL.</p>
-
-<p>This commit depends on a patch to matlisp’s <code>src/lapack.lisp</code> (and to
-<code>packages.lisp</code> to export <code>lapack:dgglse</code>):</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(def-fortran-routine dgglse :void
-</span><span class="line">"
-</span><span class="line">   -- LAPACK driver routine (version 3.0) --
-</span><span class="line">      Univ. of Tennessee, Univ. of California Berkeley, NAG Ltd.,
-</span><span class="line">      Courant Institute, Argonne National Lab, and Rice University
-</span><span class="line">      March 31, 1993
-</span><span class="line">      
-</span><span class="line">PURPOSE
-</span><span class="line">      DGGLSE solves the linear equality constrained least squares
-</span><span class="line">      (LSE) problem:
-</span><span class="line">
-</span><span class="line">              minimize || A*x - c ||_2   subject to B*x = d
-</span><span class="line">"
-</span><span class="line">  (m :integer :input)
-</span><span class="line">  (n :integer :input)
-</span><span class="line">  (p :integer :input)
-</span><span class="line">  (a (* :double-float) :input-output)
-</span><span class="line">  (lda :integer :input)
-</span><span class="line">  (b (* :double-float) :input-output)
-</span><span class="line">  (ldb :integer :input)
-</span><span class="line">  (c (* :double-float) :input-output)
-</span><span class="line">  (d (* :double-float) :input-output)
-</span><span class="line">  (x (* :double-float) :output)
-</span><span class="line">  (work (* :double-float) :workspace-output)
-</span><span class="line">  (lwork :integer :input)
-</span><span class="line">  (info :integer :output))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (matlisp:load-blas-&amp;-lapack-libraries)
-</span><span class="line">[...]
-</span><span class="line">CL-USER&gt; (load "read-mps.lisp")
-</span><span class="line">T
-</span><span class="line">CL-USER&gt; (load "standard-form.lisp")
-</span><span class="line">T
-</span><span class="line">CL-USER&gt; (load "affine-scaling.lisp")
-</span><span class="line">T</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>MPS is a very old (punchcard-oriented) format to describe linear and
-mixed integer programs.  The parser mostly works (the format isn’t
-very well specified), and <code>standard-form.lisp</code> converts everything to
-our standard form with equality constraints and a box around decision
-variables.</p>
-
-<p>I will test the code on a couple LPs from
-<a href="http://www.netlib.org/lp/data/readme">netlib</a>, a classic instance set
-(I think the tarball in
-<a href="http://www.numerical.rl.ac.uk/cute/netlib.html">CUTEr</a> is OK).</p>
-
-<p>AFIRO is a tiny LP (32 variables by 28 constraints, 88 nonzeros).
-Good news: the program works on this trivial instance and finds the
-optimum (the relative difference with the reference value is 7e-6).
-The first four “repair” iterations find a feasible solutions, and 11
-more iterations eventually get to the optimum.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-<span class="line-number">31</span>
-<span class="line-number">32</span>
-<span class="line-number">33</span>
-<span class="line-number">34</span>
-<span class="line-number">35</span>
-<span class="line-number">36</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (defparameter *affine* (make-affine-state 
-</span><span class="line">                                 (to-standard-form
-</span><span class="line">                                  (read-mps-file "/Users/pkhuong/mps-reader/netlib/afiro"))))
-</span><span class="line">*AFFINE*
-</span><span class="line">CL-USER&gt; (time (affine-scaling *affine*))
-</span><span class="line">   0: Repair:     832.88     ...   567.67       827.27    
-</span><span class="line">   1: Repair:     827.27     ...   618.03       794.68    
-</span><span class="line">   2: Repair:     794.68     ...   691.33       586.30    
-</span><span class="line">   3: Repair:     586.30     ...   552.10      1.59378d-13
-</span><span class="line">   4: Optimise:  -20.296     ...   148.53      -90.318    
-</span><span class="line">   5: Optimise:  -90.318     ...   1414.9      -246.98    
-</span><span class="line">   6: Optimise:  -246.98     ...   11350.      -446.35    
-</span><span class="line">   7: Optimise:  -446.35     ...   56.016      -452.73    
-</span><span class="line">   8: Optimise:  -452.73     ...   13.263      -461.82    
-</span><span class="line">   9: Optimise:  -461.82     ...  0.85664      -463.97    
-</span><span class="line">  10: Optimise:  -463.97     ...   4.20034d-2  -464.50    
-</span><span class="line">  11: Optimise:  -464.50     ...   5.00704d-3  -464.72    
-</span><span class="line">  12: Optimise:  -464.72     ...   1.31850d-4  -464.74    
-</span><span class="line">  13: Optimise:  -464.74     ...   1.40724d-5  -464.75    
-</span><span class="line">  14: Optimise:  -464.75     ...   9.34845d-7  -464.75    
-</span><span class="line">Evaluation took:
-</span><span class="line">  0.021 seconds of real time
-</span><span class="line">  0.021653 seconds of total run time (0.014447 user, 0.007206 system)
-</span><span class="line">  104.76% CPU
-</span><span class="line">  34,228,752 processor cycles
-</span><span class="line">  1,346,800 bytes consed
-</span><span class="line">  
-</span><span class="line">-464.7498078036151d0
-</span><span class="line">#&lt;MATLISP:REAL-MATRIX  51 x 1
-</span><span class="line">    80.000     
-</span><span class="line">    25.500     
-</span><span class="line">    54.500     
-</span><span class="line">    84.800     
-</span><span class="line">     :
-</span><span class="line">    80.424     &gt;
-</span><span class="line">6.662821645122319d-13</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>I also tested on ADLITTLE, another tiny instance (97x57, 465 nz): 48
-iterations, 0.37 seconds total.</p>
-
-<p>AGG is more interesting, at 163x489 and 2541 nz; that one took 156
-iterations and 80 seconds (130% CPU, thanks to Apple’s parallel BLAS).
-Finally, FIT1D is challenging, at 1026x25 and 14430 nz; that one took
-100 seconds and the final objective value was off by .5%.</p>
-
-<p>All these instances are solved in a fraction of a second by
-state-of-the-art solvers.  The next steps will get us closer to a
-decent implementation.</p>
-
-<h1 id="first-simplify-the-linear-algebra">First, simplify the linear algebra</h1>
-
-<p>The initial implementation resorted to DGGLSE for all least squares
-solves.  That function is much too general.</p>
-
-<p>I
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/ecb6b58362f5658eaa4184292022f4a6691384dd">changed the repair phase’s least squares to a GELSY</a>
-(GELSD isn’t nicely wrapped in matlisp yet).</p>
-
-<p>We can do the same for the optimisation phase’s constrained least squares.
-Some doodling around with Lagrange multipliers shows that the solution
-of
-\(\min\sb{x} \|x-c\|\sb{2}\sp{2}\)
-subject to
-\(Ax = 0\)
-is
-\(x = A\sp{t}(AA\sp{t})\sp{-1}Ac - c.\)</p>
-
-<p>This is a series of matrix-vector multiplications and a single linear
-solve,
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/d17d65e96686bc6334b5c524d54b1359ec1e1513">which I perform with GELSY for now</a>: 
-we need the numerical stability because, when we’re close to optimality, the system is really badly conditioned and
-regular linear solves just crash.</p>
-
-<p>Both linear algebra microoptimisations are in
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/df036c9e37420df532739a66bc53eee82b209f26">this commit</a>.</p>
-
-<p>ADLITTLE becomes about five times faster, and FIT1D now runs in 2.9
-seconds (instead of 100), but AGG eventually fails to make progress:
-we still have problems with numerical stability.</p>
-
-<h1 id="now-the-magic-sauce">Now, the magic sauce</h1>
-
-<p>Our numerical issues aren’t surprising: we work with a scaled matrix
-\(AS\), where the diagonal of \(S\) reflects how close \(x\) is
-to its bounds.  As we get closer to an optimal solution, some of
-\(x\) will converge to the bounds, and some to a value in-between:
-the limit is a basic solution.  We then take this badly conditioned
-matrix and multiply it by its own transpose, which squares the
-condition number! It’s a wonder that we can get any useful bit from
-our linear solves.</p>
-
-<p>There’s a way out: the normal matrix \(AA\sp{t}\) is not only
-symmetric, but also positive (semi)definite (the full rank assumption
-isn’t always satisfied in practice).  This means we can go for a
-Cholesky \(LL\sp{t}\) (or \(LDL\sp{t}\)) factorisation.</p>
-
-<p>We’re lucky: it turns out that Cholesky factorisation reacts to our
-badly conditioned matrix in a way that is safe for Newton steps in
-IPMs (for reasons I totally don’t understand).  It also works for us.
-I guess the intuition is that the bad conditioning stems from our
-scaling term.  When we go back in the unscaled space, rounding errors
-have accumulated exactly in the components that are reduced into
-nothingness.</p>
-
-<p>I used Cholesky factorisation with LAPACK’s
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/c7214f820c933bea5627f75792cdb32cbf72ffb2">DPOTRF and DPOTRS for the optimisation projection</a>,
+<p>I said optimisation <em>composes</em> better because decomposition also works
+for the intersection of sets defined by oracles.  For example, we can
+satisfy over the intersection of finite sets \(X\) and
+\(Y\) by relaxing the linear constraint in
+\(x = y,\)
+\(x\in X, y\in Y.\)
+The relaxed subproblem is then
+\(\min\sb{(x,y)\in X\times Y} \lambda(x-y),\)
+which we can separate (linear objectives are separable) into
+two optimisation subproblems:
+\(\min\sb{x\in X} \lambda x,\)
 and
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/4d80ad9f409f27faf74e6ae964ac19f5bcfff189">for repair iterations as well</a>.</p>
+\(\min\sb{y\in Y} -\lambda y.\)
+Even if the initial problem is one of satisfaction, Lagrangian
+decomposition considers each finite set in the intersection
+through independent minimisation: components communicate via their
+objective functions.</p>
 
-<p>LAPACK’s factorisation may fail on semidefinite matrices;
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/f0668c9b4e5e622fc60df9c770acb3a96e3ba4d9">I call out to GELSY when this happens</a>.</p>
+<h2 id="but-i-dont-deal-with-numbers">But I don’t deal with numbers</h2>
 
-<p>To my eyes, this yields the first
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/baf4168e0718ed3ef6a2bd0fb4e58cf210e7976a">decent commit</a>.</p>
+<p>All this can also work with categorical data; we just have to do what
+no CP practicioner would ever do and map each choice to a binary (0/1)
+variable.  When, in the constraint program, a variable \(x\) can
+take values \({a, b, c}\), we express that in integer programs
+with a triplet of variables:</p>
 
-<p>The result terminates even closer to optimum, more quickly.  AGG stops
-after 168 iterations, in 26 seconds, and everything else is slightly
-quicker than before.</p>
+<ul>
+  <li>\(x\sb{a} = 1\) iff \(x=a\) (0 otherwise),</li>
+  <li>\(x\sb{b} = 1\) iff \(x=b\),</li>
+  <li>\(x\sb{c} = 1\) iff \(x=c\),</li>
+</ul>
 
-<h1 id="icing-on-the-cake">Icing on the cake</h1>
+<p>and a constraint \(\sum\sb{i\in {a,b,c}} x\sb{i} = 1\).</p>
 
-<p>I think the code is finally usable: the key was to reduce everything
-to PD (positive definite) solves and Cholesky factorisation.  So far,
-we’ve been doing dense linear algebra with BLAS and LAPACK and
-benefitted from our platform’s tuned and parallel code.  For small (up
-to a hundred or so constraints and variables) or dense instances, this
-is a good simple implementation.</p>
+<p>We can perform this mapping around each subproblem (e.g., optimisation
+over \(X\)).  On entry, the coefficient for \(x\sb{a}\) in the
+linear objective corresponds to the impact on the objective function
+of letting \(x=a\).  On exit, \(x=c\) becomes \(x\sb{c}=1\),
+\(x\sb{a}=0\) and \(x\sb{b}=0\), for example.</p>
 
-<p>We’ll now get a 10-100x speedup on practical instances.  I already
-noted, en passant, that linear programs in the wild tend to be very
-sparse.  This is certainly true of our four test instances: their
-nonzero density is around 1% or less.  Larger instances tend to be
-even sparser.</p>
+<h1 id="benders-decomposition">Benders decomposition</h1>
 
-<p>There’s been a lot of work on sparse PD solvers.  Direct sparse
-linear solvers is another complex area that I don’t think should be
-approached lightly: expensive supercomputers have been solving sparse
-PD linear systems for a couple decades, and there’s some really crazy
-code around.  I’ve read reports that, with appropriate blocking and
-vectorisation, a sparse matrix can be factored to disk at 80% peak
-FLOP/s.  If you’re into that, I’m told there are nice introductions,
-like <a href="http://www.cise.ufl.edu/research/sparse/CSparse/">Tim Davis’s book</a>,
-which covers a didactical yet useful implementation of sparse Cholesky in
-2000 LOC.</p>
+<p>Benders decomposition is the mathematical programming equivalent of
+clause learning in SAT solvers, or explanation-based search in CP.</p>
 
-<p>I decided to go with CHOLMOD from
-<a href="http://www.cise.ufl.edu/research/sparse/SuiteSparse/">SuiteSparse</a>, a
-mixed GPL/LGPL library.  CHOLMOD implements state of the art methods:
-when all its dependencies are available, it exposes parallelisation
-and vectorisation opportunities to the BLAS (thanks to permutations
-computed, e.g., by METIS) and exploits Intel’s TBB and Nvidia’s CUDA.
-It’s also well designed for embedding in other programs; for example,
-it won’t <code>abort(3)</code> on error (I’m looking at you, LLVM), and includes
-data checking/printing routines that help detect FFI issues.  Its
-interface even helps you find memory leaks!  Overall, it’s a really
-refreshing experience compared to other academic code, and I wish all
-libraries were this well thought out.</p>
+<p>Clause learning improves straight backtracking by extracting
+information from infeasible branches: what’s a small (minimal is
+NP-hard) set of assignments (e.g. \(x=\mathtt{false}\) and
+\(y=\mathtt{false}\)) that causes this infeasibility?  The problem
+is then updated to avoid this partial assignment.</p>
 
-<p>I built only the barest version on my Mac and linked it with a
-<a href="https://github.com/pkhuong/cholesky-is-magic/blob/f62571572b66f61e069ed994415960e5e2b309bd/wrapper.c">wrapper</a>
-to help
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/f62571572b66f61e069ed994415960e5e2b309bd">my bindings</a>.
-I had to build the dynamic library with <code>-Wl,-all_load</code> on OS X to
-preserve symbols that only appear in archives; <code>-Wl,--whole-archive</code>
-should do it for gnu ld.  (I also bound a lot of functions that I
-don’t use: I was paying more attention to the TV at the time.)</p>
+<p>Explanations in CP are similar: when a global constraint declares
+infeasibility, it can also provide an explanation, a small set of
+assignments that must be avoided.  This, combined with explanations
+from other constraints, can trigger further propagation.</p>
 
-<p>CHOLMOD includes functions to simultaneously multiply a sparse matrix with
-its transpose and factorise the result.
-<a href="https://github.com/pkhuong/cholesky-is-magic/blob/de30e45634670e01f39e55a3735637347e251850/sparse-cholesky.lisp#L376">Function <code>solve-dense</code></a>
-shows how I use it to solve a dense PD system.  It’s a three-step
-process:</p>
+<p>Benders decomposition generalises this feasibility-oriented view for
+the optimisation of problems with a hierarchical structure.  I think
+the parallel has been known for a while, just not popularised. John
+Hooker proposed logic-based Benders to try and strengthen the link
+with logic programming, but I don’t know who (if anyone) else works in
+that direction.</p>
 
-<ol>
-  <li>Analyse the nonzero pattern of the constraint matrix to determine
-an elimination order (trivial for a dense matrix);</li>
-  <li>Compute the normal matrix and factor it according to the analysis
-stored in the factor struct;</li>
-  <li>Solve for that factorisation.</li>
-</ol>
+<p>The idea behind Benders decomposition is to partition the decision
+variables in two sets, strategic variables \(y\), and tactical ones
+\(x\).  The decomposition attempts to determine good values for
+\(y\) without spending too much time on \(x\), which are left for
+the subproblem.  This method is usually presented for mixed integer programs
+with continuous tactical (\(x\)) variables, but I’ll instead present the
+generalised form, which seems well suited to constraint programming.</p>
 
-<p>This is really stupid: I’m not even dropping zero entries in the dense
-matrix.  Yet,
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/0095354735a35f11ccb8aaa6f41b8e6253ab87bd">it suffices</a>
-to speed up AGG from 26 to 14 seconds!</p>
+<p>We start with the initial integrated formulation
+\(\min\sb{(x,y)\in S} cx + fy,\)
+which we reformulate as
+\(\min\sb{(x,y)} cx + fy,\)
+\(y\in Y,\)
+\(x\in X(y).\)</p>
 
-<p>It’s clear that we need to preserve the constraint matrix <em>A</em> in a
-sparse format.  CHOLMOD has a function to translate from the trivial
-triplet representation (one vector of row indices, another of column
-indices, and another of values) to the more widely used compressed
-representation.  Instances in our standard form already represent the
-constraint matrix as a vector of triplets.  We only have to
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/6bd1e48058af1c2621f94aef8c6c13ba38119c74">copy from CL to a CHOLMOD triplet struct</a>
-to exploit sparsity in Cholesky solves and in matrix-vector
-multiplications.</p>
+<p>For example, this could be a network design problem: we wish to
+determine where to build links so that all (known) communication
+demands are satisfied at least total cost.</p>
 
-<p>We now solve AGG in 0.83 seconds and FIT1D in 0.95.  I think we can
-expect runtimes of one second or less for instances up to ~200x200.
-Better, we can finally hope to solve respectable LPs, like FIT2D
-(10500x26, 138018 nz, 2.3 s) or FIT1P (1677x628, 10894 nz, 14 s).</p>
+<p><img class="center" src="/images/2014-01-16-a-whirlwind-introduction-to-decomposition-methods-in-discrete-optimisation/nd.jpg" /></p>
 
-<h1 id="finishing-touches">Finishing touches</h1>
+<p>Benders decomposition then eliminates variables \(x\) from the
+reformulation.  The latter becomes the master problem
+\(\min\sb{y,z} fy + z\)
+subject to
+\(Ay = d,\)
+\(By \leq z,\)
+\(y\in Y.\)</p>
 
-<p>Our normal matrix \(ASS\sp{t}A\sp{t}\) always has the same pattern (nonzero
-locations): we only change the scaling diagonals in the middle.  Sparse
-solvers separate the analysis and factorisation steps for exactly
-such situations.  When we solve a lot of systems with the same pattern, it
-makes sense to spend a lot of time on a one-time analysis that we then
-reuse at each iteration: fancy analysis routines generate
-factors that take up less space and need fewer FLOPs to build.</p>
+<p>The two linear constraints are generated dynamically, by solving
+subproblems over \(X\).  The first corresponds directly to learned
+clauses or failure explanations: whenever an assignment for \(y\)
+happens to be infeasible, we add a linear constraint to avoid it (and
+similar assignments) in the future.  The second enables optimisation
+over \(S\).</p>
 
-<p>I do that
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/eabbc91d9a8cf38edd42b1c8ce1549c57afbcb79">here</a>.
-Our less tiny instances are almost twice as fast.  We solve FIT1P in 8
-seconds now, and even FIT2P (13525x3001, 60784 nz) in 200 seconds.</p>
+<p>The idea is to solve a Lagrangian relaxation of the (slave) subproblem
+for a given assignment \(y\sp{i}\):
+\(\min\sb{x,y} cx\)
+subject to
+\(y = y\sp{i},\)
+\(x\in X(y).\)</p>
 
-<p>I then made
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/3a489beaa77dc3f0d95ae4822dd0544819d61754">some microoptimisation to reuse storage</a>.</p>
+<p>We will relax the first equality constraint to obtain a new feasible
+set that is a relaxation (outer approximation) of \(S\):
+it only considers interactions within \(X\) and between \(X\)
+and \(Y\), but not within \(Y\) (those are handled in the master
+problem).</p>
 
-<p>Finally, I added steps that push the current solution away from
-close-by bounds.  These
-<a href="https://github.com/pkhuong/cholesky-is-magic/commit/a2c4f065da3cf8549fb3576067d64b54a6383a63">centering steps</a>
-help subsequent iterations make longer jumps toward optimality</p>
+<p>In my network design example, the unrelaxed subproblem would be a lot
+of independent shortest path problems (over the edges that are open in
+\(y\sp{i}\)).</p>
 
-<p>The last two changes shave a couple more seconds on large instances
-and gets closer to optimality on nastier ones.</p>
+<p><img class="center" src="/images/2014-01-16-a-whirlwind-introduction-to-decomposition-methods-in-discrete-optimisation/sp.jpg" /></p>
 
-<h1 id="not-quite-the-end">Not quite the end</h1>
+<p>We dualise the first constraint and obtain the Lagrangian dual
+\(\max\sb{\lambda} \min\sb{y\in\mathbb{R}\sp{m}, x\in X(y)} cx + \lambda(y-y\sp{i})\)
+or, equivalently,
+\(\max\sb{\lambda} -\lambda y\sp{i} + \min\sb{y\in\mathbb{R}\sp{m}, x\in X(y)} cx + \lambda y.\)</p>
 
-<p>I hope I managed to communicate the intuition behind primal affine
-scaling methods, and that the walkthrough helped map that intuition to
-a sparse implementation.  I also realise that the code isn’t pretty: I
-wrote it during a short marathon and tried to only make incremental
-changes.  Still, the algorithm should be more or less usable for small
-instances; more than a naïve simplex method, anyway.</p>
+<p>The network design subproblem still reduces to a lot of independent
+shortest path problems, but (with appropriate duplication of decision
+variables) forbidden edges may be taken, at additional cost per flow.</p>
 
-<p>That’s particularly true on multicore machines.  Parallelising simplex
-methods has been an area of slow research for a couple decades; the
-best work I’ve seen so far takes a huge hit by reverting to the
-classic algorithm and hopes that parallelisation can compensate for
-that initial 10-1000x slowdown.  In contrast, even our sparse method
-is already parallel: CHOLMOD automatically vectorises, parallelises,
-and offloads work to the GPU.</p>
+<p>In this example, the previous step is gratuitously convoluted: we can
+solve the unrelaxed subproblem and shortest paths can be seen as
+linear programs, so there are other ways to recover optimal
+multipliers directly.  However, this is useful for more complicated
+subproblems, particularly when the \(x = y\sp{i}\) constraint is
+difficult to handle.  Note that the slave can be reformulated (e.g.,
+with multiple clones of \(y\sp{i}\)) to simplify the Lagrangian
+subproblem.</p>
 
-<p>I’ll try to code a sparse primal-dual affine scaling method from
-scratch soon.  Primal-dual methods usually work better than pure
-primal (or dual) methods and I find their theory interesting (if
-<a href="http://discontinuity.info/~pkhuong/KKT/KKT09.jpg">a bit complicated</a>).</p>
+<p>I pointed out earlier that, given \(\bar{\lambda}\sp{i}\) and an optimal
+solution \((\bar{x}\sp{i},\bar{y}\sp{i})\) for that vector of multipliers, we
+always have a valid lower bound, regardless of the right-hand side,
+i.e., regardless of the assignment \(y\sp{i}\).</p>
 
-<p>If you liked this post, you might be interested in Stephen Boyd’s
-<a href="http://online.stanford.edu/course/convex-optimization-winter-2014">Convex optimisation course</a>.
-He’s offering it online this winter, starting January 21st.</p>
+<p>We found a first (hopefully feasible) solution by solving a restricted
+subproblem in the previous step.  The multipliers for our dualised
+constraint \(y = y\sp{i}\) explain the value associated to 
+\(y\sp{i}\), what part of \(y\sp{i}\) makes the solution to the
+restricted subproblem so bad (or good).</p>
+
+<p>That’s how we dynamically constrain \(z\).  Each time we solve the
+(updated) master problem, we get a tentative assignment for the
+strategic variables, and a lower bound for the initial problem.  We
+can then solve for \(x\in X(y\sp{i})\) to find a heuristic solution
+(or generate a feasibility cut to tell the master why the assignment
+is infeasible); if the heuristic solution is close enough to our
+current lower bound, we can stop the search.  Otherwise, we solve the
+fixed Lagrangian dual and generate a fresh optimality cut
+\(-\bar{\lambda}\sp{i}y + c\sp{i} \leq z,\)
+where \(c\sp{i} = c\bar{x}\sp{i} + \bar{\lambda}\sp{i}\bar{y}\sp{i}\):
+we update the master problem with information about why its last
+tentative assignment isn’t as good as it looked.</p>
+
+<p>It can be harder to explain infeasibility than to solve the Lagrangian
+subproblem. In that case, it suffices to have an upper bound on the
+optimal value (e.g., 0 for pure feasibility problems): when the lower
+bound is greater than the upper bound, the problem is infeasible.
+Given that the master problem also tries to minimise its total cost,
+it will avoid solutions that are infeasible if only because their
+value is too high.  The advantage of feasibility cuts is that, with
+some thinking, a single feasibility cut can forbid a lot more
+solutions than multiple optimality cuts.</p>
+
+<p>The problem with Benders decomposition is that the master mixed
+integer program gains new constraints at each iteration.  Eventually,
+its size becomes a liability.</p>
+
+<p>There are a few folk workarounds.  One is to not stop (and then
+restart) the branch-and-bound search as soon as it finds an optimal
+(for the current relaxed master problem) integer feasible assignment
+for \(y\): instead, add a new constraint to the formulation and
+resume the search (previously computed lower bounds remain valid when
+we add constraints).  Another is to drop constraints that have been
+inactive for a long while (much like cache replacement strategies);
+they can always be added back if they ever would be active again.</p>
+
+<p>Chvátal’s Resolution Search takes a different tack: it imposes a
+structure on the clauses it learns to make sure they can be
+represented compactly.  The master problem is completely different and
+doesn’t depend on solving mixed integer programs anymore.  It works
+well on problems where the difficulty lies in satisfying the
+constraints more than finding an optimal solution.  A close friend of
+mine worked on extensions of the method, and it’s not yet clear to me
+that it’s widely applicable… but there’s hope.</p>
+
+<p>Another issue is that the Benders lower bound is only exact if the
+slave subproblem is a linear program.  In the general case, the master
+problem is still useful, as a lower bounding method and as a fancy
+heuristic to guide our search, but it may be necessary to also
+branch on \(x\) to close the gap.</p>
+
+<h1 id="lagrangian-decomposition">Lagrangian decomposition</h1>
+
+<p>I believe Lagrangian decomposition, a special case of Lagrangian
+relaxation, is a more promising approach to improve constraint
+programming with mathematical programming ideas: I think it works
+better with the split between constraint propagation and search.  The
+decomposition scheme helps constraints communicate better than via
+only domain reductions: adjustments to the objective functions pass
+around partial information, e.g., “\(x\) is likely not equal to
+\(a\) in feasible/optimal solutions.”  Caveat lector, after 7 years
+of hard work, I’m probably biased (Stockholm syndrome and all that ;).</p>
+
+<p>I already presented the basic idea.  We take an initial integrated
+problem
+\(\min\sb{x\in X\cap Y} cx\)
+and reformulate it as
+\(\min\sb{(x,y)\in X\times Y} cx\)
+subject to
+\(x = y.\)
+Of course, this works for any finite number of sets in the
+intersection as well as for partial intersections, e.g., \(x\sb{0} =
+y\sb{0}\) and \(x\) and \(y\) otherwise independent.</p>
+
+<p>Dualising the linear constraint leaves the independent subproblems
+\(\min\sb{x\in X} cx+\lambda x,\)
+and
+\(\min\sb{y\in Y} -\lambda y.\)</p>
+
+<p>The two subproblems communicate indirectly, through adjustments to
+\(\lambda\)… and updating Lagrange multipliers is a fascinating
+topic in itself that I’ll leave for a later post (: The basic idea is
+that, if \(x\sb{i} = 1\) and \(y\sb{i} = 0\), we increase the
+associated multiplier \(\lambda\sb{i}\), and decrease it in the
+opposite situation: the new multipliers make the current incoherence
+less attractive.  For a first implementation, subgradient methods
+(e.g., <a href="https://projects.coin-or.org/Vol">the volume algorithm</a>) may
+be interesting because they’re so simple.  In my experience, however,
+<a href="http://books.google.ca/books?id=aSizI0n6tnsC">bundle</a> methods work
+better for non-trivial subproblems.</p>
+
+<p>When we have an upper bound on the optimal value (e.g., 0 for pure
+satisfaction problems), each new multipliers \(\lambda\) can also
+trigger more pruning: if forcing \(x = a\) means that the lower
+bound becomes higher than the known upper bound, we must have \(x
+\neq a\).  The challenges becomes to find specialised ways to perform
+such pruning (based on reduced costs) efficiently, without evaluating
+each possibility.</p>
+
+<p>Lagrangian decomposition also gives us a fractional solution to go
+with our lower bound.  Thus, we may guide branching decisions with
+fractional variables, rather than only domains.  Again, an
+optimisation-oriented view augments the classic discrete indicators of
+CP (this variable may or may not take that value) with continuous ones
+(this assignment is unattractive, or that variable is split .5/.5
+between these two values).</p>
+
+<h1 id="hybrid-mathematicalconstraint-programming">Hybrid mathematical/constraint programming</h1>
+
+<p>I believe decomposition methods are useful for constraint programming
+at two levels: to enable more communication between constraints, and
+then to guide branching choices and heuristics.</p>
+
+<p>In classic constraint programming, constraint communicate by reducing
+the domain of decision variables.  For example, given \(x \leq y\),
+any change to the upper bound for \(y\) (e.g., \(y\in [0, 5]\))
+means that we can tighten the upper bound of \(x\): \(x \leq y \leq
+5\).  This can in turn trigger more domain reduction.</p>
+
+<p>Some constraints also come in “weighted” version, e.g., \(x\sb{i}\)
+form a Hamiltonian cycle of weight (cost) at most 5, but these
+constraints still only communicate through the domain of shared
+decision variables.</p>
+
+<p>With Lagrangian decomposition, we generalise domain reduction through
+optimisation and reduced cost oracles.  For each constraint, we ask,
+in isolation,</p>
+
+<ul>
+  <li>to the optimisation oracle: given this linear objective function
+for the variables that appear in the constraint, what’s an optimal
+solution?</li>
+  <li>to the reduced cost oracle: given this objective function and
+optimal solution, what’s the impact (or a lower estimate of that
+impact, a reduced cost) on the objective value of forcing each
+variable to a different value?</li>
+</ul>
+
+<p>Adding the objective values computed by the optimisation oracle gives
+us a lower bound. If the lower bound is greater than some upper bound,
+the problem (search node) is infeasible.  Otherwise, we can use
+reduced costs to prune possibilities.</p>
+
+<p>Let’s say the difference between our current lower and upper bounds is
+\(\Delta\).  We prune possibilities by determining whether setting
+\(x=a\) increases the lower bound by more than \(\Delta\).  We can
+do this independently for each constraint, or we can go for additive
+bounding.  Additive bounding computes a (lower) estimate for the
+impact of each assignment on the objective function, and sums these
+reduced costs for all constraints.  The result is a set of valid lower
+estimates for all constraints simultaneously.  We can then scan these
+reduced costs and prune away all possibilities that lead to an
+increase that’s greater than \(\Delta\).</p>
+
+<p>The optimisation oracle must be exact, but the reduced cost oracle can
+be trivially weak (in the extreme, reduced costs are always 0)
+without affecting correctness.  Domain reduction propagators are
+simply a special case of reduced cost oracles: infeasible solutions
+have an arbitrarily bad objective value.</p>
+
+<p>Some constraints also come with explanations: whenever they declare
+infeasibility, they can also generate a small assignment to avoid in
+the future.  The mathematical programming equivalent is cut generation
+to eliminate fractional solutions.  Some very well understood problems
+(constraints) come with specialised cuts that eliminate fractional
+solutions, which seems useful in hybrid solvers.  For example, in my
+work on the TSP, I added the (redundant) constraint that Hamiltonian
+cycles must be 2-matchings.  Whenever the Lagrangian dual problem was
+solved fairly accurately, I stopped to compute a fractional solution
+(for a convexification of the discrete feasible set) that
+approximately met the current lower bound.  I then used that
+fractional solution to generate new constraints that forbid fractional
+2-matchings, including the current fractional solution.  These
+constraints increased the lower bound the next time I maximised the
+Lagrangian dual, and thus caused additional reduced cost pruning.</p>
+
+<p>The same fractional solution I used to generate integrality cuts can
+also guide branching.  There’s a lot of interesting literature on
+branching choices, in CP as well as in mathematical programming.
+Lagrangian decomposition, by computing fractional solutions and lower
+bounds, let us choose from both worlds.  Again, the lower bound is
+useful even for pure feasibility problems: they are simply problems
+for which we have a trivial upper bound of 0, but relaxations may be
+lower.  Only branching on fractional decision variables also let us
+cope better with weak domain propagators: the relaxation will
+naturally avoid assignments that are infeasible for individual
+constraints… we just can’t tell the difference between a choice that’s
+infeasible or simply uninteresting because of the objective function.</p>
+
+<h1 id="automated-cp-decomposition">Automated CP decomposition</h1>
+
+<p>This is a lot more tentative than everything above, but I believe that
+we can generate decomposition automatically by studying (hyper)tree
+decompositions for our primal constraint graphs.  Problems with a
+small (hyper)treewidth are amenable to quick dynamic programming, if
+we explore the search space in the order defined by the tree
+decomposition: a small treewidth means that each subtree depends on a
+few memoisation keys, and there are thus few possibilities to
+consider.</p>
+
+<p>For example, I’m pretty sure that the fun poly-time dynamic
+programming algorithms in the Squiggol book all correspond to problems
+with a bounded tree-width for the constraint graph.</p>
+
+<p>In general though, problems don’t have a small treewidth.  This is
+where mathematical decomposition methods come in.  Benders
+decomposition could move a few key linking variables to the master
+problem; once they are taken out of the slave subproblem, the fixed
+Lagrangian subproblem has a small tree width.</p>
+
+<p>However, I already wrote that Lagrangian decomposition seems like a
+better fit to me.  In that case, we find a few variables such that
+removing them from the primal graph leaves a small tree
+decomposition.  Each subproblem gets its own clones of these
+variables, and Lagrangian decomposition manipulates the objective
+function to make the clones agree with one another.</p>
+
+<p>With this approach, we could also automatically generate dynamic
+programming solvers for Lagrangian subproblems… and it might even be
+practical to do the same for reduced cost oracle.</p>
+
+<p>Going to hypertree-width improves our support for global constraints
+(e.g., <code>alldiff</code>) or constraints that otherwise affect many variables
+directly.  Global constraint should probably get their own
+decomposition component, to easily exploit their pruning routines, but
+not necessarily large ad hoc ones.  Hypertree decomposition takes the
+latter point into account, that a large clique created by a single
+constraint is simpler to handle than one that corresponds to many
+smaller (e.g., pairwise) constraints.</p>
+
+<h1 id="whats-next">What’s next?</h1>
+
+<p>I don’t know. I won’t have a lot of time to work on this stuff now
+that I have a <a href="http://www.appnexus.com">real job</a>. I’ve decided to
+dedicate what little time I have to
+<a href="https://github.com/pkhuong/acd-alm">a solver</a> for Lagrangian master
+problems, because even the research community has a bad handle on
+that.</p>
+
+<p>For the rest, I’m mostly unexcited about work that attempts to explore
+the search space as quickly as possible.  I believe we should instead
+reify the constraint graph as much as possible to expose the structure
+of each instance to analyses and propagators, and thus reduce our
+reliance on search.</p>
+
+<p>As a first step, I’d look into a simple system that only does table
+constraints (perhaps represented as streams of feasible tuples).  A
+bucket heuristic for tree decomposition may suffice to get decent
+dynamic programming orders and efficiently optimise over the
+intersection of these table constraints.  (Yes, this is highly related
+to query optimisation; constraint programming and relational joins
+have much in common.)</p>
+
+<p>After that, I’d probably play with a few externally specified
+decomposition schemes, then add support for global constraints, and
+finally automatic decomposition.</p>
+
+<p>All in all, this looks like more than a thesis’s worth of work…</p>
 </div>
   
   
@@ -716,7 +764,7 @@ He’s offering it online this winter, starting January 21st.</p>
     </div>
   </div>
   <footer role="contentinfo"><p>
-  Website copyright &copy; 2025 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+  Website copyright &copy; 2026 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
 </p>
 
 </footer>

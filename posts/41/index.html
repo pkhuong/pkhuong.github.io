@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/03/30/refactoring-with-lz77-compilation-is-compression/">Refactoring with LZ77: compression is compilation (?)</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/04/13/number-systems-for-implicit-data-structures/">Number systems for implicit data structures</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Mar
+April
   
-30th, 
+13th, 
 2014
 
 
 
 
         
-         | <a href="/Blog/2014/03/30/refactoring-with-lz77-compilation-is-compression/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/03/30/refactoring-with-lz77-compilation-is-compression/"
+         | <a href="/Blog/2014/04/13/number-systems-for-implicit-data-structures/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2014/04/13/number-systems-for-implicit-data-structures/"
 	      >Comments</a>
         
         
@@ -117,812 +117,253 @@ Mar
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><em>This post was written under the influence of coffee ice cream and
-espresso.  It’s a magical drink ;)</em></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><a href="http://en.wikipedia.org/wiki/Implicit_data_structure">Implicit data structures</a>
+are data structures with negligible space overhead compared to storing
+the data in a flat array: auxiliary information is mostly represented
+by permuting the elements cleverly.  For example, a sorted vector
+combined with binary search is an implicit in-order representation of
+a binary search tree.  I believe the seminal implicit data structure is
+the binary heap of Williams and Floyd, usually presented in the
+context of <a href="http://xlinux.nist.gov/dads/HTML/heapSort.html">heapsort</a>.</p>
 
-<p><img class="right" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/espresso_ice_cream.jpg" /></p>
+<p>I find most developers are vastly more comfortable dealing with
+pointer-based data structures than with implicit ones.  I blame our
+courses, which focus on the former and completely fail to show us how
+to reason about the latter.  For example, the typical presentation of
+the binary heap introduces an indexing scheme to map from parent to
+children – the children of <code>heap[i]</code> are <code>heap[2 * i]</code> and
+<code>heap[2 * i + 1]</code>, with one-based indices – that is hard to
+generalise to ternary or k-ary heaps (Knuth’s presentation, with
+parents at \(\lfloor i/2 \rfloor\), is no better).  The reason it’s
+so hard to generalise is that the indexing scheme hides a simple
+bijection between paths in k-way trees and natural numbers.</p>
 
-<p>I don’t really follow the compression scene, and only pay minimal
-attention to machine learning.  Nevertheless, the “Compression is
-Learning” slogan feels more and more right to me.  In this post, I’ll
-explore another relationship that I find surprising: one between
-compression and compilation.</p>
+<p>I find it <a href="https://www.youtube.com/watch?v=Jne9t8sHpUc">ironic</a> that I
+first encountered the idea of describing data structures or
+algorithms in terms of number systems, through
+<a href="http://okasaki.blogspot.com/2008/02/ten-years-of-purely-functional-data.html">Okasaki</a>’s
+and <a href="http://www.cs.ox.ac.uk/ralf.hinze/publications/#R5">Hinze</a>’s
+<a href="http://www.cs.nott.ac.uk/~gmh/bctcs-slides/hinze.pdf">work</a> on purely
+functional data structures: that vantage point seems perfectly suited to
+the archetypal mutable data structure, the array!  I’ll show how
+number systems help us understand implicit data structures with two
+examples: a simple indexing scheme for k-ary heaps and compositions of
+specially structured permutations to implement in-place bit-reversal
+and (some) matrix transpositions.</p>
 
-<p>Five years ago, I took Marc Feeley’s compiler class, and he let us
-choose our term project.  I settled on generating traces from
-recursive algorithms (typical of cache-oblivious algorithms) and
-<a href="http://discontinuity.info/~pkhuong/ift6232/">reordering them to get iterative code</a>
-that was better suited to the first level of cache.  I came up with a
-gnarly CL-accented research-quality prototype, but the result was
-surprisingly effective.  Sadly, I never really managed to recover
-loops or function calls from the fully inlined trace, so even
-medium-size kernels would exhaust the instruction cache.</p>
+<h1 id="simple-k-ary-max-heaps">Simple k-ary max heaps</h1>
 
-<p>I believe I now see a practical and scalable solution, thanks to Artur
-Jez’s work on
-<a href="http://arxiv.org/abs/1403.4445">“A really simple approximation of smallest grammar.”</a>
-His work might lead to a function-oriented analogue of trace
-compilation.  Trace compilers are notoriously weak on recursion
-(recursive function calls don’t map well to loops), so it would be
-nifty to have an alternative that identifies functions rather than
-loops.</p>
+<p><a href="http://mitpress.mit.edu/books/introduction-algorithms">The</a>
+<a href="http://www.amazon.com/Data-Structures-Algorithms-Alfred-Aho/dp/0201000237">classical</a>
+<a href="http://www.amazon.com/Fundamentals-Algorithmics-Gilles-Brassard/dp/0133350681">way</a>
+to present implicit binary heaps is to work with one-based array
+indices and to root an implicit binary tree at <code>heap[1]</code>.  For any
+node <code>heap[i]</code>, the children live at <code>heap[2 * i]</code> and
+<code>heap[2 * i + 1]</code>.  My issue with this presentation is that it’s
+unclear how to extend the scheme to ternary or k-ary trees: if the
+children of <code>heap[1]</code> are <code>heap[3 * 1 ... 3 * 1 + 2]</code>, i.e.,
+<code>heap[3, 4, 5]</code>,
+what do we do with <code>heap[2]</code>?  We end up with <code>k - 1</code> parallel k-ary
+trees stashed in the same array.  <a href="http://www.amazon.com/Art-Computer-Programming-Volume-Searching/dp/0201896850">Knuth</a>’s choice of mapping children
+to parents with a floored integer division suffers the same fate.</p>
 
-<p>This makes me quip that “(Trace) Compilation is Compression.”  We
-can see trace compilers as lazily unpacking traces from the source
-program, rewriting them a bit, and recompressing traces in an
-executable format.  Admittedly, the analogy is a bit of a stretch for
-classical compilers: they are less aggressive in decompressing source
-code and directly translate from one compressed representation (a
-small source file may describe billions of execution paths) to
-another.</p>
+<p>One-based arrays hides the beauty of the binary indexing scheme.  With
+zero-based arrays, the children of <code>heap[i]</code> are <code>heap[2 * i + 1]</code> and
+<code>heap[2 * i + 2]</code>.  This is clearly isomorphic to the one-based scheme
+for binary heaps.  The difference is that the extension to k-way
+trees is obvious: the children of <code>heap[i]</code> are <code>heap[k * i + 1 ... k * i + k]</code>.</p>
 
-<p>Anyway… this is extremely hypothetical and Jez’s work is fun
-independently of my weekend speculations.</p>
+<p>A couple examples like the one below fail to show any problem.
+However, even a large number of tests is no proof.  Thinking in terms
+of number systems leads to a nice demonstration that the scheme
+creates a bijection between infinite k-ary trees and the naturals.</p>
 
-<h1 id="how-to-fail-with-lz77">How to fail with LZ77</h1>
+<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/5ary.png" /></p>
 
-<p>Once we cast a program trace as a sequence of opcodes (perhaps
-without operands, to expose more redundancy), it’s obvious that
-reducing code size is “just” compression, and
-<a href="http://en.wikipedia.org/wiki/LZ77_and_LZ78">LZ-type algorithms</a>
-quickly come to mind: they compress strings by referring to earlier
-substrings.</p>
+<p>There is a unique finite path from the root to any vertex in an
+infinite k-ary tree.  This path can be described as a finite sequence
+\((c\sb{1}, c\sb{2}, \ldots, c\sb{n})\) of integers between 1 and k
+(inclusively).  If \(c\sb{1} = 1\), we first went down the first
+child of the root node; if \(c\sb{1} = 2\), we instead went down the
+second child; etc.  If \(c\sb{2} = 3\), we then went down the third
+child, and so on.  We can recursively encode such finite paths as
+naturals (in pidgin ML):</p>
 
-<p>The heart of LZ77 is a loop that streams through the input sequence
-and finds the longest common subsequence earlier in the input.  In
-practice, the search usually considers a fixed-size window; when I
-write LZ77 here, I instead refer to the theoretical approach with an
-unbounded search window.  Repeated LCS searches on an unbounded window
-sounds slow, but, in sophisticated implementations, the bottleneck is
-sorting the input string to generate a suffix array.</p>
-
-<p>I don’t feel like being sophisticated and will implement a
-quadratic-time LCS search.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun longest-subseq (seq start)
-</span><span class="line">  "Find the longest subseq of seq[start...] that begins before start."
-</span><span class="line">  (let ((best 1)
-</span><span class="line">        (index nil))
-</span><span class="line">    (dotimes (i start (values index best))
-</span><span class="line">      (let ((length (mismatch seq seq :start1 i :start2 start
-</span><span class="line">                                      :test #'equal)))
-</span><span class="line">        (assert length)
-</span><span class="line">        (decf length i)
-</span><span class="line">        (when (&gt; length best)
-</span><span class="line">          (setf best length
-</span><span class="line">                index i))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>Some backreferences clearly look like function calls.</p>
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (longest-subseq "abab" 0)
-</span><span class="line">NIL ; There is no match to the left of abab
-</span><span class="line">1   ;                                  ^
-</span><span class="line">CL-USER&gt; (longest-subseq "abab" 2)
-</span><span class="line">0   ; There is a match for the second ab, starting
-</span><span class="line">2   ; at index 0 and spanning 2 characters.</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>It’s a bit surprising at first, but some also correspond to <code>repeat</code> loops.</p>
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (longest-subseq "abababa" 2)
-</span><span class="line">0 ; There is a match for "ababa", starting
-</span><span class="line">5 ; at index 0 and spanning 5 characters.</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>This last patch is strange because it’s self-referential.  However, if
-we decompress character by character, its meaning becomes obvious: we
-replicate the substring in <code>[0, 1]</code> to generate exactly 5 characters.
-This is basically a loop; we can handle partial copies with, e.g.,
-rotation and entering the middle of the loop (like Duff’s device).</p>
-
-<p>Lempel and Ziv’s result tells us that we can look for references
-greedily in an unbounded window and obtain asymptotically optimal
-(proportional to the string’s entropy) compression.  Again, there are
-algorithms to do that in linear time – via radix sort – but I’ll just
-bruteforce my way in cubic time.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defstruct factor start length subseq)
-</span><span class="line">
-</span><span class="line">(defun factorise (seq)
-</span><span class="line">  (let ((index 0)
-</span><span class="line">        (length (length seq)))
-</span><span class="line">    (loop while (&lt; index length)
-</span><span class="line">          collect
-</span><span class="line">          (multiple-value-bind (start length)
-</span><span class="line">              (longest-subseq seq index)
-</span><span class="line">            (prog1
-</span><span class="line">                (if (null start)
-</span><span class="line">                    (elt seq index)
-</span><span class="line">                    (make-factor :start start :length length
-</span><span class="line">                                 :subseq (subseq seq start (+ start length))))
-</span><span class="line">              (incf index length))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>Here’s the problem with converting an LZ77 factorisation into calls and
-loops: there is no guarantee that patches nest sanely.</p>
-
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (factorise "ababac||bac")
-</span><span class="line">(#\a #\b #S(FACTOR :START 0 :LENGTH 3 :SUBSEQ "aba") #\c #\| #\|
-</span><span class="line"> #S(FACTOR :START 3 :LENGTH 3 :SUBSEQ "bac"))</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>This factorisation encodes “ababac||bac” by repeating “ab” two and a
-half times, inserting “c||”, and then repeating “bac.”  The issue is
-that we wish to convert “ababa” into a loop, but the last patch would
-then need to enter that loop in its last iteration.  We could also
-have the opposite problem, with a patch that only covers a prefix of
-an earlier patch (a few iterations of a loop).  The sketch below shows
-how we might even have to deal with both issues in the same factor.</p>
-
-<p><img class="center" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/nasty-factor.jpg" /></p>
-
-<h1 id="jezs-solution">Jez’s solution</h1>
-
-<p><a href="http://arxiv.org/abs/1403.4445">Jez’s paper</a> analyses a method to
-recover a CFL with a single member, the string we wish to compress.
-The CFL is described by a fully deterministic (it produces exactly one
-string) CFG in Chomsky normal form, i.e., a straight-line program.</p>
-
-<p>This “really simple” approach takes a step back from LZ compression
-and instead starts with the easiest, greedy, way to generate a
-straight-line program from a string: just pair characters as you
-encounter them, left-to-right.</p>
-
-<p>For example, on “abab,” this would pair “(ab)(ab)” and then
-“((ab)(ab)),” and generate the following grammar:</p>
-
-<pre><code>G -&gt; XX
-X -&gt; ab
+<pre><code>path_to_nat [] = 0
+path_to_nat [c : cs] = k * path_to_nat cs + c
 </code></pre>
 
-<p>We got lucky: the repetition synced up with the greedy pairing.
-That’s not always the case; for example, “abcab” becomes “(ab)(ca)b” – which
-exposes no redundancy – rather than “(ab)c(ab).”</p>
+<p>Clearly, this is an injection from finite paths in k-ary trees to the
+naturals.  There’s only a tiny difference with the normal positional
+encoding of naturals in base <code>k</code>: there is no 0, and digits instead
+include <code>k</code>.  This prevents us from padding a path with zeros, which
+would map multiple paths to the same natural.</p>
 
-<p>Jez addresses this issue by using LZ77 factorisation as an oracle to
-synchronise pairings.</p>
+<p>We only have to show that <code>path_to_nat</code> is a bijection between finite
+paths and naturals.  I’ll do that by constructing an inverse that is
+total on the naturals.</p>
 
-<p>First, we simplify the algorithm by assuming that there are no factors that
-begin exactly one character before their output.  Such factors correspond to
-repetitions of that one character (e.g., “aaaa” = “a” x 4) and we can easily 
-turn them into repetitions of a pair (e.g., “aa” x 2).</p>
+<pre><code>nat_to_path 0 = []
+nat_to_path n = let c = pop n
+                in c : nat_to_path (n - c) / k
+</code></pre>
 
-<p>It’s then simply a matter of not pairing when it would prevent the
-next character from synchronising with its backreference.  For
-example, in “abcab,” we’d skip pairing “ca” so that “ab” could pair
-like the first occurrence did.  We also don’t force a pair when the
-backreference only includes the first letter, but not the second.
-Finally, we opportunistically match consecutive unpaired letters.</p>
+<p>where <code>pop</code> is a version of the <code>mod k</code> that returns <code>k</code> instead of 0:</p>
 
-<p><img class="center" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/jez.jpg" /></p>
+<pre><code>pop n = let c = n `mod` k
+        in 
+         if (c != 0)
+          then c
+          else k
+</code></pre>
 
-<p>Each such pass creates a new, shorter, string of literals and production rules. 
-We iteratively apply the guided pairing loop until we’re left with a single
-production rule.</p>
+<p>The base case is <code>nat_to_path 0 = []</code>.</p>
 
-<p>That’s it.  Jez’s paper is mostly concerned with showing that we only
-have to run LZ compression once and with proving suboptimality bounds.
-The key is that we can convert factors for the input into factors for
-the output, and that each pass shrinks the string by a multiplicative
-factor.  I’ll simplify things further by recomputing a factorisation
-(in cubic time!) from scratch in each pass.</p>
+<p>In the induction step, we can assume that <code>path_to_nat cs = n</code> and
+that <code>nat_to_path n = cs</code>.  We only have to show that, for any
+\(1 \leq c \leq k\), <code>nat_to_path path_to_nat c:cs = c:cs</code>.  Let 
+<code>n' = path_to_nat c:cs = k * n + c</code>.</p>
 
-<h1 id="now-the-code">Now, the code</h1>
+<p>\[n\sp{\prime} = kn + c \equiv c\quad \mod k,\]
+so <code>pop n'</code> will correctly return <code>c</code> (and <code>k</code> rather than 0).  It’s
+then a tiny bit of algebra to show that <code>(n' - c) / k = n</code>, and we
+fall back to the induction hypothesis.</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-<span class="line-number">31</span>
-<span class="line-number">32</span>
-<span class="line-number">33</span>
-<span class="line-number">34</span>
-<span class="line-number">35</span>
-<span class="line-number">36</span>
-<span class="line-number">37</span>
-<span class="line-number">38</span>
-<span class="line-number">39</span>
-<span class="line-number">40</span>
-<span class="line-number">41</span>
-<span class="line-number">42</span>
-<span class="line-number">43</span>
-<span class="line-number">44</span>
-<span class="line-number">45</span>
-<span class="line-number">46</span>
-<span class="line-number">47</span>
-<span class="line-number">48</span>
-<span class="line-number">49</span>
-<span class="line-number">50</span>
-<span class="line-number">51</span>
-<span class="line-number">52</span>
-<span class="line-number">53</span>
-<span class="line-number">54</span>
-<span class="line-number">55</span>
-<span class="line-number">56</span>
-<span class="line-number">57</span>
-<span class="line-number">58</span>
-<span class="line-number">59</span>
-<span class="line-number">60</span>
-<span class="line-number">61</span>
-<span class="line-number">62</span>
-<span class="line-number">63</span>
-<span class="line-number">64</span>
-<span class="line-number">65</span>
-<span class="line-number">66</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">;; specials for shared state (quick-and-dirty REPL style)
-</span><span class="line">
-</span><span class="line">;; For each character position, whether it's the first or
-</span><span class="line">;; second of a pair, or just a singleton (nil)
-</span><span class="line">(defvar *state*)
-</span><span class="line">;; The sequence to compress.
-</span><span class="line">(defvar *sequence*)
-</span><span class="line">;; Cursor in the sequence.
-</span><span class="line">(defvar *index*)
-</span><span class="line">
-</span><span class="line">(defmacro with-sequence ((seq) &amp;body body)
-</span><span class="line">  (let ((temp (gensym "SEQ")))
-</span><span class="line">    `(let* ((,temp ,seq)
-</span><span class="line">            (*sequence* ,temp)
-</span><span class="line">            (*state* (make-array (length *sequence*)
-</span><span class="line">                                 :initial-element nil))
-</span><span class="line">            (*index* 0))
-</span><span class="line">       ,@body)))
-</span><span class="line">
-</span><span class="line">;; No pair begins here, but we might still fuse with the previous
-</span><span class="line">;; singleton.
-</span><span class="line">(defun single ()
-</span><span class="line">  (let ((i *index*))
-</span><span class="line">    (when (and (plusp i)
-</span><span class="line">               (null (aref *state* (1- i))))
-</span><span class="line">      (setf (aref *state* (1- i)) 'first
-</span><span class="line">            (aref *state* i) 'second)))
-</span><span class="line">  (incf *index*))
-</span><span class="line">
-</span><span class="line">;; Force a pair.
-</span><span class="line">(defun pair ()
-</span><span class="line">  (let ((i *index*))
-</span><span class="line">    ;; we mustn't be at the end of the sequence
-</span><span class="line">    (assert (&lt; (1+ i) (length *sequence*)))
-</span><span class="line">    (setf (aref *state* i) 'first)
-</span><span class="line">    (setf (aref *state* (1+ i)) 'second)
-</span><span class="line">    (incf *index* 2)))
-</span><span class="line">
-</span><span class="line">(defun sync-and-pair ()
-</span><span class="line">  (multiple-value-bind (begin length)
-</span><span class="line">      (longest-subseq *sequence* *index*)
-</span><span class="line">    (cond ((null begin)
-</span><span class="line">           ;; No factor; advance and merge greedily.
-</span><span class="line">           (single))
-</span><span class="line">          ((= begin (1- *index*))
-</span><span class="line">           ;; Single-character repetition.
-</span><span class="line">           (loop repeat length do (single)))
-</span><span class="line">          (t
-</span><span class="line">           (let ((end (+ begin length)))
-</span><span class="line">             (assert (&lt;= end (length *sequence*)))
-</span><span class="line">             (assert (&lt; begin (1- *index*)))
-</span><span class="line">             (when (eql 'second (aref *state* begin))
-</span><span class="line">               ;; The first character is the second half of a pair;
-</span><span class="line">               ;; leave it by itself.
-</span><span class="line">               (single)
-</span><span class="line">               (incf begin))
-</span><span class="line">             ;; Mimic the pairing decisions of the backref.
-</span><span class="line">             (loop with expected = (+ *index* (- end begin))
-</span><span class="line">                   for i from begin below end
-</span><span class="line">                   do (ecase (aref *state* i)
-</span><span class="line">                        (second)
-</span><span class="line">                        (first (if (= (1+ i) end) ; Last character
-</span><span class="line">                                   (single)       ; can't force
-</span><span class="line">                                   (pair)))       ; a pair.
-</span><span class="line">                        ((nil) (single)))
-</span><span class="line">                   finally (assert (= *index* expected))))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>This scheme is so simple that I wound up coding a version of
+<code>heapsort(3)</code> that lets callers choose the heap’s arity at runtime.
+Higher arity heaps perform more comparisons but fewer swaps than
+binary heaps; the tradeoff is profitable when sorting large items.
+It seems to me that, for decades, we’ve been presenting implicit heaps
+and heapsort in a way that marginally simplifies the binary case at
+the expense of obscuring the elegant general case.</p>
 
-<p>My implementation is exceedingly naïve and runs in cubic time in the
-worst case.  With a lot more work, the bottleneck (LZ77 factorisation)
-runs at the speed of sort… but constructing a suffix array would only
-get in the way of this post.  Let’s just see what pairing the code
-generates.</p>
+<h1 id="array-permutations-as-algebra-on-positional-number-systems">Array permutations as algebra on positional number systems</h1>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (with-sequence ("abcab")
-</span><span class="line">           (loop while (&lt; *index* (length *sequence*))
-</span><span class="line">                 do (sync-and-pair)
-</span><span class="line">                 finally (return *state*)))
-</span><span class="line">#(FIRST SECOND NIL FIRST SECOND)
-</span><span class="line">CL-USER&gt; (with-sequence ("abababa")
-</span><span class="line">           (loop while (&lt; *index* (length *sequence*))
-</span><span class="line">                 do (sync-and-pair)
-</span><span class="line">                 finally (return *state*)))
-</span><span class="line">#(FIRST SECOND FIRST SECOND FIRST SECOND NIL)
-</span><span class="line">CL-USER&gt; (with-sequence ("ababac||bac")
-</span><span class="line">           (loop while (&lt; *index* (length *sequence*))
-</span><span class="line">                 do (sync-and-pair)
-</span><span class="line">                 finally (return *state*)))
-</span><span class="line">#(FIRST SECOND FIRST SECOND FIRST SECOND FIRST SECOND NIL FIRST SECOND)</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>Bit reversing an array of length \(2\sp{l}\) sends the element <code>x[i]</code> to
+<code>x[j]</code>, where the binary representation of <code>i</code> (including padding up
+to <code>l</code> bits) is the reverse of <code>j</code>.  For example, in an array of
+length 16, <code>3 = 0011</code> becomes <code>1100 = 12</code>.</p>
 
-<p>In short, “abcab” becomes “(ab)c(ab)”, “abababa” “(ab)(ab)(ab)a”,
-and “ababac||bac” “(ab)(ab)(ac)(||)b(ac)”.</p>
+<p>Reversing a fixed-width integer’s binary representation is its
+self-inverse, so bit reversing an array is a sequence of swaps.  This
+means that the permutation can be performed in-place, as a series of
+independent swaps.  Bit reversal used to be slow on cached machines:
+contiguous elements (with indices that only vary in their low order
+bits) swap with far-off elements (indices that only vary in their high
+order bits).  Worse, the stride between the latter elements is a large
+power of two, which causes all sorts of aliasing issues.  Workarounds
+(see
+<a href="http://home.eng.iastate.edu/~zzhang/publications/tr99-sc-bitrev.pdf">Zhang 99 (PDF)</a>)
+mostly end up implementing a software cache with explicit buffers.
+Nowadays, even L1 caches have such a high associativity that aliasing
+is a much less important issue.</p>
 
-<h1 id="programs-from-pairs">Programs from pairs</h1>
+<p><a href="https://github.com/pkhuong/Napa-FFT3">Napa-FFT3</a> implements bit
+reversals by calling a few specialised functions that only swap the
+lower and higher bits; the main routine iterates over an array of
+precomputed middle bit reversals (similar to
+<a href="http://www.idi.ntnu.no/~elster/pubs/">various publications of Elster’s</a>,
+but recursing on the middle bits first).  In this implementation, the
+number of L1 cache misses incurred by bit reversing an array is only
+slightly greater than the compulsory misses.  Bit reversal isn’t free,
+but it’s also not clear that autosorting FFTs are quicker than
+out-of-order FFTs followed by a bit reversal pass.</p>
 
-<p>So far, we’ve only made pairing decisions.  The next step is to
-translate them into production rules (i.e., functions), and to merge
-equivalent rules to actually save space.</p>
+<p>Bit reversal is the only array permutation I’ve seen described in
+terms of its effect on indices.  I think it’s a fruitful avenue for
+other in-place permutations.</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-<span class="line-number">31</span>
-<span class="line-number">32</span>
-<span class="line-number">33</span>
-<span class="line-number">34</span>
-<span class="line-number">35</span>
-<span class="line-number">36</span>
-<span class="line-number">37</span>
-<span class="line-number">38</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defvar *counter* 0)
-</span><span class="line">(defvar *rules* (make-array 0 :adjustable t :fill-pointer 0))
-</span><span class="line">
-</span><span class="line">(defstruct rule
-</span><span class="line">  (id (incf *counter*))
-</span><span class="line">  a b)
-</span><span class="line">
-</span><span class="line">;; Hash-consing naturally merges equivalent rules.
-</span><span class="line">(fare-memoization:define-memo-function rule (a b)
-</span><span class="line">  (let ((rule (make-rule :a a :b b)))
-</span><span class="line">    (vector-push-extend rule *rules*)
-</span><span class="line">    rule))
-</span><span class="line">
-</span><span class="line">(defun reset-rules ()
-</span><span class="line">  (setf *counter* 0)
-</span><span class="line">  ;; Sorry, this is ugly.
-</span><span class="line">  (fare-memoization:unmemoize 'rule)
-</span><span class="line">  (fare-memoization:memoize 'rule)
-</span><span class="line">  (setf *rules* (make-array 0 :adjustable t :fill-pointer 0)))
-</span><span class="line">
-</span><span class="line">(defun pair-cfg (sequence state)
-</span><span class="line">  (loop with acc = '()
-</span><span class="line">        for i upfrom 0
-</span><span class="line">        for character across sequence
-</span><span class="line">        for choice across state
-</span><span class="line">        do (ecase choice
-</span><span class="line">             (second)
-</span><span class="line">             (first (push (rule character (aref sequence (1+ i)))
-</span><span class="line">                          acc))
-</span><span class="line">             ((nil) (push character acc)))
-</span><span class="line">        finally (return (coerce (nreverse acc) 'simple-vector))))
-</span><span class="line">
-</span><span class="line">(defun compress-1 (sequence)
-</span><span class="line"> (with-sequence (sequence)
-</span><span class="line">    (loop with length = (length sequence)
-</span><span class="line">          while (&lt; *index* length)
-</span><span class="line">          do (sync-and-pair)
-</span><span class="line">          finally (return (pair-cfg *sequence* *state*)))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>For example, the viewpoint makes it clear how to transpose a matrix of
+dimensions \(2\sp{m} \times 2\sp{n}\) with a sequence of in-place
+bit reversals (each \(i\sb{k}\) and \(j\sb{l}\) is a bit in the
+index’s binary representation).</p>
 
-<p>On the examples above, we find:</p>
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (reset-rules)
-</span><span class="line">#()
-</span><span class="line">CL-USER&gt; (compress-1 "abcab")
-</span><span class="line">#(#S(RULE :ID 1 :A #\a :B #\b) #\c #S(RULE :ID 1 :A #\a :B #\b))
-</span><span class="line">CL-USER&gt; (compress-1 "abababa")
-</span><span class="line">#(#S(RULE :ID 1 :A #\a :B #\b) #S(RULE :ID 1 :A #\a :B #\b)
-</span><span class="line">  #S(RULE :ID 1 :A #\a :B #\b) #\a)
-</span><span class="line">CL-USER&gt; (compress-1 "ababac||bac")
-</span><span class="line">#(#S(RULE :ID 1 :A #\a :B #\b) #S(RULE :ID 1 :A #\a :B #\b)
-</span><span class="line">  #S(RULE :ID 2 :A #\a :B #\c) #S(RULE :ID 3 :A #\| :B #\|) #\b
-</span><span class="line">  #S(RULE :ID 2 :A #\a :B #\c))</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/bit-reverse-transpose.jpg" /></p>
 
-<p>We only have to pair production rules further until the sequence
-consists of a single rule (or literal).</p>
+<p>For a row-major layout, the sketch above corresponds to:</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun refactor (sequence)
-</span><span class="line">  (if (&lt;= (length sequence) 1)
-</span><span class="line">      sequence
-</span><span class="line">      (refactor (compress-1 sequence))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+<ol>
+  <li>bit reverse each row of length \(2\sp{n}\) in place;</li>
+  <li>bit reverse the whole vector of length \(2\sp{m + n}\) in place;</li>
+  <li>bit reverse each new row of length \(2\sp{m}\) in place.</li>
+</ol>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (refactor "ababac||bac")
-</span><span class="line">#(#S(RULE
-</span><span class="line">     :ID 8
-</span><span class="line">     :A #S(RULE
-</span><span class="line">           :ID 7
-</span><span class="line">           :A #S(RULE
-</span><span class="line">                 :ID 4
-</span><span class="line">                 :A #S(RULE :ID 1 :A #\a :B #\b)
-</span><span class="line">                 :B #S(RULE :ID 1 :A #\a :B #\b))
-</span><span class="line">           :B #S(RULE
-</span><span class="line">                 :ID 5
-</span><span class="line">                 :A #S(RULE :ID 2 :A #\a :B #\c)
-</span><span class="line">                 :B #S(RULE :ID 3 :A #\| :B #\|)))
-</span><span class="line">     :B #S(RULE :ID 6 :A #\b :B #S(RULE :ID 2 :A #\a :B #\c))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>Bit reversal, like all other permutations, is a reversible linear
+operation. We can thus change the order of operation if we want to.
+For example, it’s not necessarily preferable to bit-reverse contiguous
+rows first.  We could also flip the high-order bits of the indices:
+rather than swapping scalars, we would swap rows.  Separately bit
+reversing contiguous rows works best when each row fits in cache.  Bit
+reversing columns instead amortises the bad access pattern inherent to
+bit reversal by spending more time on each swap: swapping rows is
+slower than swapping scalars, but also very efficients with regards to
+(streaming!) I/O.</p>
 
-<p>The “call graph” below shows there’s a lot of sharing for such a short string.</p>
+<p>This is interesting because in-place transposition of rectangular
+matrices is hard, and transposition is already a bad fit for caches.
+Transposing matrices with a sequence of bit reversals might just be
+practical.  In fact, that’s what I intend to do in Napa-FFT3 for
+multi-dimensional DFTs: we can fuse all but the middle whole-vector
+bit reversal with mixed-radix FFTs (and the latter might similarly
+benefit from operating on [sub-]rows rather than scalars).</p>
 
-<p><img class="center" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/call_graph.png" /></p>
+<p>One obvious question now appears: can we generalise the trick to
+general dimensions?  It’s pretty clear that we can do it for any other
+base \(b\) and matrices of dimension \(b\sp{m} \times b\sp{n}\)
+(it’s interesting how highly composite numbers dimensions are easy to
+transpose, and, IIRC, so are coprime ones).  What if there’s no such
+factorisation?  The best I can do is “more or less.”</p>
 
-<h1 id="enough-with-the-strings">Enough with the strings</h1>
+<p>For arbitrary matrix dimensions \(m \times n\), I think it’s best to
+decompose indices in a mixed radix (but still positional) number
+system.  For example, a \(63 \times 21\) matrix might have indices in
+radix \(3,7\ |\ 3,7,3\).  Given this number system, matrix
+transposition is</p>
 
-<p>I started by writing about compiling program traces, but so far I’ve only been
-working with strings of characters.  Let’s pretend the following PostScript file
-was written by someone who’s never heard of functions or loops.</p>
+<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/concrete-mixed-radix.jpg" /></p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">%!PS
-</span><span class="line">270 315 translate
-</span><span class="line">1.5 setlinewidth
-</span><span class="line">
-</span><span class="line">gsave
-</span><span class="line">newpath
-</span><span class="line">  0 36 moveto
-</span><span class="line"> 72 0  rlineto
-</span><span class="line">  0 72 rlineto
-</span><span class="line">-72 0  rlineto
-</span><span class="line">closepath
-</span><span class="line">stroke
-</span><span class="line">grestore
-</span><span class="line">
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">
-</span><span class="line">showpage</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>It’s a small generalisation to let the radices be \(a,b\ |\ a,b,a\),
+for a matrix of dimension \(ab \times a\sp{2}b\).  We can then
+perform most of a matrix transposition by swapping positions of
+identical weight: first a full mixed-radix digit reversal (the weights
+are palindromic), followed by another mixed-radix reversal on the
+first three positions.</p>
 
-<p>Phew, programming <em>is</em> hard!  That’s a lot of copy-paste to produce a
-simple pattern.</p>
+<p><img class="center" src="/images/2014-04-13-number-systems-for-implicit-data-structures/general-mixed-radix.jpg" /></p>
 
-<p><img class="center" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/squares.png" /></p>
+<p>This leaves the last chunk \(b\sb{2},a\sb{3}\), which should instead
+be \(a\sb{3},b\sb{2}\).  That’s another rectangular matrix tranpose,
+but smaller than the original one.  It might be practical to execute
+that last step with a straightforward out-of-place transpose: a
+smaller transpose needs less scratch space and may fit in cache.  We
+can also apply the same trick as for bit reversals and apply the
+transpose before everything else, by permuting rows rather than
+scalars.  The simplest way to do that is to transpose a matrix of
+pointers before replicating the permutation on the actual data
+(glibc’s mergesort references Knuth vol. 3, exercise
+5.2-10).</p>
 
-<p>Let’s see what our (simplified) implementation of Jez’s algorithm can do.</p>
+<p>Finally, this also works for \(a\sp{2}b \times ab\): matrix
+transposition is its own inverse, so we only have execute the inverse
+of each step, in reverse order.</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (reset-rules)
-</span><span class="line">#()
-</span><span class="line">;; READ, the poor man's tokenizer.
-</span><span class="line">CL-USER&gt; (refactor #(
-</span><span class="line">270 315 translate
-</span><span class="line">1.5 setlinewidth
-</span><span class="line">
-</span><span class="line">gsave
-</span><span class="line">newpath
-</span><span class="line">  0 36 moveto
-</span><span class="line"> 72 0  rlineto
-</span><span class="line">  0 72 rlineto
-</span><span class="line">-72 0  rlineto
-</span><span class="line">closepath
-</span><span class="line">stroke
-</span><span class="line">grestore
-</span><span class="line">
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">45 rotate gsave newpath 0 36 moveto 72 0 rlineto 0 72 rlineto -72 0 rlineto closepath stroke grestore
-</span><span class="line">
-</span><span class="line">showpage
-</span><span class="line">))
-</span><span class="line">#(#S(RULE
-</span><span class="line">     :ID 35
-</span><span class="line">   ...))</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>Definitely mixed results, but at least we have some intuition on why
+general rectangular transpositions are hard to perform in place:
+they’re hard to express as sequences of swaps.</p>
 
-<p>35 functions that each contain two literals or function calls. Not bad (:
-It’s an actual <a href="http://c2.com/cgi/wiki?SimpleMatterOfProgramming">SMOP</a>
-to convert this grammar into a PostScript program.</p>
+<h1 id="next-c-code-and-cycle-counts">Next: C code and cycle counts!</h1>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">(defun emit-one-rule (stream rule)
-</span><span class="line">  (flet ((emit-subrule (x)
-</span><span class="line">           (if (rule-p x)
-</span><span class="line">               (format nil "R~A" (rule-id x))
-</span><span class="line">               (format nil "~(~a~)" x))))
-</span><span class="line">    (format stream "/R~A { ~A ~A } def~%"
-</span><span class="line">            (rule-id rule)
-</span><span class="line">            (emit-subrule (rule-a rule))
-</span><span class="line">            (emit-subrule (rule-b rule)))))
-</span><span class="line">
-</span><span class="line">(defun emit-rules (stream rules)
-</span><span class="line">  (map nil (lambda (rule)
-</span><span class="line">             (emit-one-rule stream rule))
-</span><span class="line">       rules)
-</span><span class="line">  (format stream "R~A~%" (rule-id (elt rules (1- (length rules))))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+<p>This post is the more theoretical prologue to
+<a href="/Blog/2014/04/13/k-ary-heapsort/">a low-level look</a>
+at <code>qsort(3)</code>: I really wanted to make sure the nice implicit tree
+layout in the first section had the space it deserves.</p>
 
-<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
-<span class="line-number">2</span>
-<span class="line-number">3</span>
-<span class="line-number">4</span>
-<span class="line-number">5</span>
-<span class="line-number">6</span>
-<span class="line-number">7</span>
-<span class="line-number">8</span>
-<span class="line-number">9</span>
-<span class="line-number">10</span>
-<span class="line-number">11</span>
-<span class="line-number">12</span>
-<span class="line-number">13</span>
-<span class="line-number">14</span>
-<span class="line-number">15</span>
-<span class="line-number">16</span>
-<span class="line-number">17</span>
-<span class="line-number">18</span>
-<span class="line-number">19</span>
-<span class="line-number">20</span>
-<span class="line-number">21</span>
-<span class="line-number">22</span>
-<span class="line-number">23</span>
-<span class="line-number">24</span>
-<span class="line-number">25</span>
-<span class="line-number">26</span>
-<span class="line-number">27</span>
-<span class="line-number">28</span>
-<span class="line-number">29</span>
-<span class="line-number">30</span>
-<span class="line-number">31</span>
-<span class="line-number">32</span>
-<span class="line-number">33</span>
-<span class="line-number">34</span>
-<span class="line-number">35</span>
-<span class="line-number">36</span>
-<span class="line-number">37</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">CL-USER&gt; (emit-rules *standard-output* *rules*)
-</span><span class="line">/R1 { 270 315 } def
-</span><span class="line">/R2 { translate 1.5 } def
-</span><span class="line">/R3 { setlinewidth gsave } def
-</span><span class="line">/R4 { newpath 0 } def
-</span><span class="line">/R5 { 36 moveto } def
-</span><span class="line">/R6 { 72 0 } def
-</span><span class="line">/R7 { rlineto 0 } def
-</span><span class="line">/R8 { 72 rlineto } def
-</span><span class="line">/R9 { -72 0 } def
-</span><span class="line">/R10 { rlineto closepath } def
-</span><span class="line">/R11 { stroke grestore } def
-</span><span class="line">/R12 { 45 rotate } def
-</span><span class="line">/R13 { R1 R2 } def
-</span><span class="line">/R14 { R3 R4 } def
-</span><span class="line">/R15 { R5 R6 } def
-</span><span class="line">/R16 { R7 R8 } def
-</span><span class="line">/R17 { R9 R10 } def
-</span><span class="line">/R18 { R11 R12 } def
-</span><span class="line">/R19 { gsave R4 } def
-</span><span class="line">/R20 { R11 showpage } def
-</span><span class="line">/R21 { R13 R14 } def
-</span><span class="line">/R22 { R15 R16 } def
-</span><span class="line">/R23 { R17 R18 } def
-</span><span class="line">/R24 { R17 R20 } def
-</span><span class="line">/R25 { R21 R22 } def
-</span><span class="line">/R26 { R23 R19 } def
-</span><span class="line">/R27 { R22 R24 } def
-</span><span class="line">/R28 { R25 R26 } def
-</span><span class="line">/R29 { R22 R26 } def
-</span><span class="line">/R30 { R28 R29 } def
-</span><span class="line">/R31 { R29 R29 } def
-</span><span class="line">/R32 { R29 R27 } def
-</span><span class="line">/R33 { R30 R31 } def
-</span><span class="line">/R34 { R31 R32 } def
-</span><span class="line">/R35 { R33 R34 } def
-</span><span class="line">R35</span></code></pre></td></tr></table></div></figure></notextile></div>
-
-<p>This second PostScript program comprises 211 tokens, rather than the
-original’s 156, but 105 of those are “{ } def” noise to define
-functions.  Arguably, the number of meaningful tokens was reduced from
-156 to slightly more than 100.  Crucially, the output remains the
-same.</p>
-
-<p><img class="center" src="/images/2014-03-30-refactoring-with-lz77-compilation-is-compression/squares2.png" /></p>
-
-<p>Stack programs seem particularly well suited to this rewriting
-approach: explicit operands (e.g., registers) introduce trivial
-discrepancies.  In a VM, I would consider “compressing” the opcode
-stream separately from the operands.  Compiling only the former to
-native code would already reduce interpretative overhead, and
-extracting function calls from the instruction stream should avoid
-catastrophic size explosions.</p>
-
-<p>There are several obvious deficiencies in the direct LZ77-guided
-pairing.  Just breaking Chomsky normalisation to inline single-use
-function would already help.  It might also make sense to special-case
-repetitions as <code>repeat n</code> loops, instead of hiding that in
-\(\log n\) levels of recursion.  In a real program, it would also be
-useful to inline the bottom-most rules so as not to drown in control
-flow.  The thing is, destroying structure in the name of performance
-is well understood compiler tech; recovering it <em>efficiently</em> was the
-hard part.</p>
+<p>I tried to make in-order implicit trees fit in this number system
+approach. I can’t see how.  The problem is that in-order trees
+associate ranges (rather than indices) with nodes; for example, at
+what depth is index 1000? It depends on the size of the search
+tree. It might be the root (in a tree of 2000 vertices) or a leaf (in
+a tree of 1001 vertices).</p>
 </div>
   
   
@@ -944,7 +385,7 @@ hard part.</p>
     </div>
   </div>
   <footer role="contentinfo"><p>
-  Website copyright &copy; 2025 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+  Website copyright &copy; 2026 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
 </p>
 
 </footer>

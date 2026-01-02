@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2019/04/23/fractional-set-covering-with-experts/">Fractional set covering with experts</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/">A couple of (probabilistic) worst-case bounds for Robin Hood linear probing</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-April
+Sept
   
-23rd, 
+29th, 
 2019
 
 
 
 
         
-         | <a href="/Blog/2019/04/23/fractional-set-covering-with-experts/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2019/04/23/fractional-set-covering-with-experts/"
+         | <a href="/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2019/09/29/a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/"
 	      >Comments</a>
         
         
@@ -117,522 +117,284 @@ April
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>Last winter break, I played with one of the annual
-<a href="https://en.wikipedia.org/wiki/Vehicle_routing_problem">capacitated vehicle routing problem</a>
-(CVRP) “Santa Claus” contests.  Real world family stuff
-took precedence,  so, after the
-obvious <a href="http://webhotel4.ruc.dk/~keld/research/LKH-3/">LKH</a>
-with <a href="http://www.math.uwaterloo.ca/tsp/concorde.html">Concorde</a>
-polishing for individual tours, I only had enough time for
-one diversification moonshot.  I decided to treat the
-high level problem of assembling prefabricated routes as
-a <a href="https://en.wikipedia.org/wiki/Set_cover_problem">set covering problem</a>:
-I would solve the linear programming (LP) relaxation for the
-min-cost set cover, and use randomised rounding to feed new starting
-points to LKH.  Add a lot of luck, and that might
-just strike the right balance between solution quality and diversity.</p>
-
-<p>Unsurprisingly, luck failed to show up, but I had ulterior motives:
-I’m much more interested in exploring first order methods for
-relaxations of combinatorial problems than in solving CVRPs.  The
-routes I had accumulated after a couple days turned into a
-<a href="https://archive.org/details/santa-cvrp-set-cover-instance">set covering LP with 1.1M decision variables, 10K constraints, and 20M nonzeros</a>.
-That’s maybe denser than most combinatorial LPs (the aspect ratio
-is definitely atypical), but 0.2% non-zeros is in the right ballpark.</p>
-
-<p>As soon as I had that fractional set cover instance, I tried to solve
-it with a simplex solver.  Like any good Googler, I used <a href="https://developers.google.com/optimization/lp/glop">Glop</a>… and stared at a blank terminal for more than one hour.</p>
-
-<p>Having observed that lack of progress, I implemented the toy I really
-wanted to try out: first order online “learning with experts”
-(specifically, <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a>) applied to
-LP <em>optimisation</em>.  I let this <a href="https://gist.github.com/pkhuong/c508849180c6cf612f7335933a88ffa6">not-particularly-optimised serial CL code</a>
-run on my 1.6 GHz laptop for 21 hours, at which point the first
-order method had found a 4.5% infeasible solution (i.e., all the
-constraints were satisfied with \(\ldots \geq 0.955\) instead of
-\(\ldots \geq 1\)).  I left Glop running long after the contest was
-over, and finally stopped it with no solution after more than 40 <em>days</em>
-on my 2.9 GHz E5.</p>
-
-<p>Given the shape of the constraint matrix, I would have loved to try an
-interior point method, but all my licenses had expired, and I didn’t
-want to risk OOMing my workstation.  <a href="https://twitter.com/e_d_andersen">Erling Andersen</a>
-was later kind enough to test Mosek’s interior point solver on it.
-The runtime was much more reasonable: 
-<a href="https://twitter.com/e_d_andersen/status/1120579664806842368">10 minutes on 1 core, and 4 on 12 cores</a>, with the sublinear speed-up mostly caused by the serial
-crossover to a simplex basis.</p>
-
-<p>At 21 hours for a naïve implementation, the “learning with experts”
-first order method isn’t practical yet, but also not obviously
-uninteresting, so I’ll write it up here.</p>
-
-<p>Using online learning algorithms for the “experts problem” (e.g.,
-<a href="https://cseweb.ucsd.edu/~yfreund/papers/adaboost.pdf">Freund and Schapire’s Hedge algorithm</a>)
-to solve linear programming <em>feasibility</em> is now a classic result;
-<a href="https://jeremykun.com/2017/02/27/the-reasonable-effectiveness-of-the-multiplicative-weights-update-algorithm/">Jeremy Kun has a good explanation on his blog</a>.  What’s
-new here is:</p>
-
-<ol>
-  <li>Directly solving the optimisation problem.</li>
-  <li>Confirming that the parameter-free nature of <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a> helps.</li>
-</ol>
-
-<p>The first item is particularly important to me because it’s a simple
-modification to the LP feasibility meta-algorithm, and might make the
-difference between a tool that’s only suitable for theoretical
-analysis and a practical approach.</p>
-
-<p>I’ll start by reviewing the experts problem, and how LP feasibility is
-usually reduced to the former problem.  After that, I’ll
-cast the reduction as a <a href="https://smartech.gatech.edu/bitstream/handle/1853/24230/karwan_mark_h_197612_phd_154133.pdf">surrogate relaxation</a>
-method, rather than a <a href="https://en.wikipedia.org/wiki/Lagrangian_relaxation">Lagrangian relaxation</a>;
-optimisation should flow naturally from that
-point of view.  Finally, I’ll guess why I had more success
-with <a href="https://arxiv.org/abs/1301.0534">AdaHedge</a> this time than with 
-<a href="https://www.satyenkale.com/papers/mw-survey.pdf">Multiplicative Weight Update</a>
-eight years ago.<sup id="fnref:wall" role="doc-noteref"><a href="#fn:wall" class="footnote" rel="footnote">1</a></sup></p>
-
-<h2 id="the-experts-problem-and-lp-feasibility">The experts problem and LP feasibility</h2>
-
-<p>I first heard about the experts problem while researching
-dynamic sorted set data structures:
-<a href="https://dspace.mit.edu/handle/1721.1/10639">Igal Galperin’s PhD dissertation</a>
-describes <a href="http://user.it.uu.se/~arnea/abs/partb.html">scapegoat trees</a>, but is really about online learning with
-experts.
-<a href="https://www.satyenkale.com/papers/mw-survey.pdf">Arora, Hazan, and Kale’s 2012 survey of multiplicative weight update methods</a>.
-is probably a better introduction to the topic ;)</p>
-
-<p>The experts problem comes in many variations.  The simplest form
-sounds like the following.  Assume you’re playing a binary prediction
-game over a predetermined number of turns, and have access to a fixed
-finite set of experts at each turn.  At the beginning of every turn,
-each expert offers their binary prediction (e.g., yes it will rain
-today, or it will not rain today).  You then have to make a prediction
-yourself, with no additional input.  The actual result (e.g., it
-didn’t rain today) is revealed at the end of the turn.  In general,
-you can’t expect to be right more often than the best expert at the
-end of the game.  Is there a strategy that bounds the “regret,” how
-many more wrong prediction you’ll make compared to the expert(s) with
-the highest number of correct predictions, and in what circumstances?</p>
-
-<p>Amazingly enough, even with an omniscient adversary that has access to
-your strategy and determines both the experts’ predictions and the
-actual result at the end of each turn, a stream of random bits (hidden
-from the adversary) suffice to bound our expected regret in 
-\(\mathcal{O}(\sqrt{T}\,\lg n)\), where \(T\) is the number of 
-turns and \(n\) the number of experts.</p>
-
-<p>I long had trouble with that claim: it just seems too good of a magic
-trick to be true.  The key realisation for me was that we’re only
-comparing against invidivual experts.  If each expert is a move in a
-<a href="https://www.encyclopediaofmath.org/index.php/Matrix_game">matrix game</a>,
-that’s the same as claiming you’ll never do much worse than any pure
-strategy.  One example of a pure strategy is always playing rock in 
-Rock-Paper-Scissors; pure strategies are really bad!  The trick is
-actually in making that regret bound useful.</p>
-
-<p>We need a more continuous version of the experts problem for LP
-feasibility.  We’re still playing a turn-based game, but, this time,
-instead of outputting a prediction, we get to “play” a mixture of the
-experts (with non-negative weights that sum to 1).  At the beginning
-of each turn, we describe what weight we’d like to give to each
-experts (e.g., 60% rock, 40% paper, 0% scissors).  The cost
-(equivalently, payoff) for each expert is then revealed (e.g.,
-\(\mathrm{rock} = -0.5\), \(\mathrm{paper} = 0.5\), 
-\(\mathrm{scissors} = 0\)), and we incur the weighted average
-from our play (e.g., \(60\% \cdot -0.5 + 40\% \cdot 0.5 = -0.1\))
-before playing the next round.<sup id="fnref:equivalent" role="doc-noteref"><a href="#fn:equivalent" class="footnote" rel="footnote">2</a></sup>  The goal is to minimise
-our worst-case regret, the additive difference between the total cost
-incurred by our mixtures of experts and that of the a posteriori best single
-expert.  In this case as well, online learning
-algorithms guarantee regret in \(\mathcal{O}(\sqrt{T} \, \lg n)\)</p>
-
-<p>This line of research is interesting because simple algorithms achieve
-that bound, with explicit constant factors on the order of 1,<sup id="fnref:which-log" role="doc-noteref"><a href="#fn:which-log" class="footnote" rel="footnote">3</a></sup>
-and <a href="http://drops.dagstuhl.de/opus/volltexte/2017/7499/pdf/LIPIcs-ICALP-2017-48.pdf">those bounds are known to be non-asymptotically tight for a large class of algorithms</a>.
-Like dense linear algebra or fast Fourier transforms, where algorithms
-are often compared by counting individual floating point operations,
-online learning has matured into such tight bounds that worst-case
-regret is routinely presented without Landau notation.  Advances improve
-constant factors in the worst case, or adapt to easier inputs in order
-to achieve “better than worst case” performance.</p>
-
-<p>The <a href="https://jeremykun.com/2017/02/27/the-reasonable-effectiveness-of-the-multiplicative-weights-update-algorithm/">reduction below</a>
-lets us take any learning algorithm with an additive regret bound,
-and convert it to an algorithm with a corresponding worst-case
-iteration complexity bound for \(\varepsilon\)-approximate LP feasibility.
-An algorithm that promises low worst-case regret in \(\mathcal{O}(\sqrt{T})\)
-gives us an algorithm that needs at most \(\mathcal{O}(1/\varepsilon\sp{2})\)
-iterations to return a solution that almost satisfies every constraint in the
-linear program, where each constraint is violated by \(\varepsilon\) or less (e.g.,
-\(x \leq 1\) is actually \(x \leq 1 + \varepsilon\)).</p>
-
-<p>We first split the linear program in two components, a simple domain
-(e.g., the non-negative orthant or the \([0, 1]\sp{d}\) box) and the
-actual linear constraints.  We then map each of the latter constraints
-to an expert, and use an arbitrary algorithm that solves our
-continuous version of the experts problem as a black box.  At each
-turn, the black box will output a set of non-negative weights for the
-constraints (experts).  We will average the constraints using these
-weights, and attempt to find a solution in the intersection of our
-simple domain and the weighted average of the linear constraints.  We
-can do so in the “experts problem” setting by consider each linear
-constraint’s violation as a <em>payoff</em>, or, equivalently, satisfaction
-as a loss.</p>
-
-<p>Let’s use Stigler’s <a href="https://neos-guide.org/content/diet-problem">Diet Problem with three foods and two constraints</a>
-as a small example, and further simplify it by disregarding the
-minimum value for calories, and the maximum value for vitamin A.  Our
-simple domain here is at least the non-negative orthant: we can’t
-ingest negative food.  We’ll make things more interesting by also
-making sure we don’t eat more than 10 servings of any food per day.</p>
-
-<p>The first constraint says we mustn’t get too many calories</p>
-
-<p>\[72 x\sb{\mathrm{corn}} + 121 x\sb{\mathrm{milk}} + 65 x\sb{\mathrm{bread}} \leq 2250,\]</p>
-
-<p>and the second constraint (tweaked to improve this example) ensures
-we ge enough vitamin A</p>
-
-<p>\[107 x\sb{\mathrm{corn}} + 400 x\sb{\mathrm{milk}} \geq 5000,\]</p>
-
-<p>or, equivalently,</p>
-
-<p>\[-107 x\sb{\mathrm{corn}} - 400 x\sb{\mathrm{milk}} \leq -5000,\]</p>
-
-<p>Given weights \([3/4, 1/4]\), the weighted average of the two constraints is</p>
-
-<p>\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]</p>
-
-<p>where the coefficients for each variable and for the right-hand side
-were averaged independently.</p>
-
-<p>The subproblem asks us to find a feasible point in the intersection
-of these two constraints:
-\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
-
-<p>Classically, we claim that this is just Lagrangian relaxation, and
-find a solution to</p>
-
-<p>\[\min 27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}}\]
-subject to
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
-
-<p>In the next section, I’ll explain why I think this analogy is wrong
-and worse than useless.  For now, we can easily find the minimum one
-variable at a time, and find the solution 
-\(x\sb{\mathrm{corn}} = 0\), \(x\sb{\mathrm{milk}} = 10\),
-\(x\sb{\mathrm{bread}} = 0\), with objective value \(-92.5\) (which
-is \(530\) less than \(437.5\)).</p>
-
-<p>In general, three things can happen at this point.  We could discover
-that the subproblem is infeasible.  In that case, the original
-non-relaxed linear program itself is infeasible: any solution to the
-original LP satisfies all of its constraints, and thus would also
-satisfy any weighted average of the same constraints.  We could also
-be extremely lucky and find that our optimal solution to the relaxation is
-(\(\varepsilon\)-)feasible for the original linear program; we can stop
-with a solution.  More commonly, we have a solution that’s feasible for the
-relaxation, but not for the original linear program.</p>
-
-<p>Since that solution satisfies the weighted average constraint and
-payoffs track constraint violation, the black box’s payoff for this
-turn (and for every other turn) is non-positive.  In the current case,
-the first constraint (on calories) is satisfied by \(1040\), while
-the second (on vitamin A) is violated by \(1000\).  On weighted
-average, the constraints are satisfied by \(\frac{1}{4}(3 \cdot
-1040 - 1000) = 530.\) Equivalently, they’re violated by \(-530\) on
-average.</p>
-
-<p>We’ll add that solution to an accumulator vector that will come in
-handy later.</p>
-
-<p>The next step is the key to the reduction: we’ll derive payoffs
-(negative costs) for the black box from the solution to the last
-relaxation.  Each constraint (expert) has a payoff equal to its level
-of violation in the relaxation’s solution.  If a constraint is
-strictly satisfied, the payoff is negative; for example, the constraint
-on calories is satisfied by \(1040\), so its payoff this turn is
-\(-1040\).  The constraint on vitamin A is violated by \(1000\),
-so its payoff this turn is \(1000\).  Next turn, we expect the
-black box to decrease the weight of the constraint on calories,
-and to increase the weight of the one on vitamin A.</p>
-
-<p>After \(T\) turns, the total payoff for each constraint is equal to
-the sum of violations by all solutions in the accumulator.  Once we
-divide both sides by \(T\), we find that the divided payoff for each
-constraint is equal to its violation by the average of the solutions
-in the accumulator.  For example, if we have two solutions, one that
-violates the calories constraint by \(500\) and another that
-satisfies it by \(1000\) (violates it by \(-1000\)), the total
-payoff for the calories constraint is \(-500\), and the average
-of the two solutions does strictly satisfy the linear constraint by
-\(\frac{500}{2} = 250\)!</p>
-
-<p>We also know that we only generated feasible solutions to the relaxed
-subproblem (otherwise, we’d have stopped and marked the original LP as
-infeasible), so the black box’s total payoff is \(0\) or negative.</p>
-
-<p>Finally, we assumed that the black box algorithm guarantees an additive
-regret in \(\mathcal{O}(\sqrt{T}\, \lg n)\), so the black box’s payoff
-of (at most) \(0\) means that any constraint’s payoff is at most
-\(\mathcal{O}(\sqrt{T}\, \lg n)\).  After dividing by \(T\), we obtain
-a bound on the violation by the arithmetic mean of all solutions in
-the accumulator: for all constraint, that violation is in 
-\(\mathcal{O}\left(\frac{\lg n}{\sqrt{T}}\right)\).  In other words, the number
-of iteration \(T\) must scale with
-\(\mathcal{O}\left(\frac{\lg n}{\varepsilon\sp{2}}\right)\), 
-which isn’t bad when \(n\) is in the millions but
-\(\varepsilon \approx 0.01\).</p>
-
-<p>Theoreticians find this reduction interesting because there are
-concrete implementations of the black box, e.g., the
-<a href="https://www.satyenkale.com/papers/mw-survey.pdf">multiplicative weight update (MWU) method</a>
-with non-asymptotic bounds.  For many problems, this makes it
-possible to derive the exact number of iterations necessary
-to find an \(\varepsilon-\)feasible fractional solution, given
-\(\varepsilon\) and the instance’s size (but not the instance
-itself).</p>
-
-<p>That’s why algorithms like MWU are theoretically useful tools for
-fractional approximations, when we already have subgradient methods
-that only need \(\mathcal{O}\left(\frac{1}{\varepsilon}\right)\) iterations:
-state-of-the-art algorithms for learning with experts explicit
-non-asymptotic regret bounds that yield, for many problems, iteration
-bounds that only depend on the instance’s size, but not its data.
-While the iteration count when solving LP feasibility with MWU scales
-with \(\frac{1}{\varepsilon\sp{2}}\), it is merely proportional to
-\(\lg n\), the log of the the number of linear constraints.  That’s
-attractive, compared to subgradient methods for which the iteration
-count scales with \(\frac{1}{\varepsilon}\), but also scales
-linearly with respect to instance-dependent values like the distance
-between the initial dual solution and the optimum, or the Lipschitz
-constant of the Lagrangian dual function; these values are hard to
-bound, and are often proportional to the square root of the number
-of constraints.  Given the choice between
-\(\mathcal{O}\left(\frac{\lg n}{\varepsilon\sp{2}}\right)\) 
-iterations with explicit constants, and a looser
-\(\mathcal{O}\left(\frac{\sqrt{n}}{\varepsilon}\right)\), it’s 
-obvious why MWU and online learning are powerful additions to 
-the theory toolbox.</p>
-
-<p>Theoreticians are otherwise not concerned with efficiency, so the
-usual answer to someone asking about optimisation is to tell them they
-can always reduce linear optimisation to feasibility with a binary
-search on the objective value.  I once made the mistake of
-implementing that binary search last strategy.  Unsurprisingly, it
-wasn’t useful.  I also tried another theoretical reduction, where I
-looked for a pair of primal and dual -feasible solutions that happened
-to have the same objective value.  That also failed, in a more
-interesting manner: since the two solution had to have almost the same
-value, the universe spited me by sending back solutions that were
-primal and dual infeasible in the worst possible way.  In the end, the
-second reduction generated fractional solutions that were neither
-feasible nor superoptimal, which really isn’t helpful.</p>
-
-<h2 id="direct-linear-optimisation-with-experts">Direct linear optimisation with experts</h2>
-
-<p>The reduction above works for any “simple” domain, as long as it’s
-convex and we can solve the subproblems, i.e., find a point in the
-intersection of the simple domain and a single linear constraint or
-determine that the intersection is empty.</p>
-
-<p>The set of (super)optimal points in some initial simple domain is
-still convex, so we could restrict our search to the search of the
-domain that is superoptimal for the linear program we wish to
-optimise, and directly reduce optimisation to the feasibility problem
-solved in the last section, without binary search.</p>
-
-<p>That sounds silly at first: how can we find solutions that are
-superoptimal when we don’t even know the optimal value?</p>
-
-<p>Remember that the subproblems are always relaxations of the original
-linear program.  We can port the objective function from the original
-LP over to the subproblems, and optimise the relaxations.  Any
-solution that’s optimal for a realxation must have an optimal or
-superoptimal value for the original LP.</p>
-
-<p>Rather than treating the black box online solver as a generator of 
-<a href="https://en.wikipedia.org/wiki/Duality_\(optimization\)#The_strong_Lagrangian_principle:_Lagrange_duality">Lagrangian dual</a>
-vectors, we’re using its weights as solutions to the
-<a href="https://smartech.gatech.edu/bitstream/handle/1853/24230/karwan_mark_h_197612_phd_154133.pdf"><em>surrogate</em> relaxation dual</a>.
-The latter interpretation isn’t just more powerful by handling
-objective functions.  It also makes more sense: the weights generated
-by algorithms for the experts problem are probabilities, i.e., they’re
-non-negative and sum to \(1\).  That’s also what’s expected for surrogate
-dual vectors, but definitely not the case for Lagrangian dual vectors,
-even when restricted to \(\leq\) constraints.</p>
-
-<p>We can do even better!</p>
-
-<p>Unlike Lagrangian dual solvers, which only converge when fed
-(approximate) subgradients and thus make us (nearly) optimal solutions
-to the relaxed subproblems, our reduction to the experts problem only
-needs feasible solutions to the subproblems.  That’s all we need to
-guarantee an \(\varepsilon-\)feasible solution to the initial problem
-in a bounded number of iterations.  We also know exactly how that
-\(\varepsilon-\)feasible solution is generated: it’s the arithmetic
-mean of the solutions for relaxed subproblems.</p>
-
-<p>This lets us decouple finding lower bounds from generating feasible
-solutions that will, on average, \(\varepsilon-\)satisfy the
-original LP.  In practice, the search for an \(\varepsilon-\)feasible
-solution that is also superoptimal will tend to improve the lower
-bound.  However, nothing forces us to evaluate lower bounds
-synchronously, or to only use the experts problem solver to improve
-our bounds.</p>
-
-<p>We can find a new bound from any vector of non-negative constraint
-weights: they always yield a valid surrogate relaxation.  We can solve
-that relaxation, and update our best bound when it’s improved.  The
-Diet subproblem earlier had</p>
-
-<p>\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
-
-<p>Adding the original objective function back yields the linear program</p>
-
-<p>\[\min 0.18 x\sb{\mathrm{corn}} + 0.23 x\sb{\mathrm{milk}} + 0.05 x\sb{\mathrm{bread}}\]
-subject to
-\[27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}} \leq 437.5,\]
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10,\]</p>
-
-<p>which has a trivial optimal solution at \([0, 0, 0]\).</p>
-
-<p>When we generate a feasible solution for the same subproblem, we can
-use any valid bound on the objective value to find the most feasible
-solution that is also assuredly (super)optimal.  For example, if some
-oracle has given us a lower bound of \(2\) for the original Diet
-problem, we can solve for</p>
-
-<p>\[\min 27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}}\]
-subject to
-\[0.18 x\sb{\mathrm{corn}} + 0.23 x\sb{\mathrm{milk}} + 0.05 x\sb{\mathrm{bread}}\leq 2\]
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
-
-<p>We can relax the objective value constraint further, since we know
-that the final \(\varepsilon-\)feasible solution is a simple
-arithmetic mean.  Given the same best bound of \(2\), and, e.g., a
-current average of \(3\) solutions with a value of \(1.9\), a new
-solution with an objective value of \(2.3\) (more than our best
-bound, so not necessarily optimal!) would yield a new average solution
-with a value of \(2\), which is still (super)optimal.  This means
-we can solve the more relaxed subproblem</p>
-
-<p>\[\min 27.25 x\sb{\mathrm{corn}} - 9.25 x\sb{\mathrm{milk}} + 48.75 x\sb{\mathrm{bread}}\]
-subject to
-\[0.18 x\sb{\mathrm{corn}} + 0.23 x\sb{\mathrm{milk}} + 0.05 x\sb{\mathrm{bread}}\leq 2.3\]
-\[0 \leq x\sb{\mathrm{corn}},\, x\sb{\mathrm{milk}},\, x\sb{\mathrm{bread}} \leq 10.\]</p>
-
-<p>Given a bound on the objective value, we swapped the constraint and
-the objective; the goal is to maximise feasibility, while generating a
-solution that’s “good enough” to guarantee that the average solution
-is still (super)optimal.</p>
-
-<p>For box-constrained linear programs where the box is the convex
-domain, subproblems are bounded linear knapsacks, so we can simply
-stop the greedy algorithm as soon as the objective value constraint is
-satisfied, or when the knapsack constraint becomes active (we found a
-better bound).</p>
-
-<p>This last tweak doesn’t just accelerate convergence to
-\(\varepsilon-\)feasible solutions.  More importantly for me, it
-pretty much guarantees that out \(\varepsilon-\)feasible solution
-matches the best known lower bound, even if that bound was provided by
-an outside oracle.  <a href="http://www.inrialpes.fr/bipop/people/malick/Docs/05-frangioni.pdf">Bundle methods</a>
-and the <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.217.8194&amp;rep=rep1&amp;type=pdf">Volume algorithm</a>
-can also mix solutions to relaxed subproblems in order to generate
-\(\varepsilon-\)feasible solutions, but the result lacks the last
-guarantee: their fractional solutions are even more superoptimal
-than the best bound, and that can make bounding and variable fixing
-difficult.</p>
-
-<h2 id="the-secret-sauce-adahedge">The secret sauce: AdaHedge</h2>
-
-<p>Before last Christmas’s CVRP set covering LP, I had always used the 
-<a href="https://www.satyenkale.com/papers/mw-survey.pdf">multiplicative weight update (MWU) algorithm</a>
-as my black box online learning algorithm:  it wasn’t great, but I
-couldn’t find anything better. The two main downsides for me
-were that I had to know a “width” parameter ahead of time, as well
-as the number of iterations I wanted to run.</p>
-
-<p>The width is essentially the range of the payoffs; in our case, the
-potential level of violation or satisfaction of each constraints by
-any solution to the relaxed subproblems.  The dependence isn’t
-surprising: folklore in Lagrangian relaxation also says that’s a big
-factor there.  The problem is that the most extreme violations and
-satisfactions are initialisation parameters for the MWU algorithm,
-and the iteration count for a given \(\varepsilon\) is quadratic
-in the width (\(\mathrm{max}\sb{violation} \cdot \mathrm{max}\sb{satisfaction}\)).</p>
-
-<p>What’s even worse is that the MWU is explicitly tuned for a specific
-iteration count.  If I estimate that, give my worst-case width estimate,
-one million iterations will be necessary to achieve \(\varepsilon-\)feasibility,
-MWU tuned for 1M iterations will need 1M iterations, even if the actual
-width is narrower.</p>
-
-<p><a href="https://arxiv.org/abs/1301.0534">de Rooij and others published AdaHedge in 2013</a>,
-an algorithm that addresses both these issues by smoothly estimating
-its parameter over time, without using the doubling trick.<sup id="fnref:doubling" role="doc-noteref"><a href="#fn:doubling" class="footnote" rel="footnote">4</a></sup>
-AdaHedge’s loss (convergence rate to an \(\varepsilon-\)solution)
-still depends on the relaxation’s width.  However, it depends on the
-maximum width actually observed during the solution process, and not
-on any explicit worst-case bound.  It’s also not explicily tuned for a
-specific iteration count, and simply keeps improving at a rate that
-roughly matches MWU.  If the instance happens to be easy, we will find
-an \(\varepsilon-\)feasible solution more quickly.  In the worst
-case, the iteration count is never much worse than that of an
-optimally tuned MWU.</p>
-
-<p>These <a href="https://gist.github.com/pkhuong/c508849180c6cf612f7335933a88ffa6">400 lines of Common Lisp</a>
-implement AdaHedge and use it to optimise the set covering LP.  AdaHedge acts
-as the online black box solver for the surrogate dual problem, the relaxed
-set covering LP is a linear knapsack, and each subproblem attempts
-to improve the lower bound before maximising feasibility.</p>
-
-<p>When I ran the code, I had no idea how long it would take to find a
-feasible enough solution: covering constraints can never be violated
-by more than \(1\), but some points could be covered by hundreds of
-tours, so the worst case satisfaction width is high. I had to rely on
-the way AdaHedge adapts to the actual hardness of the problem.  In the
-end, \(34492\) iterations sufficed to find a solution that was \(4.5\%\)
-infeasible.<sup id="fnref:wrong-log" role="doc-noteref"><a href="#fn:wrong-log" class="footnote" rel="footnote">5</a></sup>  This corresponds to a worst case with a width
-of less than \(2\), which is probably not what happened.  It seems
-more likely that the surrogate dual isn’t actually an omniscient
-adversary, and AdaHedge was able to exploit some of that “easiness.”</p>
-
-<p>The iterations themselves are also reasonable: one sparse matrix /
-dense vector multiplication to convert surrogate dual weights to an
-average constraint, one solve of the relaxed LP, and another sparse
-matrix / dense vector multiplication to compute violations for each
-constraint.  The relaxed LP is a fractional \([0, 1]\) knapsack, so
-the bottleneck is sorting double floats.  Each iteration took 1.8
-seconds on my old laptop; I’m guessing that could easily be 10-20
-times faster with vectorisation and parallelisation.</p>
-
-<p>In another post, I’ll show how using the same surrogate dual optimisation
-algorithm to mimick <a href="https://link.springer.com/article/10.1007/BF02592954">Lagrangian decomposition</a>
-<a href="https://perso.ensta-paristech.fr/~diam/ro/online/Monique.Guignard-top11201.pdf">instead of Lagrangian relaxation</a>
-guarantees an iteration count in \(\mathcal{O}\left(\frac{\lg \#\mathrm{nonzero}}{\varepsilon\sp{2}}\right)\) independently of luck or the specific linear constraints.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>I like to think of Robin Hood hash tables with linear probing as
+arrays sorted on uniformly distributed keys, with gaps.  That makes it
+clearer that we can use these tables to implement algorithms based on
+merging sorted streams in bulk, as well as ones that rely on fast
+point lookups.  A key question with randomised data structures is how
+badly we can expect them to perform.</p>
+
+<h2 id="a-bound-on-the-length-of-contiguous-runs-of-entries">A bound on the length of contiguous runs of entries</h2>
+
+<p>There’s a lot of work on the <em>expected</em> time complexity of operations
+on linear probing Robin Hood hash tables.  <a href="https://dblp.uni-trier.de/pers/hd/v/Viola:Alfredo">Alfredo Viola</a>,
+along with a
+<a href="http://algo.inria.fr/flajolet/Publications/FlPoVi98.pdf">few collaborators</a>,
+has <a href="https://cs.uwaterloo.ca/research/tr/1995/50/CS95-50.pdf">long</a>
+been exploring the <a href="http://www2.math.uu.se/~svante/papers/sj297-aofa.pdf">distribution of displacements</a> (i.e., search times)
+for random elements.  The <a href="https://www3.cs.stonybrook.edu/~bender/newpub/BenderHu07-TODS.pdf">packed memory array</a> angle has also been around
+for <a href="https://www.cs.cmu.edu/~jcreed/p251-willard.pdf">a while</a>.<sup id="fnref:waterloo" role="doc-noteref"><a href="#fn:waterloo" class="footnote" rel="footnote">1</a></sup></p>
+
+<p>I’m a bit wary of the “random element” aspect of the linear probing
+bounds: while I’m comfortable with an expectation over the hash
+function (i.e., over the uniformly distributed hash values), a program
+could repeatedly ask for the same key, and consistently experience
+worse-than-expected performance.  I’m more interested in bounding the
+worst-case displacement (the distance between the ideal location for
+an element, and where it is actually located) across all values in a
+randomly generated<sup id="fnref:memory-less" role="doc-noteref"><a href="#fn:memory-less" class="footnote" rel="footnote">2</a></sup> Robin Hood table, with high enough
+probability.  That probability doesn’t have to be extremely high:
+\(p = 0.9\) or even \(p = 0.5\) is good enough, as long as we can
+either rehash with an independent hash function, or the probability of
+failure drops exponentially enough as the displacement leeway grows.</p>
+
+<p>The people who study hashing with buckets, or hashing as load
+balancing, seem more interested in these probable worst-case bounds:
+as soon as one bucket overflows, it’s game over for that hash table!
+In that context, we wish to determine how much headroom we must
+reserve in each bucket, on top of the expected occupancy, in order to
+make sure failures are rare enough.  That’s a <a href="https://en.wikipedia.org/wiki/Balls_into_bins_problem">balls into bins problem</a>, where
+the \(m\) balls are entries in the hash table, and the \(n\) bins
+its hash buckets.</p>
+
+<p><a href="http://www.dblab.ntua.gr/~gtsat/collection/scheduling/Balls%20into%20Bins%20A%20Simple%20and%20Tight%20Anal.pdf">Raab and Steger’s Simple and Tight Analysis</a>
+of the “balls into bins” problem shows that the case where the average occupancy grows
+with \((\log m)\sp{k}\) and \(k &gt; 1\) has potential, when it comes
+to worst-case bounds that shrink quickly enough: we only need headroom
+that grows with \(\sqrt{\log\sp{k+1} m} = \log\sp{(k+1)/2} m\), 
+slightly more than the square root of the average occupancy.</p>
+
+<p>The only issue is that the balls-into-bins analysis is asymptotic,
+and, more importantly, doesn’t apply at all to linear probing!</p>
+
+<p>One could propose a form of packed memory array, where the sorted set
+is subdivided in chunks such that the expected load per chunk is in
+\(\Theta(\log\sp{k} m)\), and the size of each chunk
+multiplicatively larger (more than \(\log\sp{(k+1)/2}m\))…</p>
+
+<p>Can we instead derive similar bounds with regular linear probing?  It
+turns out that Raab and Steger’s bounds are indeed simple: they
+find the probability of overflow for one bucket, and derive a
+<a href="https://en.wikipedia.org/wiki/Boole%27s_inequality">union bound</a> for the probability of overflow for any bucket by
+multiplying the single-bucket failure probability by the number of
+buckets.  Moreover, the single-bucket case itself is a <a href="https://en.wikipedia.org/wiki/Binomial_distribution">Binomial</a> confidence interval.</p>
+
+<p>We can use the same approach for linear probing; I don’t expect a tight
+result, but it might be useful.</p>
+
+<p>Let’s say we want to determine how unlikely it is to observe a clump
+of \(\log\sp{k}n\) entries, where \(n\) is the capacity of the hash
+table.  We can bound the probability of observing such a clump
+starting at index 0 in the backing array, and multiply by the size of
+the array for our union bound (the clump could start anywhere in the array).</p>
+
+<p>Given density \(d = m / n\), where \(m\) is the number of
+entries and \(n\) is the size of the array that backs the hash
+table, the probability that any given element falls in a range of size
+\(\log\sp{k}n\) is \(p = d/n \log\sp{k}n\).  The number of entries
+in such a range follows a Binomial distribution \(B(dn, p)\), with
+expected value \(d \log\sp{k}n\).  We want to determine the maximum
+density \(d\) such that 
+\(\mathrm{Pr}[B(dn, p) &gt; \log\sp{k}n] &lt; \frac{\alpha}{dn}\), where
+\(\alpha\) is our overall failure rate. If rehashing is acceptable,
+we can let \(\alpha = 0.5\), and expect to find a
+suitably uniform hash function after half a rehash on average.</p>
+
+<p>We know we want \(k &gt; 1\) for the tail to shrink rapidly enough as
+\(n\) grows, but even \(\log\sp{2}n\) doesn’t shrink very rapidly.
+After some trial and error, I settled on a chunk size
+\(s(n) = 5 \log\sb{2}\sp{3/2} n\).  That’s not great for small or medium sized
+tables (e.g., \(s(1024) = 158.1\)), but grows slowly, and reflects
+extreme worst cases; in practice, we can expect the worst case for
+any table to be more reasonable.</p>
+
+<p>Assuming we have a quantile function for the Binomial distribution, we
+can find the occupancy of our chunk, at \(q = 1 - \frac{\alpha}{n}\). 
+The occupancy is a monotonic function of the density, so we can use,
+e.g., bisection search to find the maximum density such that the
+probability that we saturate our chunk is \(\frac{\alpha}{n}\),
+and thus the probability that any continuous run of entries has size
+at least \(s(n) =  5 \log\sb{2}\sp{3/2} n\) is less than \(\alpha\).</p>
+
+<p>For \(\alpha = 0.5\), the plot of densities looks like the following.</p>
+
+<p><img class="center" src="/images/2019-09-29-a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/alpha-half.png" /></p>
+
+<!-- sizer <- function(x) { 5 * (log(x, 2)^1.5) };
+     max_overflow <- function(sizer, density, n, p) { n <- ceiling(n); run <- floor(sizer(n)); num_starts = max(1, 1 + n - run); qbinom(1 - (p / num_starts), n, density * run / n) / run }
+     density <- sapply(n, function (n) uniroot(function (density) max_overflow(sizer, density, n, 0.5) - 1, c(0, 1))$root)
+     ggplot(data=data.frame(n, density), aes(x = n, y = density)) + geom_line()
+     -->
+
+<p>This curve roughly matches the shape of some
+<a href="https://www.pvk.ca/Blog/more_numerical_experiments_in_hashing.html">my older purely numerical experiments with Robin Hood hashing</a>.
+When the table is small (less than \(\approx 1000\)), \(\log n\) is
+a large fraction of \(n\), so the probability of finding a run of
+size \(s(n) = 5 \log\sb{2}\sp{3/2} n\) is low.  When the table is
+much larger, the asymptotic result kicks in, and the probabiliy slowly
+shrinks.  However, even around the worst case \(n \approx 4500\),
+we can exceed \(77\%\) density and only observe a run of length
+\(s(n)\) half the time.</p>
+
+<p>If we really don’t want to rehash, we can let \(\alpha = 10\sp{-10}\),
+which compresses the curve and shifts it down: the minimum value is
+now slightly above \(50\%\) density, and we can clearly see the
+growth in permissible density as the size of the table grows.</p>
+
+<!-- density <- sapply(n, function (n) uniroot(function (density) max_overflow(sizer, density, n, 1e-10) - 1, c(0, 1))$root)
+     ggplot(data=data.frame(n, density), aes(x = n, y = density)) + geom_line()
+     -->
+
+<p><img class="center" src="/images/2019-09-29-a-couple-of-probabilistic-worst-case-bounds-for-robin-hood-linear-probing/alpha-marginal.png" /></p>
+
+<p>In practice, we can dynamically compute the worst-case displacement,
+which is always less than the longest run (i.e., less than \(s(n) = 5
+\log\sb{2}\sp{3/2} n\)).  However, having non-asymptotic bounds lets
+us write size-specialised code and know that its assumptions are
+likely to be satisfied in real life.</p>
+
+<h2 id="bounding-buffer-sizes-for-operations-on-sorted-hashed-streams">Bounding buffer sizes for operations on sorted hashed streams</h2>
+
+<p>I mentioned at the beginning of this post that we can also manipulate
+Robin Hood hash tables as sorted sets, where the sort keys are
+uniformly distributed hash values.</p>
+
+<p>Let’s say we wished to merge the immutable source table <code>S</code> into the
+larger destination table <code>D</code> in-place, without copying all of <code>D</code>.
+For example, from</p>
+
+<pre><code>S = [2, 3, 4]
+D = [1, 6, 7, 9, 10];
+</code></pre>
+
+<p>we want the merged result</p>
+
+<pre><code>D' = [1, 2, 3, 4, 6, 7, 9, 10].
+</code></pre>
+
+<p>The issue here is that, even with gaps, we might have to overwrite
+elements of <code>D</code>, and buffer them in some scratch space until we get to
+their final position.  In this case, all three elements of <code>S</code> must be
+inserted between the first and second elements of <code>D</code>, so we could
+need to buffer <code>D[1:4]</code>.</p>
+
+<p>How large of a merge buffer should we reasonably plan for?</p>
+
+<p>In general, we might have to buffer as many elements as there are in
+the smaller table of <code>S</code> and <code>D</code>.  However, we’re working with hash
+values, so we can expect them to be distributed uniformly.  That
+should give us some grip on the problem.</p>
+
+<p>We can do even better and only assume that both sorted sets were
+sampled from the same underlying distribution.  The key idea
+is that the rank of an element in <code>S</code> is equal to the
+value of <code>S</code>’s
+<a href="https://en.wikipedia.org/wiki/Empirical_distribution_function">empirical distribution function</a>
+for that element, multiplied by the size of <code>S</code> (similarly for
+<code>D</code>).</p>
+
+<p>The amount of buffering we might need is simply a measure of the
+worst-case difference between the two empirical DFs: the more <code>S</code> get
+ahead of <code>D</code>, the more we need to buffer values of <code>D</code> before
+overwriting them (if we’re very unlucky, we might need a buffer the
+same size as <code>S</code>).  That’s the
+two-sample <a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test#Kolmogorov%E2%80%93Smirnov_statistic">Kolmogorov-Smirnov statistic</a>, and we have 
+<a href="https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test#Two-sample_Kolmogorov%E2%80%93Smirnov_test">simple bounds for that distance</a>.</p>
+
+<p>With probability \(1 - \alpha\), we’ll consume from <code>S</code> and <code>D</code>
+at the same rate \(\pm \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}}\).
+We can let \(\alpha = 10\sp{-10}\) and pre-allocate a buffer of size</p>
+
+<p><span>
+\[|S| \sqrt{-\frac{(|S| + |D|) \ln \alpha}{2 |S| |D|}} &lt; \sqrt{\frac{23.03 |S| (|S| + |D|)}{2 |D|}}.\]
+</span></p>
+
+<p>In the worst case, \(|S| = |D|\), and we can preallocate a buffer of
+size \(\sqrt{23.03 |D|} &lt; 4.8 \sqrt{|D|}\) and only need to grow
+the buffer every ten billion (\(\alpha\sp{-1}\)) merge.</p>
+
+<p>The same bound applies in a stream processing setting; I assume this
+is closer to what <a href="https://twitter.com/frankmcsherry">Frank</a> had in
+mind when he brought up this question.</p>
+
+<p>Let’s assume a “push” dataflow model, where we still work on sorted
+sets of uniformly distributed hash values (and the data tuples
+associated with them), but now in streams that generate values every
+tick.  The buffer size problem now sounds as follows.  We wish to
+implement a sorted merge operator for two input streams that generate
+one value every tick, and we can’t tell our sources to cease producing
+values; how much buffer space might we need in order to merge them
+correctly?</p>
+
+<p>Again, we can go back to the Kolmogorov-Smirnov statistic.  In this
+case however, we could buffer each stream independently, so we’re
+looking for critical values for the one-sided one-sample
+Kolmogorov-Smirnov test (how much one stream might get ahead of the
+hypothetical exactly uniform stream).  We have recent (<a href="https://projecteuclid.org/euclid.aop/1176990746">1990</a>)
+<a href="https://en.wikipedia.org/wiki/Dvoretzky%E2%80%93Kiefer%E2%80%93Wolfowitz_inequality">simple and tight bounds</a>
+for this case as well.</p>
+
+<p>The critical values for the one-sided case are stronger than the
+two-sided two-sample critical values we used earlier: given an
+overflow probability of \(1 - \alpha\), we need to buffer at most
+\(\sqrt{-\frac{n \ln \alpha}{2}},\) elements.  For 
+\(\alpha = 10\sp{-20}\) that’s less than \(4.8 \sqrt{n}\).<sup id="fnref:three-centuries" role="doc-noteref"><a href="#fn:three-centuries" class="footnote" rel="footnote">3</a></sup>
+This square root scaling is pretty good news in practice: shrinking
+\(n\) to \(\sqrt{n}\) tends to correspond to going down a rung or two in
+the storage hierarchy.  For example, \(10\sp{15}\) elements is
+clearly in the range of distributed storage; however, such a humongous
+stream calls for a buffer of fewer than \(1.5 \cdot 10\sp{8}\)
+elements, which, at a couple gigabytes, should fit in RAM on one large
+machine.  Similarly, \(10\sp{10}\) elements might fill the RAM on
+one machine, but the corresponding buffer of less than half a
+million elements could fit in L3 cache, while one million elements
+could fill the L3, and 4800 elements fit in L1 or L2.</p>
+
+<p>What I find neat about this (probabilistic) bound on the buffer size
+is its independence from the size of the other inputs to the merge
+operator.  We can have a shared \(\Theta(\sqrt{n})\)-size buffer in
+front of each stream, and do all our operations without worrying about
+getting stuck (unless we’re extremely unlucky, in which case we can
+grow the buffer a bit and resume or restart the computation).</p>
+
+<p>Probably of more theoretical interest is the fact that these bounds do
+not assume a uniform distribution, only that all the input streams are
+identically and independently sampled from the same underlying
+distribution. That’s the beauty of working in terms of the (inverse)
+distribution functions.</p>
+
+<h2 id="i-dont-think-theres-anything-deeper">I don’t think there’s anything deeper</h2>
+
+<p>That’s it. Two cute tricks that use well-understood statistical
+distributions in hashed data structure and algorithm design.  I doubt
+there’s anything to generalise from either bounding approach.</p>
+
+<p>However, I definitely believe they’re useful in practice. I like knowing
+that I can expect the maximum displacement for a table of \(n\)
+elements with Robin Hood linear probing to be less than \(5
+\log\sb{2}^{3/2} n\), because that lets me select an appropriate
+option for each table, as a function of that table’s maximum
+displacement, while knowing the range of displacements I might have to
+handle.  Having a strong bound on how much I might have to buffer for
+stream join operators feels even more useful: I can pre-allocate a
+single buffer per stream and not think about efficiently growing the
+buffer, or signaling that a consumer is falling behind.  The
+probability that I’ll need a larger buffer is so low that I just need
+to handle it, however inefficiently.  In a replicated system, where
+each node picks an independent hash function, I would even consider
+crashing when the buffer is too small!</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:wall" role="doc-endnote">
-      <p>Yes, I have been banging my head against that wall for a while. <a href="#fnref:wall" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:waterloo" role="doc-endnote">
+      <p>I swear the Waterloo theme isn’t some <a href="https://en.wikipedia.org/wiki/Canadian_content">CanCon</a> thing. <a href="#fnref:waterloo" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:equivalent" role="doc-endnote">
-      <p>This is equivalent to minimising expected loss with random bits, but cleans up the reduction. <a href="#fnref:equivalent" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:memory-less" role="doc-endnote">
+      <p>With consistent tie-breaking, the layout of entries in a Robin hood hash table is a function of the set of entries, independently of the sequence of add and remove operations. <a href="#fnref:memory-less" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:which-log" role="doc-endnote">
-      <p>When was the last time you had to worry whether that log was natural or base-2? <a href="#fnref:which-log" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:doubling" role="doc-endnote">
-      <p>The doubling trick essentially says to start with an estimate for some parameters (e.g., width), then adjust it to at least double the expected iteration count when the parameter’s actual value exceeds the estimate. The sum telescopes and we only pay a constant multiplicative overhead for the dynamic update. <a href="#fnref:doubling" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
-    </li>
-    <li id="fn:wrong-log" role="doc-endnote">
-      <p>I think I computed the \(\log\) of the number of decision variables instead of the number of constraints, so maybe this could have gone a bit better. <a href="#fnref:wrong-log" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:three-centuries" role="doc-endnote">
+      <p>Assuming we consume ten streams per nanosecond, we expect to experience underbuffering once every 316 years. <a href="#fnref:three-centuries" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
@@ -657,7 +419,7 @@ guarantees an iteration count in \(\mathcal{O}\left(\frac{\lg \#\mathrm{nonzero}
     </div>
   </div>
   <footer role="contentinfo"><p>
-  Website copyright &copy; 2025 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+  Website copyright &copy; 2026 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
 </p>
 
 </footer>

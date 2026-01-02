@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2021/06/07/entomological-solutions/">Entomological solutions</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2021/08/01/slitter-a-less-footgunny-slab-allocator/">Slitter: a slab allocator that trusts, but verifies</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-June
+Aug
   
-7th, 
+1st, 
 2021
 
 
 
 
         
-         | <a href="/Blog/2021/06/07/entomological-solutions/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2021/06/07/entomological-solutions/"
+         | <a href="/Blog/2021/08/01/slitter-a-less-footgunny-slab-allocator/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2021/08/01/slitter-a-less-footgunny-slab-allocator/"
 	      >Comments</a>
         
         
@@ -117,293 +117,312 @@ June
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>Non-blocking algorithms have a reputation for complexity.  However, if
-you ask people who work on systems where strong progress guarantees
-are mandatory (e.g., hard real-time systems), they’ll often disagree.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><small>Originally posted on the <a href="https://engineering.backtrace.io/2021-08-04-slitter-a-slab-allocator-that-trusts-but-verifies/">Backtrace I/O tech blog</a>.</small></p>
 
-<p>I believe the difference is rooted in the way systems which <em>must</em>
-bound their pauses will sacrifice nice-to-haves to more cleanly
-satisfy that hard requirement.</p>
+<p><a href="https://github.com/backtrace-labs/slitter">Slitter</a> is Backtrace’s
+deliberately middle-of-the-road
+<a href="https://www.usenix.org/legacy/publications/library/proceedings/usenix01/full_papers/bonwick/bonwick.pdf">thread-caching</a>
+<a href="https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S13/hand-outs/bonwick_slab.pdf">slab allocator</a>,
+with <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/include/slitter.h#L7-L44">explicit allocation class tags</a>
+(rather than derived from the object’s size class).
+It’s mostly written in Rust, and we use it in our C backend server.</p>
 
-<p>Researchers and library writers instead tend to aim for maximal
-guarantees or functionality while assuming (sacrificing) as little as
-possible.  Someone who’s sprinkling lock-free algorithms in a large
-codebase will similarly want to rely on maximally general algorithms,
-in order to avoid increasing the scope of their work: if
-tail latency and lock-freedom were high enough priorities to justify
-wide-ranging changes, the program would probably have been designed
-that way from the start.</p>
+<p><a href="https://crates.io/crates/slitter">Slitter</a>’s design is about as
+standard as it gets: we hope to dedicate the project’s complexity
+budget to always-on “observability” and safety features.  We don’t
+wish to detect all or even most memory management errors, but we
+should statistically catch a small fraction (enough to help pinpoint
+production issues) of such bugs, and <em>always</em> constrain their scope to
+the mismanaged allocation class.<sup id="fnref:blast-radius" role="doc-noteref"><a href="#fn:blast-radius" class="footnote" rel="footnote">1</a></sup></p>
 
-<p>It makes sense to explore general solutions, and academia is
-definitely a good place to do so.  It was fruitful for mathematicians
-to ask questions about complex numbers, then move on to fields, rings,
-groups, etc., like sadistic kids probing what a bug can still do as
-they tear its legs off one by one.  Quicksort and mergesort are
-probably the strongest exemplars of that sort of research in computer
-science: we don’t even ask what data is made of before assuming a
-comparison sort is probably a good idea.</p>
+<p>We decided to code up Slitter last April, when we noticed
+that we would immediately benefit from backing allocation with
+temporary file mappings:<sup id="fnref:when-does-it-flush" role="doc-noteref"><a href="#fn:when-does-it-flush" class="footnote" rel="footnote">2</a></sup>
+the bulk of our data is mapped from
+persistent data files, but we also regenerate some cold metadata
+during startup, and accesses to that metadata have amazing locality,
+both temporal and spatial (assuming bump allocation).  We don’t want the OS
+to swap out all the heap–that way lie <a href="https://blog.acolyer.org/2017/06/15/gray-failure-the-achilles-heel-of-cloud-scale-systems/">grey failures</a>–so
+we opt specific allocation classes into it.</p>
 
-<p>It is however more typical to trade something in return for
-generality.  When there’s no impact on performance or resource
-usage, code complexity usually takes a hit.</p>
+<p>By itself, this isn’t a reason to write a slab allocator: we could
+easily have configured <a href="http://jemalloc.net/jemalloc.3.html#arena.i.extent_hooks">specialised arenas in jemalloc</a>,
+for example.  However, we also had eyes on longer term improvements to
+observability and debugging or mitigation of memory management errors in
+production, and those could only be unlocked by migrating to an
+interface with explicit tags for each allocation class (type).</p>
 
-<p>When solving a core problem like lock-freedom in a parallel
-realtime system, we instead ask how much more we can assume, what else
-we can give up, in order to obtain simpler, more robust solutions.
-We don’t want generality, we’re not crippling bugs; we want
-specificity, we’re dosing eggs with <a href="https://en.wikipedia.org/wiki/Antennapedia">Hox to get more legs</a>.</p>
+<p>Classic mallocs like <a href="https://github.com/jemalloc/jemalloc">jemalloc</a>
+and <a href="https://github.com/google/tcmalloc">tcmalloc</a> are fundamentally
+unable to match that level of integration: we can’t tell <code>malloc(3)</code>
+what we’re trying to allocate (e.g., a <code>struct request</code> in the HTTP
+module), only its size.  It’s still possible to wrap malloc in a richer
+interface, and, e.g., track heap consumption by tag.  Unfortunately,
+the result is slower than a native solution, and, without help from
+the underlying allocator, it’s easy to incorrectly match tags between
+<code>malloc</code> and <code>free</code> calls.  In my experience, this frequently leads to
+useless allocation statistics, usually around the very faulty code
+paths one is attempting to debug.</p>
 
-<p>The first time someone used to academic non-blocking algorithms hears
-about the resulting maximally specialised solutions, they’ll sometimes
-complain about “cheating.” Of course, it’s never cheating when a
-requirement actually is met; the surprise merely shows that the rules
-typically used to evaluate academic solutions are but approximations
-of reality, and can be broken…  and practitioners faced with
-specific problems are ideally placed to determine what rules
-they can flout.</p>
+<p>Even once we have built detailed statistics on top of a regular
+malloc, it’s hard to convince the underlying allocator to only recycle
+allocations within an object class: not only do mallocs eagerly
+recycle allocations of similar sizes regardless of their type, but
+they will also release unused runs of address space, or repurpose them
+for totally different size classes.  That’s what mallocs are supposed
+to do…  it just happens to also make debugging a lot harder when
+things inevitably go wrong.<sup id="fnref:ub" role="doc-noteref"><a href="#fn:ub" class="footnote" rel="footnote">3</a></sup></p>
 
-<h2 id="hoarding-is-caring">Hoarding is caring?</h2>
+<p>Slab allocators work with semantically richer allocation tags: an
+allocation tag describes its objects’ size, but can also specify how
+to initialise, recycle, or deinitialise them.  The problem is that
+slab allocators tend to focus exclusively on speed.</p>
 
-<p>My favourite example of such cheating is type-stable memory.  The
-literature on Safe memory reclamation (SMR) conflates<sup id="fnref:or-does-it" role="doc-noteref"><a href="#fn:or-does-it" class="footnote" rel="footnote">1</a></sup> two
-problems that are addressed by SMR algorithms: reclamation races, and
-the ABA problem.</p>
+<p><a href="https://github.com/omniti-labs/portableumem">Forks of libumem</a>
+may be the exception, thanks to the Solaris culture of pervasive
+hooking.  However, <code>umem</code>’s design reflects the sensibilities of the
+00s, when it was written: threads share a few caches, and the
+allocator tries to reuse address space.  In contrast, Slitter assumes memory
+is plentiful enough for thread-local caches and type-stable
+allocations.<sup id="fnref:not-as-configurable" role="doc-noteref"><a href="#fn:not-as-configurable" class="footnote" rel="footnote">4</a></sup></p>
 
-<p>A reclamation race is what happens when a thread dereferences a
-pointer to the heap, but the pointee has already been deallocated;
-even when the racy accesses are loads, they can result in a
-segmentation fault (and a crash).</p>
+<h2 id="our-experience-so-far">Our experience so far</h2>
 
-<p>The ABA problem is what happens when a descriptor (e.g., a pointer) is
-reused to refer to something else, but some code is unaware of the
-swap. For example, a thread could load a global pointer to a logically
-read-only object, read data off that pointer, sleep for a while, and
-observe that the global pointer has the same value. That does not mean
-nothing has changed: while the thread was sleeping, the pointee could
-have been freed, and then recycled to satisfy a fresh allocation.</p>
+<p>We have been running <a href="https://crates.io/crates/slitter">Slitter</a> in
+production for over two months, and rely on it to:</p>
 
-<p>Classic SMR algorithms like <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf">epoch reclamation</a>
-and <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&amp;rep=rep1&amp;type=pdf">hazard pointers</a>
-solve both problems at once; in fact, addressing
-reclamation races is their core contribution (it’s certainly the
-challenging part), and ABA protection is simply a nice corollary.</p>
+<ul>
+  <li>detect when an allocation is freed with the wrong allocation class
+tag (i.e., detect type confusion on free).</li>
+  <li>avoid any in-band metadata: there are guard pages between
+allocations and allocator metadata, and no intrusive freelist for
+use-after-frees to stomp over.</li>
+  <li>guarantee <a href="https://www.usenix.org/legacy/publications/library/proceedings/osdi96/full_papers/greenwald/node2.html">type stable allocations</a>:
+once an address has been used to fulfill a request for a certain
+allocation class, it will only be used for that class.  Slitter
+doesn’t overlay intrusive lists on top of freed allocations, so the
+data always reflects what the application last stored there.  This
+means that double-frees and use-after-frees only affect the faulty
+allocation class.  An application could even rely on
+read-after-free being benign to simplify non-blocking algorithms.<sup id="fnref:but-we-dont-depend-on-it-too-much" role="doc-noteref"><a href="#fn:but-we-dont-depend-on-it-too-much" class="footnote" rel="footnote">5</a></sup></li>
+  <li>let each allocation class specify how its backing memory should
+be mapped in (e.g., plain 4 KB pages or file-backed swappable pages).</li>
+</ul>
 
-<p>However, programs <em>can choose</em> not to crash on benign use-after-free:
-reading from freed objects only triggers crashes when memory is mapped
-and unmapped dynamically, and that’s usually not an option for hard
-realtime systems.  On smaller embedded targets, there’s a fixed
-physical memory budget; either the program fits, or the program is
-broken.  Larger shared-memory parallel programs often can’t afford the IPIs
-and other hiccups associated with releasing memory to the operating
-system.  Either way, half the problem solved by SMR doesn’t even exist
-for them.</p>
+<p>Thanks to extensive contracts and a mix of hardcoded and random tests,
+we encountered only two issues during the initial rollout, both in the
+small amount of lock-free C code that is hard to test.<sup id="fnref:legacy-gcc" role="doc-noteref"><a href="#fn:legacy-gcc" class="footnote" rel="footnote">6</a></sup></p>
 
-<p>The other half, ABA, is still an issue…  but that subproblem is
-easier to solve.  For example, we can tag data with sequence counters.<sup id="fnref:reuse-dont-recycle" role="doc-noteref"><a href="#fn:reuse-dont-recycle" class="footnote" rel="footnote">2</a></sup></p>
+<p>Type stability exerts a heavy influence all over Slitter’s design, and
+has obvious downsides.  For example, a short-lived application that
+progresses through a pipeline of stages, where each stage allocates
+different types, would definitely waste memory if it were to replace a
+regular malloc with a type-stable allocator like Slitter.  We believe
+the isolation benefits are more than worth the trouble, at least for
+long-lived servers that quickly enter a steady state.</p>
 
-<h2 id="lock-free-stacks-and-aba">Lock-free stacks and ABA</h2>
+<p>In the future, we hope to also:</p>
 
-<p>A <a href="https://en.wikipedia.org/wiki/Treiber_stack">lock-free multiple producers / single consumer linked stack</a> might be
-the simplest lock-free data structure.<sup id="fnref:but-maybe-not-scalable" role="doc-noteref"><a href="#fn:but-maybe-not-scalable" class="footnote" rel="footnote">3</a></sup></p>
+<ul>
+  <li>detect when an interior pointer is freed.</li>
+  <li>detect simple<sup id="fnref:jump" role="doc-noteref"><a href="#fn:jump" class="footnote" rel="footnote">7</a></sup> buffer overflows that cross allocation classes, by inserting guard pages.</li>
+  <li>always detect frees of addresses Slitter does not manage.</li>
+  <li>detect most back-to-back double-frees.</li>
+  <li>detect a random fraction of buffer overflows, with a sampling <a href="https://en.wikipedia.org/wiki/Electric_Fence">eFence</a>.</li>
+</ul>
 
-<p>Pushing a new record to such a stack is easy:<sup id="fnref:not-in-c" role="doc-noteref"><a href="#fn:not-in-c" class="footnote" rel="footnote">4</a></sup> load the current top
-of stack pointer, publish that in our <a href="https://en.wikipedia.org/wiki/CAR_and_CDR">new record’s “next” (CDR) field</a>,
-and attempt to replace the top of stack with a pointer to our new
-record with a compare-and-swap (CAS).</p>
+<p>In addition to these safety features, we plan to rely on the allocator
+to improve observability into the calling program, and wish to:</p>
 
-<p>How do we consume from such a stack?</p>
+<ul>
+  <li>track the number of objects allocated and recycled in each
+allocation class.</li>
+  <li>sample the call stack when the heap grows.</li>
+  <li>track allocation and release call stacks for a small fraction of objects.</li>
+</ul>
 
-<p>The simplest way is to use a fetch-and-set (atomic exchange) to
-simultaneously clear the stack (set the top-of-stack pointer to the
-“empty stack” sentinel, e.g., <code>NULL</code>) and read the previous
-top-of-stack.  Any number of consumers can concurrently execute such a
-batch pop, although only one will grab everything.</p>
+<p>Here’s how it currently works, and why we wrote it in Rust, with dash
+of C.</p>
 
-<p>Alternatively, if there’s only one consumer at a time, it can pop with
-a compare-and-swap.  The consumer must load the current top-of-stack
-pointer.  If the stack is empty, there’s nothing to pop.  Otherwise,
-it can read the top record’s “next” field, and attempt to CAS out the
-top-of-stack pointer from the one it just read to the “next” record.</p>
+<h2 id="the-high-level-design-of-slitter">The high level design of Slitter</h2>
 
-<p>The tricky step here is the one where the consumer reads the “next”
-field in the current top-of-stack record: that step would be subject
-to reclamation races, except that there’s only one consumer, so
-we know no one else concurrently popped that record and freed it.</p>
+<p>At a <a href="https://github.com/backtrace-labs/slitter/blob/fa8629989cb63ca5a4acdc2d26741bccda79aac0/doc/design.md">high level</a>,
+Slitter</p>
 
-<p>What can we do to support multiple consumers? Can we
-simply make sure that stack records are always safe to read, e.g., by
-freeing them to an object pool? Unfortunately, while
-use-after-free is benign for producers, it is not for
-consumers.</p>
+<ol>
+  <li>reserves shared 1 GB <code>Chunk</code>s of memory via the <a href="https://github.com/backtrace-labs/slitter/blob/fa8629989cb63ca5a4acdc2d26741bccda79aac0/src/mapper.rs"><code>Mapper</code> trait</a></li>
+  <li>carves out smaller type-specific <code>Span</code>s from each chunk with <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/mill.rs"><code>Mill</code> objects</a></li>
+  <li>bump-allocates objects from <code>Span</code>s with <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/press.rs"><code>Press</code> objects</a>, into <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/magazine.rs">allocation <code>Magazines</code></a></li>
+  <li>pushes and pops objects into/from <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/c/cache.c">thread-local magazines</a></li>
+  <li>caches populated magazines in global <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/class.rs#L62-L67">type-specific lock-free stacks</a></li>
+  <li>manages empty magazines with a global <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/rack.rs">mostly lock-free <code>Rack</code></a></li>
+</ol>
 
-<p>The key problem is that a consumer can observe that the top of stack
-points to record A, and that record A’s “next” field points to B, and
-then get stuck or sleep for a while.  During that time, another thread
-pops A and B, frees both, pushes C, and then pushes A’, a new record
-that happens to have the same address as A.  Finally, the initial
-consumer will compare the top-of-stack pointers with A (which also
-matches A’), and swap that for B, resurrecting a record that has
-already been consumed and freed.</p>
+<p>Many general purpose memory allocators implement strategies similarly
+inspired by <a href="https://www.usenix.org/legacy/publications/library/proceedings/usenix01/full_papers/bonwick/bonwick.pdf">Bonwick’s slab allocator</a>,
+and time-tested mallocs may well provide better performance
+and lower fragmentation than Slitter.<sup id="fnref:type-stable" role="doc-noteref"><a href="#fn:type-stable" class="footnote" rel="footnote">8</a></sup>
+The primary motivation for designing Slitter is that having explicit
+allocation classes in the API makes it easier for the allocator to
+improve the debuggability and resilience of the calling program.<sup id="fnref:also-good-for-perf" role="doc-noteref"><a href="#fn:also-good-for-perf" class="footnote" rel="footnote">9</a></sup>
+For example, most allocators can tell you the size of your program’s
+heap, but that data is much more useful when broken down by struct
+type or program module.</p>
 
-<p>Full-blown SMR would fix all that.  However, if we can instead assume
-read-after-free do not crash (e.g., we use a type-stable allocator or
-an explicit object pool for records), we simply have to reliably
-detect when a record has returned to the top of the stack.<sup id="fnref:ll-sc" role="doc-noteref"><a href="#fn:ll-sc" class="footnote" rel="footnote">5</a></sup></p>
+<p>Most allocators try to minimise accesses to the metadata associated with
+allocations.  In fact, that’s often seen as a strength of the slab
+interface: the allocator can just rely on the caller to pass the
+correct allocation class tag, instead of hitting metadata to figure
+out there the freed address should go.</p>
 
-<p>We can do that by tagging the top-of-stack pointer with a sequence
-counter, and update both with a double-wide compare-and-swap: instead
-of CASing the top-of-stack pointer, we want to CAS that pointer and
-its monotonically increasing counter.  Every successful CAS of the
-pointer will also increment the counter by one, so the sequence counter
-will differ when a record is popped and pushed back on the stack.</p>
+<p>We went in the opposite direction with Slitter.  We still rely on the
+allocation class tag for speed, but also actively look for mismatches
+before returning from deallocation calls. Nothing depends on
+values computed by the mismatch detection logic, and the resulting
+branch is trivially predictable (the tag always matches), so we can
+hope that wide out-of-order CPUs will hide most of the checking
+code, if it’s simple enough.</p>
 
-<p>There is still a risk of ABA: the counter can wrap around.  That’s not
-a practical concern with 64-bit counters, and there are reasonable
-arguments that narrower counters are safe because no consumer will
-stay “stuck” for minutes or hours.<sup id="fnref:bitpacking" role="doc-noteref"><a href="#fn:bitpacking" class="footnote" rel="footnote">6</a></sup></p>
+<p>This concern (access to metadata in few instructions) combined with
+our goal of avoiding in-band metadata lead to a
+<a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/mill.rs#L6-L19">simple layout for each chunk’s data and metadata</a>.</p>
 
-<h2 id="single-compare-multiple-swaps">Single-compare multiple-swaps</h2>
+<pre><code>.-------.------.-------|---------------.-------.
+| guard | meta | guard | data ... data | guard |
+'-------'------'-------|---------------'-------'
+  2 MB    2 MB   2 MB  |      1 GB        2 MB
+                       v
+               Aligned to 1 GB
+</code></pre>
 
-<p>Sometimes, the application can naturally guarantee that CASed fields
-are ABA-free.</p>
+<p>A chunk’s data is always a 1 GB address range, aligned to 1 GB: the
+underlying mapper doesn’t have to immediately back that with memory,
+but it certainly can, e.g., in order to use gigantic pages.  The chunk
+is preceded and followed by 2 MB guard pages.  The metadata for the
+chunk’s data lives in a 2 MB range, just before the preceding guard
+page (i.e., 4 MB to 2 MB before the beginning of the aligned 1 GB
+range).  Finally, the 2 MB metadata range is itself preceded by a 2MB
+guard page.</p>
 
-<p>For example, a hierarchical bump allocator may carve out global
-type-specific arenas from a shared chunk of address space, and satisfy
-allocations for each object type from the type’s current arena.
-Within an arena, allocations are reserved with atomic increments.
-Similarly, we carve out each arena from the shared chunk of address
-space with a (larger) atomic increment.
-Neither bump pointer ever decreases: once a region of address space
-has been converted to an arena, it stays that way, and once an object
-has been allocated from an arena, it also remains allocated (although
-it might enter a freelist).  Arenas are also never recycled: once
-exhausted, they stay exhausted.</p>
+<p>Each chunk is statically divided in 65536 spans of 16 KB each.  We can
+thus map a span to its slot in the metadata block with a shifts,
+masks, and some address arithmetic.  <a href="https://github.com/backtrace-labs/slitter/blob/7afb9781fd25b8cee62afa555b9d38f391131044/src/mill.rs">Mill</a>s
+don’t have to hand out individual 16 KB spans at a time, they simply
+have to work in multiples of 16 KB, and never split a span in two.</p>
 
-<p>When an allocation type has exhausted its current arena (the arena’s
-bump pointer is exhausted), we want to atomically grab a new arena
-from the shared chunk of address space, and replace the type’s arena
-pointer with the newly created arena.</p>
+<h2 id="why-we-wrote-slitter-in-rust-and-c">Why we wrote Slitter in Rust and C</h2>
 
-<p>A lock-free algorithm for such a transaction looks like it would have
-to build on top of multi-word compare-and-swap (MCAS), a hard operation that can
-be <a href="https://www.cl.cam.ac.uk/research/srg/netos/papers/2002-casn.pdf">implemented in a wait-free manner, but with complex algorithms</a>.</p>
+<p>We call Slitter from C, but wrote it in Rust, despite the
+more painful build<sup id="fnref:uber-crate" role="doc-noteref"><a href="#fn:uber-crate" class="footnote" rel="footnote">10</a></sup> process: that pain isn’t going
+anywhere, since we expect our backend to be in a mix of C, C++, and
+Rust for a long time.  We also sprinkled in some C when the
+alternative would have been to pull in a crate just to make a couple
+syscalls, or to enable unstable Rust features: we’re not
+“rewrite-it-in-Rust” absolutists, and merely wish to use Rust for its
+strengths (control over data layout, support for domain-specific
+invariants, large ecosystem for less performance-sensitive logic, ability to
+lie to the compiler where necessary, …), while avoiding its
+weaknesses (interacting with Linux interfaces defined by C headers, or
+fine-tuning code generation).</p>
 
-<p>However, we know that the compare-and-swapped state evolves
-monotonically: once an arena has been carved out from the shared
-chunk, it will never be returned as a fresh arena again.  In other
-words, there is no ABA, and a compare-and-swap on an arena pointer
-will never succeed spuriously.</p>
+<p>The majority of allocations only interact with the thread-local
+magazines.  That’s why we <a href="https://github.com/backtrace-labs/slitter/blob/main/c/cache.c">wrote that code in C</a>:
+stable Rust doesn’t (yet) let us access <a href="https://doc.rust-lang.org/std/intrinsics/fn.likely.html">likely/unlikely annotations</a>,
+nor <a href="https://www.akkadia.org/drepper/tls.pdf#page=35">fast “initial-exec”</a> <a href="https://github.com/rust-lang/rust/issues/29594">thread-local storage</a>.
+Of course, allocation and deallocation are the main entry points into
+a memory allocation library, so this creates a bit of friction with
+Rust’s linking process.<sup id="fnref:bad-linker" role="doc-noteref"><a href="#fn:bad-linker" class="footnote" rel="footnote">11</a></sup></p>
 
-<p>Monotonicity also means that we can acquire a consistent snapshot of both
-the type’s arena pointer and the chunk’s allocation state by reading
-everything twice.  Values are never repeated, so any write
-that executes concurrently with our snapshot loop will be detected: the
-first and second reads of the updated data will differ.</p>
+<p>We also had to implement our <a href="https://github.com/backtrace-labs/slitter/blob/main/c/stack.c">lock-free multi-popper Treiber stack</a>
+in C: x86-64 doesn’t have anything like LL/SC, so we instead pair
+the top-of-stack pointer with a generation counter… and 
+<a href="https://github.com/rust-lang/rust/issues/32976#issuecomment-641360955">Rust hasn’t stabilised 128-bit atomics</a> yet.</p>
 
-<p>We also know that the only way a type’s arena pointer can be replaced
-is by allocating a new one from the shared chunk.  If we took a
-consistent snapshot of the type’s arena pointer and of the shared
-chunk’s allocation state, and the allocation state hasn’t changed
-since, the arena pointer must also be unchanged (there’s a
-hierarchy).</p>
+<p>We chose to use atomics in C instead of a simple lock in Rust because
+the lock-free stack (and the atomic bump pointer, which Rust handles
+fine) are important for our use case: when we rehydrate cold metadata
+at startup, we do so from multiple I/O-bound threads, and we have
+observed hiccups due to lock contention in malloc.  At some point,
+lock acquisitions are rare enough that contention isn’t an issue;
+that’s why we’re comfortable with locks when refilling bump allocation
+regions.</p>
 
-<p>We can combine all these properties to atomically replace a type’s
-arena pointer with a new one obtained from the shared chunk, using a
-much simpler core operation, a single-compare multiple-swap (SCMS). We
-want to execute a series of CASes (one to allocate an arena
-in the chunk, a few to initialise the arena, and one to publish
-the new arena), but we can also assume that once the first
-updated location matches the CAS’s expected value, all other ones will
-as well.  In short, only the first CAS may fail.</p>
+<h2 id="come-waste-performance-on-safety">Come waste performance on safety!</h2>
 
-<p>That’s the key simplifier compared to full-blown multi-word
-compare-and-swap algorithms: they have to incrementally acquire update
-locations, any of which might turn the operation into a failure.</p>
+<p>A recurring theme in the design of <a href="https://github.com/backtrace-labs/slitter">Slitter</a>
+is that we find ways to make the core (de)allocation logic slightly
+faster, and immediately spend that efficiency on safety, debuggability
+or, eventually, observability.  For a lot of code, performance is a
+constraint to satisfy, not a goal to maximise; once we’re close to
+good enough, it makes sense to trade performance
+away.<sup id="fnref:even-works-for-perf" role="doc-noteref"><a href="#fn:even-works-for-perf" class="footnote" rel="footnote">12</a></sup> I also believe that there are
+<a href="https://research.google/pubs/pub50370/">lower hanging fruits in memory placement</a>
+than shaving a few nanoseconds from the allocation path.</p>
 
-<p>We can instead encode all the CASes in a transaction descriptor, CAS
-that descriptor in the first update location, and know that the
-multi-swaps will all succeed iff that CAS is successful.</p>
+<p><a href="https://crates.io/crates/slitter">Slitter</a> also focuses on
+instrumentation and debugging features that are always active, even in
+production, instead of leaving that to development tools, or to logic
+that must be explicitly enabled.  In a SaaS world, development and
+debugging is never done.  Opt-in tools are definitely useful, but
+always-on features are much more likely to help developers catch
+the rarely occurring bugs on which they tend to spend an inordinate
+amount of investigation effort (and if a debugging feature can be
+safely enabled in production at a large scale, why not leave it
+enabled forever?).</p>
 
-<p>If the first CAS is successful, we also know that it’s safe to execute
-the remaining CASes, and finally replace the descriptor with its
-final value with one last CAS.  We don’t even have to publish the
-descriptor to all updated locations, because concurrent allocations
-will notice the current arena has been exhausted, and try to get a new
-one from the shared chunk… at which point they will notice the
-transaction descriptor.</p>
+<p>If that sounds like an interesting philosophy for a slab allocator,
+<a href="https://github.com/backtrace-labs/slitter">come hack on Slitter</a>!
+Admittedly, the value of Slitter isn’t as clear for pure Rust hackers
+as it is for those of us who blend C and Rust, but per-class allocation
+statistics and placement decisions should be useful, even in safe
+Rust, especially for larger programs with long runtimes.</p>
 
-<p>All the CASes after the first one are safe to execute arbitrarily
-often thanks to monotonicity.  We already know that any descriptor that has
-been published with the initial CAS will not fail, which means the only
-potential issue is spuriously successful CASes… but our mutable
-fields never repeat a value, so that can’t happen.</p>
+<p>Our <a href="https://github.com/backtrace-labs/slitter">MIT-licensed code is on github</a>,
+there are <a href="https://github.com/backtrace-labs/slitter/issues">plenty of small improvements to work on</a>,
+and, while we still have to re-review the documentation, it has decent
+test coverage, and we try to write straightforward code.</p>
 
-<p>The application’s guarantee of ABA-safety ends up really simplifying
-this single-compare multiple-swap algorithm (SCMS), compared to a
-multi-word compare-and-swap (MCAS).  In a typical MCAS implementation, helpers
-must abort when they detect that they’re helping a MCAS operation that
-has already failed or already been completed.  Our single-compare
-assumption (once the first CAS succeeds, the operation succeeds) takes
-care of the first case: helpers never see failed operations.  Lack
-of ABA means helpers don’t have to worry about their CASes succeeding
-after the SCMS operation has already been completed: they will always fail.</p>
-
-<p>Finally, we don’t even need any form of SMR on the transaction
-descriptor: <a href="https://arxiv.org/pdf/1708.01797.pdf#page=4">a sequence counter in the descriptor and a copy of that counter in a tag next to pointers to that descriptor</a>
-suffice to disambiguate incarnations of the same physical descriptor.</p>
-
-<p>Specialising to the allocator’s monotonic state let us use
-single-compare multiple-swap, a simplification of full multi-word
-compare-and-swap, and further specialising that primitive for
-monotonic state let us get away with nearly half as many CASes (k + 1
-for k locations) as the state of the art for MCAS (2k + 1 for k locations).</p>
-
-<h2 id="a-plea-for-integration">A plea for integration</h2>
-
-<p>There is a common thread between never unmapping allocated addresses,
-sequence tags, type-stable memory, and the allocator’s single-compare
-multiple-swap: monotonicity.</p>
-
-<p>The lock-free stack shows how easy it is to conjure up artificial
-monotonicity.  However, when we integrate algorithms more tightly
-with the program and assume the program’s state is naturally
-monotonic, we’ll often unlock simpler and more efficient solutions.  I
-also find there’s something of a virtuous cycle: it’s easier for a
-module to guarantee monotonicity to its components when it itself only
-has to handles monotonic state, like a sort of end-to-end monotonicity
-principle.</p>
-
-<p>Unfortunately, it’s not clear how much latent monotonicity there is
-in real programs.  I suppose that makes it hard to publish algorithms
-that assumes its presence.  I think it nevertheless makes sense to
-explore such stronger assumptions, in order to help practitioners estimate
-what we could gain in exchange for small sacrifices.</p>
-
-<p>Asymmetric synchronisation is widely used these days, but I imagine it
-was once unclear how much practical interest there might be in that
-niche; better understood benefits lead to increased adoption.  I hope
-the same can happen for algorithms that assume monotonic state.</p>
+<p><small>This post was much improved by feedback from my beta readers, Barkley, David,
+Eloise, Mark, Per, Phil, Ruchir, and Samy.</small></p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:or-does-it" role="doc-endnote">
-      <p><a href="https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.87.5131&amp;rep=rep1&amp;type=pdf">Maged Michael’s original Safe Memory Reclamation paper</a> doesn’t: allowing arbitrary memory management is the paper’s main claim.  I think there’s a bit of a first mover’s advantage, and researchers are incentivised to play within the sandbox defined by Michael.  For example, <a href="https://arxiv.org/abs/1708.01797">Arbel-Raviv and Brown in “Reuse, don’t Recycle”</a> practically hide the implementation of their proposal on page 17 (Section 5), perhaps because a straightforward sequence counter scheme is too simple for publication nowadays. <a href="#fnref:or-does-it" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:blast-radius" role="doc-endnote">
+      <p>In my experience, their unlimited blast radius is what makes memory management bugs so frustrating to track down.  The design goals of generic memory allocators (e.g., recycling memory quickly) and some implementation strategies (e.g., <a href="http://phrack.org/issues/57/9.html#article">in-band metadata</a>) make it easy for bugs in one module to show up as broken invariants in a completely unrelated one that happened to share allocation addresses with the former.  <a href="http://phrack.org/issues/57/8.html#article">Adversarial thinkers</a> will even exploit the absence of isolation to <a href="https://www.openwall.com/articles/JPEG-COM-Marker-Vulnerability">amplify small programming errors into arbitrary code execution</a>.  Of course, one should simply not write bugs, but when they do happen, it’s nice to know that the broken code most likely hit itself and its neighbours in the callgraph, and not unrelated code that also uses the same memory allocator (something Windows got right with private heaps). <a href="#fnref:blast-radius" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:reuse-dont-recycle" role="doc-endnote">
-      <p>See <a href="https://arxiv.org/abs/1708.01797">Reuse, don’t Recycle</a> for a flexible take. <a href="#fnref:reuse-dont-recycle" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:when-does-it-flush" role="doc-endnote">
+      <p>Linux does not have anything like the <a href="https://www.freebsd.org/cgi/man.cgi?query=mmap&amp;sektion=2&amp;format=html#:~:text=a%20core%20file.-,MAP_NOSYNC,-Causes%20data%20dirtied">BSD’s <code>MAP_NOSYNC</code> mmap flag</a>.  This has historically created problems for <a href="https://lkml.org/lkml/2013/9/7/135">heavy mmap users like LMDB</a>.  Empirically, Linux’s flushing behaviour is much more reasonable these days, especially when dirty pages are a small fraction of physical RAM, as it is for us: in a well configured installation of our backend server, most of the RAM goes to clean file mappings, so only the <a href="https://www.kernel.org/doc/Documentation/sysctl/vm.txt"><code>dirty_expire_centisec</code> timer</a> triggers write-outs, and we haven’t been growing the file-backed heap fast enough for the time-based flusher to thrash too much. <a href="#fnref:when-does-it-flush" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:but-maybe-not-scalable" role="doc-endnote">
-      <p>A stack fundamentally focuses contention towards the top-of-stack pointer, so lock-free definitely doesn’t imply scalable. It’s still a good building block. <a href="#fnref:but-maybe-not-scalable" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:ub" role="doc-endnote">
+      <p>There are obvious parallels with undefined behaviour in C and C++… <a href="#fnref:ub" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:not-in-c" role="doc-endnote">
-      <p>In assembly language, anyway. Language memory models make this surprisingly hard. For example, any ABA in the push sequence is benign (we still have the correct bit pattern in the “next” field), but C and C++’s pointer provenance rules say that accessing a live object through a pointer to a freed object that happens to alias the new object is undefined behaviour. <a href="#fnref:not-in-c" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:not-as-configurable" role="doc-endnote">
+      <p>umem also takes a performance hit in order to let object classes define callbacks for object initialisation, recycling, and destruction.  It makes sense to let the allocator do some pre-allocation work: if you’re going to incur a cache miss for the first write to an allocation, it’s preferable to do so before you immediately want that newly allocated object (yes, profiles will show more cycles in the allocators, but you’re just shifting work around, hopefully farther from the critical path). Slitter only supports the bare minimum: objects are either always zero-initialised, or initially zero-filled and later left untouched.  That covers the most common cases, without incurring too many branch mispredictions. <a href="#fnref:not-as-configurable" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:ll-sc" role="doc-endnote">
-      <p>Load Linked / Store Conditional solves <em>this specific problem</em>, but that doesn’t mean LL/SC as found on real computers is necessarily a better primitive than compare-and-swap. <a href="#fnref:ll-sc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:but-we-dont-depend-on-it-too-much" role="doc-endnote">
+      <p>One could be tempted to really rely on it not just for isolation and resilience, but during normal operations.  That sounds like a bad idea (we certainly haven’t taken that leap), at least until <a href="https://github.com/backtrace-labs/slitter/issues/11">Slitter works with Valgrind/ASan/LSan</a>: it’s easier to debug easily reproducible issues when one can just slot in calls to regular malloc/calloc/free with a dedicated heap debugger. <a href="#fnref:but-we-dont-depend-on-it-too-much" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:bitpacking" role="doc-endnote">
-      <p>Which is nice, because it means we can pack data and sequence counters in 64-bit words, and use the more widely available single-word compare-and-swap. <a href="#fnref:bitpacking" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:legacy-gcc" role="doc-endnote">
+      <p>It would be easy to blame the complexity of lock-free code, but the initial version, with C11 atomics, was correct.  Unfortunately, gcc backs C11 atomic <code>uint128_t</code>s with locks, so we had to switch to the legacy interface, and that’s when the errors crept in. <a href="#fnref:legacy-gcc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:jump" role="doc-endnote">
+      <p>There isn’t much the allocator can do if an application writes to a wild address megabytes away from the base object.  Thankfully, buffer overflows tend to proceed linearly from the actual end of the undersized object. <a href="#fnref:jump" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:type-stable" role="doc-endnote">
+      <p>In fact, Slitter actively worsens external fragmentation to guarantee type-stable allocations. We think it’s reasonable to sacrifice heap footprint in order to control the blast radius of use-after-frees and double-frees. <a href="#fnref:type-stable" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:also-good-for-perf" role="doc-endnote">
+      <p>That’s why we’re interested in allocation class tags, but they can also help application and malloc performance.  Some malloc developers are looking into tags for placement (should the allocation be backed by memory local to the NUMA node, with huge pages, …?) or lifetime (is the allocation immortal, short-lived, or tied to a request?) hints. <a href="#fnref:also-good-for-perf" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:uber-crate" role="doc-endnote">
+      <p>We re-export our dependencies from an uber-crate, and let our outer <a href="https://mesonbuild.com/">meson</a> build invoke <code>cargo</code> to generate a static library for that facade uber-crate. <a href="#fnref:uber-crate" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:bad-linker" role="doc-endnote">
+      <p><a href="https://github.com/rust-lang/rfcs/issues/2771">Rust automatically hides foreign symbols when linking <code>cdylib</code>s</a>.  We worked around that with static linking, but statically linked rust libraries are mutually incompatible, hence the uber-crate. <a href="#fnref:bad-linker" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:even-works-for-perf" role="doc-endnote">
+      <p>And not just for safety or productivity features!  I find it often makes sense to give up on small performance wins (e.g., aggressive autovectorisation or link-time optimisation) when they would make future performance investigations harder.  The latter are higher risk, and only potential benefits, but their upside (order of magnitude improvements) dwarfs guaranteed small wins that freeze the code in time. <a href="#fnref:even-works-for-perf" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
@@ -428,7 +447,7 @@ the same can happen for algorithms that assume monotonic state.</p>
     </div>
   </div>
   <footer role="contentinfo"><p>
-  Website copyright &copy; 2025 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+  Website copyright &copy; 2026 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
 </p>
 
 </footer>

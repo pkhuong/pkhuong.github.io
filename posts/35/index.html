@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/">Performance tuning ~ writing an essay</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2015/01/13/lock-free-mutual-exclusion/">Lock-free sequence locks</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Oct
+Jan
   
-19th, 
-2014
+13th, 
+2015
 
 
 
 
         
-         | <a href="/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/"
+         | <a href="/Blog/2015/01/13/lock-free-mutual-exclusion/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2015/01/13/lock-free-mutual-exclusion/"
 	      >Comments</a>
         
         
@@ -117,121 +117,267 @@ Oct
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><a href="#trust-no-one">Skip to the meaty bits.</a></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>Specialised locking schemes and lock-free data structures are a big
+part of my work these days.  I think the main reason the situation is
+tenable is that, very early on, smart people decided to focus on an
+SPMC architecture: single writer (producer), multiple readers
+(consumers).</p>
 
-<p>My work at <a href="http://www.appnexus.com/">AppNexus</a> mostly involves
-performance optimisation, at any level from microarchitecture-driven
-improvements to data layout and assembly code to improving the
-responsiveness of our distributed system under load.  Technically,
-this is similar to what I was doing as a lone developer on
-research-grade programs.  However, the scale of our (constantly
-changing) code base and collaboration with a dozen other coders mean
-that I approach the task differently: e.g., rather than
-single-mindedly improving throughput <em>now</em>, I aim to pick an evolution
-path that improves throughput today without imposing too much of a
-burden on future development or fossilising ourselves in a design
-dead-end.  So, although numbers still don’t lie (hah), my current
-approach also calls for something like judgment and taste, as well as
-a fair bit of empathy for others.  Rare are the obviously correct
-choices, and, in that regard, determining what changes to make and
-which to discard as
-<a href="http://fun.irq.dk/funroll-loops.org/">over-the-top ricing</a> feels like
-I’m drafting a literary essay.</p>
+<p>As programmers, we have a tendency to try and maximise generality: if
+we can support multiple writers, why would one bother with measly SPMC
+systems?  The thing is SPMC is harder than SPSC, and MPMC is
+even more complex.  Usually, more concurrency means programs are harder to
+get right, harder to scale and harder to maintain.  Worse: it also
+makes it more difficult to provide theoretical progress guarantees.</p>
 
-<p>This view is probably tainted by the fact that, between English and
-French classes, I spent something like half of my time in High School
-critiquing essays, writing essays, or preparing to write one.
-Initially, there was a striking difference between the two languages:
-English teachers had us begin with the five paragraph format where one
-presents multiple arguments for the same thesis, while French teachers
-imposed a thesis/antithesis/synthesis triad (and never really let it
-go until CÉGEP, but that’s another topic).  When I write that
-performance optimisation feels like drafting essays, I’m referring to
-the latter “Hegelian” process, where one exposes arguments and
-counterarguments alike in order to finally make a stronger case.</p>
+<p>Apart from architecting around simple cases, there’s a few ways to
+deal with this reality.  We can define new, weaker, classes of program,
+like obstruction-freedom: a system is obstruction-free when one thread
+is guaranteed to make progress if <em>every other thread is suspended</em>.  We
+can also <a href="http://www.cosy.sbg.ac.at/research/tr/2010-07_Kirsch_Payer_Roeck.pdf">weaken the guarantees of our data structure</a>.  For example,
+rather than exposing a single FIFO, we could distribute load and
+contention across multiple queues; we lose strict FIFO order, but we
+also eliminate a system bottleneck.  Another option is to try and
+identify how real computers are more powerful than our abstract
+models: some argue that, <a href="http://arxiv.org/abs/1311.3200">realistically, many lock-free schemes are wait-free</a>, and others <a href="http://www.cs.technion.ac.il/~mad/publications/asplos2014-ffwsq.pdf">exploit the fact that x86-TSO machines have finite store buffers</a>.</p>
 
-<p>I’ll stretch the analogy further.  Reading between the lines gives us
-access to more arguments, but it’s also easy to get the context wrong and
-come up with hilariously far-fetched interpretations.  When I try to
-understand a system’s performance, the most robust metrics treat the
-system as a black box: it’s hard to get throughput under production
-data wrong.  However, I need finer grained information (e.g.,
-performance counters, instruction-level profiling, or
-application-specific metrics) to guide my work, and, the more useful
-that information can be – like domain specific metrics that highlight
-what we could do differently rather than how to do the same thing more
-efficiently – the easier it is to measure incorrectly.  That’s not a
-cause for despair, but rather a fruitful line of skepticism that helps
-me find more opportunities.</p>
+<p>Last week, I got lost doodling with x86-specific cross-modifying code,
+but still stumbled on a cute example of a simple lock-free protocol:
+lock-free sequence locks.  This sounds like an oxymoron, but I promise
+it makes sense.</p>
 
-<p>Just two weeks ago, questioning our application-specific metrics
-lead to an easy 10% improvement in throughput for our biggest
-consumer of CPU cycles.  The consumer is an application that
-determines whether internet advertising campaigns are eligible to bid
-on an ad slot, and if so, which creative (ad) to show and at what bid
-price.  For the longest time, the most time-consuming part of that
-process was the first step, testing for campaign eligibility.
-Consequently, we tracked the execution of that step precisely and
-worked hard to minimise the time spent on ineligible campaigns,
-without paying much attention to the rest of the pipeline.  However,
-we were clearly hitting diminishing returns in that area, so I asked
-myself how an adversary could use our statistics to mislead us.  The
-easiest way I could think of was to have campaigns that are eligible
-to bid, but without any creative compatible with the ad slot (e.g.,
-because it’s the wrong size or because the website forbids Flash ads):
-although the campaigns are technically eligible, they are unable to
-bid on the ad slot.  We added code to track these cases and found that
-almost half of our “eligible” campaigns simply had no creative in the
-right size.  Filtering these campaigns early proved to be a
-low-hanging fruit with an ideal code complexity:performance
-improvement ratio.</p>
+<h1 id="lock-free-sequence-locks">Lock-free sequence locks</h1>
 
-<h1 id="trust-no-one-not-even-performance-counters"><a href="#trust-no-one" name="trust-no-one">Trust no one, not even performance counters</a></h1>
+<p>It helps to define the terms
+better. <a href="http://en.wikipedia.org/wiki/Non-blocking_algorithm#Lock-freedom">Lock-freedom</a>
+means that the overall system will always make progress, even if some
+(but not all) threads are suspended.
+<a href="http://en.wikipedia.org/wiki/Seqlock">Classical sequence</a> locks are
+an optimistic form of write-biased reader/writer locks: concurrent
+writes are forbidden (e.g., with a spinlock), read transactions abort
+whenever they observe that writes are in progress, and a generation
+counter avoids
+<a href="http://en.wikipedia.org/wiki/ABA_problem">ABA problems</a> (when a read
+transaction would observe that no write is in progress before and after a
+quick write).</p>
 
-<p>I recently learned that we also had to second-guess instruction level
-profiles.  Contemporary x86oids are out of order, superscalar, and
-speculative machines, so profiles are always messy: “blame” is
-scattered around the real culprit, and some instructions (pipeline
-hazards like conditional jumps and uncached memory accesses, mostly)
-seem to account for more than their actual share.  What I never
-realised is that, in effect, some instructions systematically mislead
-and push their cycles to others.</p>
+<p>In
+<a href="http://www.cs.rochester.edu/u/scott/papers/2010_EuroPar_TML.pdf">Transactional Mutex Locks (PDF)</a>,
+sequence locks proved to have enviable performance on small systems and
+scaled decently well for read-heavy workloads.  They even allowed lazy
+upgrades from reader to writer by atomically checking that the
+generation has the expected value when acquiring the sequence lock for
+writes.  However, we lose nearly all progress guarantees: one
+suspended writer can freeze the whole system.</p>
 
-<p>Some of our internal spinlocks use <code>mfence</code>.  I expected that to be
-suboptimal, since it’s
-<a href="https://blogs.oracle.com/dave/resource/NHM-Pipeline-Blog-V2.txt">common</a>
-<a href="http://shipilev.net/blog/2014/on-the-fence-with-dependencies/">knowledge</a>
-that <code>lock</code>ed instruction are more efficient barriers: serialising
-instructions like <code>mfence</code> have to affect streaming stores and other
-weakly ordered memory accesses, and that’s a lot more work than just
-preventing store/load reordering.  However, our profiles showed that
-we spent very little time on spinlocking so I never gave it much thought…
-until eliminating a set of spinlocks had a much better impact on
-performance than I would have expected from the profile.  Faced with
-this puzzle, I had to take a closer look at the way <code>mfence</code> and
-locked instructions affect hardware-assisted instruction profiles on
-our production Xeon E5s (Sandy Bridge).</p>
+<p>The central trick of lock-freedom is cooperation: it doesn’t matter if
+a thread is suspended in the middle of a critical section, as long as
+any other thread that would block can instead complete the work that
+remains.  In general, this is pretty hard, but we can come up with
+restricted use cases that are idempotent.  For lock-free sequence
+locks, the critical section is a precomputed set of writes: a series
+of assignments that must appear to execute atomically.  It’s fine if
+writes happen multiple times, as long as they stop before we move on
+to another set of writes.</p>
 
-<p>I came up with a simple synthetic microbenchmark to simulate locking
-on my E5-4617: the loop body is an adjustable set of memory accesses
-(reads and writes of out-of-TLB or uncached locations) or computations
-(divisions) bracketed by pairs of normal stores, <code>mfence</code>, or <code>lock
-inc/dec</code> to cached memory (I would replace the fences with an
-increment/decrement pair and it looks like all read-modify-write
-instructions are implemented similarly on Intel).  Comparing runtimes
-for normal stores with the other instructions helps us gauge their
-overhead.  I can then execute each version under <code>perf</code> and estimate
-the overhead from the instruction-level profile.  If <code>mfence</code> is
-indeed extra misleading, there should be a greater discrepancy between
-the empirical impact of the <code>mfence</code> pair and my estimate from the
-profile.</p>
+<p>There’s a primitive based on compare-and-swap that can easily achieve
+such conditional writes: restricted double compare and single swap
+(RDCSS, introduced in
+<a href="http://www.cl.cam.ac.uk/research/srg/netos/papers/2002-casn.pdf">A Practical Multi-Word Compare-and-Swap (PDF)</a>).
+RDCSS atomically checks if both a control word (e.g., a generation
+counter) and a data word (a mutable cell) have the expected values and,
+if so, writes a new value in the data word.  The pseudocode for
+regular writes looks like</p>
 
-<p>You can find the
-<a href="/images/2014-10-19-performance-optimisation-~-writing-an-essay/fence.c">super crufty code here</a>,
-<a href="/images/2014-10-19-performance-optimisation-~-writing-an-essay/cycle.h">along with an <code>rdtscp</code> version of cycle.h</a>.</p>
+<pre><code>if (CAS(self.data, self.old, self) == fail) {
+    return fail;
+}
+   
+if (*self.control != self.expected) {
+    CAS(self.data, self, self.old);
+    return fail;
+}
 
-<p>With <code>lock</code>ed instructions and random reads that miss the L3 cache,
-the (cycle) profile for the microbenchmark loop is:</p>
+CAS(self.data, self, self.new);
+return success;
+</code></pre>
+
+<p>The trick is that, if the first CAS succeeds, we always know how to
+undo it (<code>data</code>’s old value must be <code>self.old</code>), and that
+information is stored in <code>self</code> so any thread that observes the first
+CAS has enough information to complete or rollback the RDCSS.  The
+only annoying part is that we need a two-phase commit: reserve <code>data</code>,
+confirm that <code>control</code> is as <code>expected</code>, and only then write to <code>data</code>.</p>
+
+<p>For the cost of two compare-and-swap per write – plus one to acquire the
+sequence lock – writers don’t lock out other writers (writers help
+each other make progress instead).  Threads (especially readers) can
+still suffer from starvation, but at least the set of writes can be
+published ahead of time, so readers can even lookup in that set rather
+than waiting for/helping writes to complete.  The generation counter
+remains a bottleneck, but, as long as writes are short and happen
+rarely, that seems like an acceptable trade to avoid the 3n CAS in
+multi-word compare and swap.</p>
+
+<h1 id="real-code">Real code</h1>
+
+<p>Here’s what the scheme looks like in SBCL.</p>
+
+<p>First, a mutable box because we don’t have raw pointers (I could also
+have tried to revive my sb-locative hack) in CL.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defstruct (box
+</span><span class="line">            (:constructor make-box (%value)))
+</span><span class="line">  %value)</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Next, the type for write records: we have the the value for the next
+generation (once the write is complete) and a hash table of box to
+pairs of old and new values.  There’s a key difference with the way
+RDCSS is used to implement multiple compare and swap: we don’t check
+for mismatches in the old value and simply assume that it is correct.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defstruct (record
+</span><span class="line">             (:constructor %make-record (generation ops)))
+</span><span class="line">  (generation (error "Missing arg") :type fixnum :read-only t)
+</span><span class="line">  ;; map of box -&gt; (cons old new).  I use a hash table for
+</span><span class="line">  ;; convenience but I doubt it's the right choice.
+</span><span class="line">  (ops (error "Missing arg") :type hash-table :read-only t))
+</span><span class="line">(declaim (freeze-type record))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The central bottleneck is the sequence lock, which each (read)
+transaction must snapshot before attempting to read consistent
+values.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(declaim (type (or (and unsigned-byte fixnum) record) **current-record**))
+</span><span class="line">(defglobal **current-record** 0)
+</span><span class="line">
+</span><span class="line">(defvar *initial-record*)
+</span><span class="line">
+</span><span class="line">(defun snapshot-generation ()
+</span><span class="line">  (let ((initial *initial-record*))
+</span><span class="line">    (if (record-p initial)
+</span><span class="line">        (record-generation initial)
+</span><span class="line">        initial)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The generation associated with a snapshot is the snapshot if it is a
+positive fixnum, otherwise it is the write record’s generation.</p>
+
+<p>Before using any read, we make sure that the generation counter hasn’t
+changed.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun check ()
+</span><span class="line">  #-(or x86 x86-64) (sb-thread:barrier (:read)) ; x86 don't reorder reads
+</span><span class="line">  (let ((initial *initial-record*)
+</span><span class="line">        (current **current-record**))
+</span><span class="line">    (unless (or (eql initial current)
+</span><span class="line">                (and (record-p initial)
+</span><span class="line">                     (eql (record-generation initial) current)))
+</span><span class="line">      (throw 'fail t))))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>I see two ways to deal with starting a read transaction while a write
+is in progress: we can help the write complete, or we can overlay the
+write on top of the current heap in software.  I chose the latter:
+reads can already be started by writers.  If a write is in progress
+when we start a transaction, we stash the write set in <code>*current-map*</code>
+and lookup there first:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defvar *current-map* nil)
+</span><span class="line">
+</span><span class="line">(defun box-value (box)
+</span><span class="line">  (prog1 (let* ((map *current-map*)
+</span><span class="line">                (value (if map
+</span><span class="line">                           (cdr (gethash box map (box-%value box)))
+</span><span class="line">                           (box-%value box))))
+</span><span class="line">           (if (record-p value)
+</span><span class="line">               ;; if we observe a record, either a new write is in
+</span><span class="line">               ;; progress and (check) is about to fail, or this is
+</span><span class="line">               ;; for an old (already completed) write that succeeded
+</span><span class="line">               ;; partially by accident.  In the second case, we want
+</span><span class="line">               ;; the *old* value.
+</span><span class="line">               (car (gethash box (record-ops value)))
+</span><span class="line">               value))
+</span><span class="line">    (check)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>We’re now ready to start read transactions.  We take a snapshot of the
+generation counter, update <code>*current-map*</code>, and try to execute a
+function that uses <code>box-value</code>.  Again, we don’t need a read-read
+barrier on x86oids (nor on SPARC, but SBCL doesn’t have threads on
+that platform).</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun call-with-transaction (function &amp;rest arguments)
+</span><span class="line">  (catch 'fail
+</span><span class="line">    (let* ((*initial-record* **current-record**)
+</span><span class="line">           (*current-map* (and (record-p *initial-record*)
+</span><span class="line">                               (record-ops *initial-record*))))
+</span><span class="line">      #-(or x86 x86-64) (sb-thread:barrier (:read))
+</span><span class="line">      (return-from call-with-transaction
+</span><span class="line">        (values (apply function arguments) t))))
+</span><span class="line">  (values nil nil))
+</span><span class="line">
+</span><span class="line">(defmacro with-transaction ((&amp;rest bindings) &amp;body body)
+</span><span class="line">  `(call-with-transaction (lambda ,(mapcar #'first bindings)
+</span><span class="line">                            ,@body)
+</span><span class="line">                          ,@(mapcar #'second bindings)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The next function is the keystone: helping a write record go through
+exactly once.</p>
+
 <div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
 <span class="line-number">3</span>
@@ -256,35 +402,119 @@ the (cycle) profile for the microbenchmark loop is:</p>
 <span class="line-number">22</span>
 <span class="line-number">23</span>
 <span class="line-number">24</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">$ perf annotate -s cache_misses
-</span><span class="line">[...]
-</span><span class="line">    0.06 :        4006b0:       and    %rdx,%r10
-</span><span class="line">    0.00 :        4006b3:       add    $0x1,%r9
-</span><span class="line">    ;; random (out of last level cache) read
-</span><span class="line">    0.00 :        4006b7:       mov    (%rsi,%r10,8),%rbp
-</span><span class="line">   30.37 :        4006bb:       mov    %rcx,%r10
-</span><span class="line">    ;; foo is cached, to simulate our internal lock
-</span><span class="line">    0.12 :        4006be:       mov    %r9,0x200fbb(%rip)        # 601680 &lt;foo&gt;
-</span><span class="line">    0.00 :        4006c5:       shl    $0x17,%r10
-</span><span class="line">    [... Skipping arithmetic with &lt; 1% weight in the profile]
-</span><span class="line">    ;; locked increment of an in-cache "lock" byte
-</span><span class="line">    1.00 :        4006e7:       lock incb 0x200d92(%rip)        # 601480 &lt;private+0x200&gt;
-</span><span class="line">   21.57 :        4006ee:       add    $0x1,%rax
-</span><span class="line">    [...]
-</span><span class="line">    ;; random out of cache read
-</span><span class="line">    0.00 :        400704:       xor    (%rsi,%r10,8),%rbp
-</span><span class="line">   21.99 :        400708:       xor    %r9,%r8
-</span><span class="line">    [...]
-</span><span class="line">    ;; locked in-cache decrement
-</span><span class="line">    0.00 :        400729:       lock decb 0x200d50(%rip)        # 601480 &lt;private+0x200&gt;
-</span><span class="line">   18.61 :        400730:       add    $0x1,%rax
-</span><span class="line">    [...]
-</span><span class="line">    0.92 :        400755:       jne    4006b0 &lt;cache_misses+0x30&gt;</span></code></pre></td></tr></table></div></figure></notextile></div>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun help (record)
+</span><span class="line">  (flet ((write-one (box old new)
+</span><span class="line">           ;; if record isn't the current generation anymore,
+</span><span class="line">           ;; it has already been completed
+</span><span class="line">           (unless (eq **current-record** record)
+</span><span class="line">               (return-from help nil))
+</span><span class="line">             (let ((actual (sb-ext:cas (box-%value box) old record)))
+</span><span class="line">               (when (eql actual new) ;; already done? next!
+</span><span class="line">                 (return-from write-one))
+</span><span class="line">               
+</span><span class="line">               ;; definite failure -&gt; no write went though; leave.
+</span><span class="line">               (unless (or (eql actual old)
+</span><span class="line">                           (eql actual record))
+</span><span class="line">                 (return-from help nil))
+</span><span class="line">
+</span><span class="line">               ;; check for activity before the final write
+</span><span class="line">               (unless (eq **current-record** record)
+</span><span class="line">                 (sb-ext:cas (box-%value box) record old)
+</span><span class="line">                 (return-from help nil))
+</span><span class="line">
+</span><span class="line">               ;; Really perform write (this can only fail if
+</span><span class="line">               ;; another thread already succeeded).
+</span><span class="line">               (sb-ext:cas (box-%value box) record new))))
+</span><span class="line">    (maphash (lambda (box op)
+</span><span class="line">               (write-one box (car op) (cdr op)))
+</span><span class="line">             (record-ops record)))
+</span><span class="line">  ;; Success! move the generation counter forward.
+</span><span class="line">  (eql record (sb-ext:cas (symbol-value '**current-record**)
+</span><span class="line">                          record
+</span><span class="line">                          (record-generation record))))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Looking at that profile, I’d estimate that the two random reads
-account for ~50% of runtime, and the pair of <code>lock inc/dec</code> for ~40%.</p>
+<p>Now we can commit with a small wrapper around <code>help</code>. Transactional
+mutex lock has the idea of transaction that are directly created as
+write transactions.  We assume that we always know how to undo writes,
+so transactions can only be upgraded from reader to writer.
+Committing a write will thus check that the generation counter is
+still consistent with the (read) transaction before publishing the new
+write set and helping it forward.</p>
 
-<p>The picture is completely different for <code>mfence</code>.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun commit (record)
+</span><span class="line">  (check-type record record)
+</span><span class="line">  (let ((initial
+</span><span class="line">          (loop
+</span><span class="line">           (let ((value **current-record**))
+</span><span class="line">             (check)
+</span><span class="line">             (if (record-p value)
+</span><span class="line">                 (help value)
+</span><span class="line">                 (return value))))))
+</span><span class="line">    (unless (and (eql (sb-ext:cas (symbol-value '**current-record**)
+</span><span class="line">                                  initial record)
+</span><span class="line">                      initial)
+</span><span class="line">                 (help record))
+</span><span class="line">      (throw 'fail t))
+</span><span class="line">    t))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>And now some syntactic sugar to schedule writes</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defvar *write-record*)
+</span><span class="line">
+</span><span class="line">(defun call-with-write-record (function)
+</span><span class="line">  (let ((*write-record* (%make-record (mod (1+ (snapshot-generation))
+</span><span class="line">                                           (1+ most-positive-fixnum))
+</span><span class="line">                                      (make-hash-table))))
+</span><span class="line">    (multiple-value-prog1 (funcall function)
+</span><span class="line">      (commit *write-record*))))
+</span><span class="line">
+</span><span class="line">(defun (setf box-value) (value box)
+</span><span class="line">  (setf (gethash box (record-ops *write-record*))
+</span><span class="line">        (cons (box-value box) value))
+</span><span class="line">  value)
+</span><span class="line">
+</span><span class="line">(defmacro with-write (() &amp;body body)
+</span><span class="line">  `(call-with-write-record (lambda ()
+</span><span class="line">                             ,@body)))</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>That’s enough for a smoke test on my dual core laptop.</p>
 
 <div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
 <span class="line-number">2</span>
@@ -308,103 +538,265 @@ account for ~50% of runtime, and the pair of <code>lock inc/dec</code> for ~40%.
 <span class="line-number">20</span>
 <span class="line-number">21</span>
 <span class="line-number">22</span>
-</pre></td><td class="code"><pre><code class=""><span class="line">$ perf annotate -s cache_misses
-</span><span class="line">[...]
-</span><span class="line">    0.00 :        4006b0:       and    %rdx,%r10
-</span><span class="line">    0.00 :        4006b3:       add    $0x1,%r9
-</span><span class="line">    ;; random read
-</span><span class="line">    0.00 :        4006b7:       mov    (%rsi,%r10,8),%rbp
-</span><span class="line">   42.04 :        4006bb:       mov    %rcx,%r10
-</span><span class="line">    ;; store to cached memory (lock word)
-</span><span class="line">    0.00 :        4006be:       mov    %r9,0x200fbb(%rip)        # 601680 &lt;foo&gt;
-</span><span class="line">    [...]
-</span><span class="line">    0.20 :        4006e7:       mfence 
-</span><span class="line">    5.26 :        4006ea:       add    $0x1,%rax
-</span><span class="line">    [...]
-</span><span class="line">    ;; random read
-</span><span class="line">    0.19 :        400700:       xor    (%rsi,%r10,8),%rbp
-</span><span class="line">   43.13 :        400704:       xor    %r9,%r8
-</span><span class="line">    [...]
-</span><span class="line">    0.00 :        400725:       mfence 
-</span><span class="line">    4.96 :        400728:       add    $0x1,%rax
-</span><span class="line">    0.92 :        40072c:       add    $0x1,%rax
-</span><span class="line">    [...]
-</span><span class="line">    0.36 :        40074d:       jne    4006b0 &lt;cache_misses+0x30&gt;</span></code></pre></td></tr></table></div></figure></notextile></div>
+<span class="line-number">23</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defvar *a* (make-box 0))
+</span><span class="line">(defvar *b* (make-box 0))
+</span><span class="line">(defvar *semaphore* (sb-thread:make-semaphore))
+</span><span class="line">
+</span><span class="line">(defun test-reads (n)
+</span><span class="line">  (let ((a *a*)
+</span><span class="line">        (b *b*))
+</span><span class="line">    (sb-thread:wait-on-semaphore *semaphore*)
+</span><span class="line">    (loop repeat n
+</span><span class="line">          count (with-transaction ()
+</span><span class="line">                  (assert (eql (box-value a) (box-value b)))
+</span><span class="line">                  t))))
+</span><span class="line">
+</span><span class="line">(defun test-writes (n)
+</span><span class="line">  (let ((a *a*)
+</span><span class="line">        (b *b*))
+</span><span class="line">    (sb-thread:wait-on-semaphore *semaphore*)
+</span><span class="line">    (loop repeat n
+</span><span class="line">          count (with-transaction ()
+</span><span class="line">                  (with-write ()
+</span><span class="line">                    (incf (box-value a))
+</span><span class="line">                    (incf (box-value b)))
+</span><span class="line">                  t))))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>It looks like the loads from uncached memory represent ~85% of the
-runtime, while the <code>mfence</code> pair might account for <em>at most</em> ~15%, if
-I include all the noise from surrounding instructions.</p>
+<p>The function <code>test-reads</code> counts the number of successful read
+transactions and checks that <code>(box-value a)</code> and <code>(box-value b)</code> are
+always equal. That consistency is preserved by <code>test-writes</code>, which
+counts the number of times it succeeds in incrementing both
+<code>(box-value a)</code> and <code>(box-value b)</code>.</p>
 
-<p>If I trusted the profile, I would worry about eliminating <code>lock</code>ed
-instructions, but not so much for <code>mfence</code>.  However, runtimes (in
-cycles), which is what I’m ultimately interested in, tell a different
-story.  The same loop of LLC load misses takes 2.81e9 cycles for 32M
-iterations without any atomic or fence, versus 3.66e9 for <code>lock
-inc/dec</code> and 19.60e9 cycles for <code>mfence</code>.  So, while the profile for
-the <code>mfence</code> loop would let me believe that only ~15% of the time is
-spent on synchronisation, the <code>mfence</code> pair really represents 86%
-\(((19.6 - 2.81) / 19.6)\) of the runtime for that loop!  Inversely,
-the profile for the <code>lock</code>ed pair would make me guess that we spend
-about 40% of the time there, but, according to the timings, the real
-figure is around 23%.</p>
+<p>The baseline case should probably be serial execution, while the ideal
+case for transactional mutex lock is when there is at most one
+writer.  Hopefully, lock-free sequence locks also does well when there
+are multiple writers.</p>
 
-<p>The other tests all point to the same conclusion: the overhead of
-<code>mfence</code> is strongly underestimated by instruction level profiling,
-and that of <code>lock</code>ed instructions exaggerated, especially when
-adjacent instructions write to memory.</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun test-serial (n)
+</span><span class="line">  (setf *a* (make-box 0)
+</span><span class="line">        *b* (make-box 0)
+</span><span class="line">        *semaphore* (sb-thread:make-semaphore :count 4))
+</span><span class="line">  (list (test-reads (* 10 n))
+</span><span class="line">        (test-reads (* 10 n))
+</span><span class="line">        (test-writes n)
+</span><span class="line">        (test-writes n)))
+</span><span class="line">
+</span><span class="line">(defun test-single-writer (n)
+</span><span class="line">  (setf *a* (make-box 0)
+</span><span class="line">        *b* (make-box 0)
+</span><span class="line">        *semaphore* (sb-thread:make-semaphore))
+</span><span class="line">  (let ((threads
+</span><span class="line">          (list (sb-thread:make-thread #'test-reads :arguments (* 10 n))
+</span><span class="line">                (sb-thread:make-thread #'test-reads :arguments (* 10 n))
+</span><span class="line">                (sb-thread:make-thread #'test-writes
+</span><span class="line">                                       :arguments (ceiling (* 1.45 n))))))
+</span><span class="line">    (sb-thread:signal-semaphore *semaphore* 3)
+</span><span class="line">    (mapcar (lambda (x)
+</span><span class="line">              (ignore-errors (sb-thread:join-thread x)))
+</span><span class="line">            threads)))
+</span><span class="line">
+</span><span class="line">(defun test-multiple-writers (n)
+</span><span class="line">  (setf *a* (make-box 0)
+</span><span class="line">        *b* (make-box 0)
+</span><span class="line">        *semaphore* (sb-thread:make-semaphore))
+</span><span class="line">  (let ((threads
+</span><span class="line">          (list (sb-thread:make-thread #'test-reads :arguments (* 10 n))
+</span><span class="line">                (sb-thread:make-thread #'test-reads :arguments (* 10 n))
+</span><span class="line">                (sb-thread:make-thread #'test-writes :arguments n)
+</span><span class="line">                (sb-thread:make-thread #'test-writes :arguments n))))
+</span><span class="line">    (sb-thread:signal-semaphore *semaphore* 4)
+</span><span class="line">    (mapcar (lambda (x)
+</span><span class="line">              (ignore-errors (sb-thread:join-thread x)))
+</span><span class="line">            threads)))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<pre><code>  setup     cycles   (est. overhead)  ~actual overhead
+<h1 id="lets-try-this">Let’s try this!</h1>
 
-div [ALU] (100 Mi iterations)
- atomic: 20153782848   (20%)          ~ 3.8%
- mfence: 28202315112   (25%)          ~31.3%
-vanilla: 19385020088
+<p>First, the serial case. As expected, all the transactions succeed, in
+6.929 seconds total (6.628 without GC time).  With one writer and two
+readers, all the writes succeed (as expected), and 98.5% of reads do as
+well; all that in 4.186 non-GC seconds, a 65% speed up.  Finally, with
+two writers and two readers, 76% of writes and 98.5% of reads complete in
+4.481 non-GC seconds.  That 7% slowdown compared to the single-writer
+case is pretty good: my laptop only has two cores, so I would expect
+more aborts on reads and a lot more contention with, e.g., a spinlock.</p>
 
-Reads:
-
-TLB misses (64Mi iterations)
- atomic:  3776164048   (80%)          ~39.3%
- mfence: 12108883816   (50%)          ~81.1%
-vanilla:  2293219400 
-
-LLC misses (32Mi iterations)
- atomic:  3661686632   (40%)          ~23.3%
- mfence: 19596840824   (15%)          ~85.7%
-vanilla:  2807258536
-
-Writes:
-
-TLB (64Mi iterations)
- atomic:  3864497496   (80%)          ~10.4%
- mfence: 13860666388   (50%)          ~75.0%
-vanilla:  3461354848
-
-LLC (32Mi iterations)
- atomic:  4023626584   (60%)          ~16.9%
- mfence: 21425039912   (20%)          ~84.4%
- vanilla: 3345564432
+<pre><code>CL-USER&gt; (gc :full t) (time (test-serial 1000000))
+Evaluation took:
+  6.929 seconds of real time
+  6.944531 seconds of total run time (6.750770 user, 0.193761 system)
+  [ Run times consist of 0.301 seconds GC time, and 6.644 seconds non-GC time. ]
+  100.23% CPU
+  11,063,956,432 processor cycles
+  3,104,014,784 bytes consed
+  
+(10000000 10000000 1000000 1000000)
+CL-USER&gt; (gc :full t) (time (test-single-writer 1000000))
+Evaluation took:
+  4.429 seconds of real time
+  6.465016 seconds of total run time (5.873936 user, 0.591080 system)
+  [ Run times consist of 0.243 seconds GC time, and 6.223 seconds non-GC time. ]
+  145.97% CPU
+  6,938,703,856 processor cycles
+  2,426,404,384 bytes consed
+  
+(9863611 9867095 1450000)
+CL-USER&gt; (gc :full t) (time (test-multiple-writers 1000000))
+Evaluation took:
+  4.782 seconds of real time
+  8.573603 seconds of total run time (7.644405 user, 0.929198 system)
+  [ Run times consist of 0.301 seconds GC time, and 8.273 seconds non-GC time. ]
+  179.30% CPU
+  7,349,757,592 processor cycles
+  3,094,950,400 bytes consed
+  
+(9850173 9853102 737722 730614)
 </code></pre>
 
-<p>I can guess why we observe this effect; it’s not like Intel is
-intentionally messing with us.  <code>mfence</code> is a full pipeline flush: it
-slows code down because it waits for all in-flight instructions to
-complete their execution.  Thus, while it’s flushing that slows us
-down, the profiling machinery will attribute these cycles to the
-instructions that are being flushed.  Locked instructions instead
-affect stores that are still queued.  By forcing such stores to
-retire, locked instructions become responsible for the extra cycles
-and end up “paying” for writes that would have taken up time anyway.</p>
+<p>How does a straight mutex do with four threads?</p>
+<div class="bogus-wrapper"><notextile><figure class="code"><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+</pre></td><td class="code"><pre><code class=""><span class="line">(defun test-mutex (n)
+</span><span class="line">  (let ((mutex (sb-thread:make-mutex))
+</span><span class="line">        (semaphore (sb-thread:make-semaphore))
+</span><span class="line">        (a 0)
+</span><span class="line">        (b 0))
+</span><span class="line">    (flet ((reader (n)
+</span><span class="line">             (sb-thread:wait-on-semaphore semaphore)
+</span><span class="line">             (loop repeat n do
+</span><span class="line">               (sb-thread:with-mutex (mutex)
+</span><span class="line">                 (assert (eql a b)))))
+</span><span class="line">           (writer (n)
+</span><span class="line">             (sb-thread:wait-on-semaphore semaphore)
+</span><span class="line">             (loop repeat n do
+</span><span class="line">               (sb-thread:with-mutex (mutex)
+</span><span class="line">                 (incf a)
+</span><span class="line">                 (incf b)))))
+</span><span class="line">      (let ((threads
+</span><span class="line">              (list (sb-thread:make-thread #'reader
+</span><span class="line">                                           :arguments (* 10 n))
+</span><span class="line">                    (sb-thread:make-thread #'reader
+</span><span class="line">                                           :arguments (* 10 n))
+</span><span class="line">                    (sb-thread:make-thread #'writer
+</span><span class="line">                                           :arguments (ceiling (* .75 n)))
+</span><span class="line">                    (sb-thread:make-thread #'writer
+</span><span class="line">                                           :arguments (ceiling (* .75 n))))))
+</span><span class="line">        (sb-thread:signal-semaphore semaphore 4)
+</span><span class="line">        (mapc #'sb-thread:join-thread threads)))))</span></code></pre></td></tr></table></div></figure></notextile></div>
 
-<p>Losing faith in hardware profiling being remotely representative of
-reality makes me a sad panda; I now have to double check <code>perf</code>
-profiles when hunting for misleading metrics.  At least I can tell
-myself that knowing about this phenomenon helps us make better
-informed – if less definite – decisions and ferret out more easy
-wins.</p>
+<pre><code>CL-USER&gt; (gc :full t) (time (test-mutex 1000000))
+Evaluation took:
+  5.814 seconds of real time
+  11.226734 seconds of total run time (11.169670 user, 0.057064 system)
+  193.10% CPU
+  9,248,370,000 processor cycles
+  1,216 bytes consed
+  
+(#&lt;SB-THREAD:THREAD FINISHED values: NIL {1003A6E1F3}&gt;
+ #&lt;SB-THREAD:THREAD FINISHED values: NIL {1003A6E383}&gt;
+ #&lt;SB-THREAD:THREAD FINISHED values: NIL {1003A6E513}&gt;
+ #&lt;SB-THREAD:THREAD FINISHED values: NIL {1003A6E6A3}&gt;)
+</code></pre>
 
-<p>P.S., if you find this stuff interesting, feel free to send an email
-(pkhuong at $WORK.com).  My team is hiring both experienced developers
-and recent graduates (:</p>
+<p>There’s almost no allocation (there’s no write record), but the lack
+of read parallelism makes locks about 20% slower than the lock-free
+sequence lock.  A reader-writer lock would probably close that gap.
+The difference is that the lock-free sequence lock has stronger
+guarantees in the worst case: no unlucky preemption (or crash, with
+shared memory IPC) can cause the whole system to stutter or even halt.</p>
+
+<p>The results above correspond to my general experience.  Lock-free
+algorithms aren’t always (or even regularly) more efficient than well
+thought out locking schemes; however, they are more robust and easier
+to reason about.  When throughput is more than adequate, it makes
+sense to eliminate locks, not to improve the best or even the average
+case, but rather to eliminate a class of worst cases – including
+deadlocks.</p>
+
+<p>P.S., here’s a sketch of the horrible cross-modifying code hack.  It
+turns out that the instruction cache is fully coherent on (post-586)
+x86oids; the prefetch queue will even reset itself based on the linear
+(virtual) address of writes.  With a single atomic byte write, we can
+turn a <code>xchg (%rax), %rcx</code> into <code>xchg (%rbx), %rcx</code>, where <code>%rbx</code>
+points to a location that’s safe to mutate arbitrarily.  That’s an
+atomic store predicated on the value of a control word elsewhere
+(hidden in the instruction stream itself, in this case).  We can then
+dedicate one sequence of machine to each transaction and reuse them
+via some
+<a href="http://www.cs.toronto.edu/~tomhart/papers/tomhart_thesis.pdf">Safe Memory Reclamation mechanism (PDF)</a>.</p>
+
+<p>There’s one issue: even without preemption (if a writer is pre-empted,
+it should see the modified instruction upon rescheduling), stores
+can take pretty long to execute: in the worst case, the CPU has to
+translate to a physical address and wait for the bus lock.  I’m pretty
+sure there’s a bound on how long a <code>xchg m, r64</code> can take, but I
+couldn’t find any documentation on hard figure.  If we knew that <code>xchg
+m, r64</code> never lasts more than, e.g., 10k cycles, a program could wait
+that many cycles before enqueueing a new write.  That wait is bounded
+and, as long as writes are disabled very rarely, should improve
+the worst-case behaviour without affecting the average throughput.</p>
 </div>
   
   
@@ -426,7 +818,7 @@ and recent graduates (:</p>
     </div>
   </div>
   <footer role="contentinfo"><p>
-  Website copyright &copy; 2025 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+  Website copyright &copy; 2026 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
 </p>
 
 </footer>

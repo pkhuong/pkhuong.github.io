@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2013/09/19/all-you-need-is-call-slash-cc/">All you need is call/cc</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2013/11/22/the-weaknesses-of-sbcls-type-propagation/">The weaknesses of SBCL's type propagation</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Sept
+Nov
   
-19th, 
+22nd, 
 2013
 
 
 
 
         
-         | <a href="/Blog/2013/09/19/all-you-need-is-call-slash-cc/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2013/09/19/all-you-need-is-call-slash-cc/"
+         | <a href="/Blog/2013/11/22/the-weaknesses-of-sbcls-type-propagation/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2013/11/22/the-weaknesses-of-sbcls-type-propagation/"
 	      >Comments</a>
         
         
@@ -117,243 +117,272 @@ Sept
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p>I was going to post this as a comment on
-<a href="http://www.reddit.com/r/lisp/comments/1mkqvj/why_monads_have_not_taken_the_common_lisp_world/ccb5sor">r/lisp</a>,
-but I feel it’s grown a bit too much for the platform.  For one time
-only, this blog will host some Racket code.  I apologise in advance to
-any Schemer reading this.  I needed an easy way to play with control
-operators, but I’ve never really Schemed, so there’s probably a dozen
-issues with the code and its style.</p>
+  <div class="entry-content" style="font-family: ; font-size: "><p><em>I’ll be defending on Friday, December 13th; that will likely
+mark the end of my copious free time. I hope to write a couple more
+braindumps on SBCLy topics in the near future, before I forget
+everything.</em></p>
 
-<p>So, why is the
-<a href="http://blog.sigfpe.com/2008/12/mother-of-all-monads.html">continuation monad the mother of all monads</a>?
-The short answer is that, by enabling transparent inversion of
-control, it eliminates the need to sprinkle hooks for monad-specific
-code everywhere; normal (as much as anything involving delimited
-continuations can be “normal”) evaluation rules will be subverted as
-needed.  Here’s how.</p>
+<p>SBCL is known for its flow-sensitive type propagation pass… or,
+rather, for its effects. That is probably why it can be so shocking
+when SBCL fails to infer obvious invariants. I feel like I can now
+describe the root causes of these surprising weaknesses and propose a
+series of fixes. Coding that up would likely take months, but the
+result should be more precise type propagation with improved
+asymptotic efficiency, and even a tunable knob between precision and
+compile times.</p>
 
-<p>First, some boilerplate (boilerfoil may be the more appropriate term).</p>
+<p>The compiler in SBCL, Python, doesn’t work on an IR in SSA form, nor
+does it convert internally to CPS à la Rabbit/Orbit. However, a clever
+– I don’t recall seeing it described anywhere else – design decision
+achieves similar effects. Operations receive their arguments as linear
+vars (LVARs) and write their results to an LVAR. Each LVAR has exactly
+one destination (one reader node), and, on any execution path, can only be
+used (written to) by one node. LVARs may nevertheless have multiple
+uses: these correspond to the value of conditionals and of conditional
+non-local exits. Assignment and access to lexical variables are
+represented as SET and REF nodes that receive and produce values
+through LVARs. This means that nearly everything can work in terms of
+LVARs when manipulating code and reasoning about dataflow. The
+conversion of read-once lexical variables to LVARs further simplifies
+a lot of mostly functional code.</p>
 
-<pre><code>#lang racket
-(require racket/control) ; for shift/reset
+<p>Python takes this split to the extreme: only the constraint (type)
+propagation pass really handles full-blown lexical
+variables. Everything else depends on the flow-sensitive type
+information summarised in CFG nodes and joined in LVARs. Want to check
+whether a given argument is always positive? Simply test for subtyping
+on the LVAR’s derived type to implicitly leverage flow-sensitive type
+information. Want to insert some computation (e.g. a type assertion or
+an explicit modulo for overflowing arithmetic) between a value and its
+destination? Insert a new node in the CFG and substitute around
+nothing but opaque LVARs.  These operations are so natural in Python
+that I only recently realised the design decision that makes them so
+easy.</p>
 
-(define (run thunk return . arguments)
-  (reset (return (apply thunk arguments))))
-</code></pre>
+<p>However, I believe that Python went too far in relegating lexical
+variables to only the constraint pass. That pass <em>only</em> handles
+lexical variables (LAMBDA-VARs) and flow-sensitive information about
+them, and only propagates three kinds of constraints (derived
+information):</p>
 
-<p>This definition is all that is needed to execute arbitrary Racket code
-in a monad: the only thing to specify is how a ground value should be
-moved in the monad.  <code>bind</code> will be defined implicitly, through the
-code for monad-specific behaviour.  The body of <code>run</code> defines a
-context to determine where to stop capturing the continuation, and
-executes the form <code>(return (apply thunk arguments))</code> in that context:
-the thunk is called with any argument provided, and the result is
-<code>return</code>ed into the monad.</p>
+<ol>
+  <li>lexical variable V is (is not) of type T at this program point
+(because of a type test or assertion);</li>
+  <li>lexical variable V is (is not) &lt; or &gt; than a value of type T at
+this program point (because of a comparison);</li>
+  <li>lexical variable V is (is not) EQL to an LVAR, to another lexical
+variable U, or to a constant at this program point (because of an
+assignment/reference to a variable or a comparison).</li>
+</ol>
 
-<p>For the sake of generalisation, I’ll start with a trivial example: the
-Maybe monad.  First, I’ll quickly define structure types.  In
-practice, a distinguished “nothing” value would suffice, but this way
-parallels Haskell more closely.</p>
+<p>The importance of EQL constraints is subtle. These constraints
+represent the way that, e.g., information about a lexical variable is
+also true of the result of a lookup for that variable’s value (and
+vice versa), even if that information is learned after the variable is
+accessed. Similarly, when two lexical variables are EQL, information
+about one is true of the other. Finally, equality with a constant is
+always useful for constant propagation.</p>
 
-<pre><code>(struct Maybe ())
-(struct Nothing Maybe ())
-(struct Some Maybe (value))
-</code></pre>
+<p>All three constraint types are centered on lexical variables. The
+reason is that no flow-sensitive information needs to be computed for
+LVARs: they are only used once. For example, if a type test is
+performed on an LVAR, that is the LVAR’s only appearance and there is
+no information to propagate… unless that information is also true
+of some lexical variable.</p>
 
-<p>The constructor <code>Some</code> also doubles as <code>return</code>.  In order to abort
-out, <code>nothing</code> must unwind the continuation and return a <code>Nothing</code>
-object.</p>
+<p>There’s some more clever engineering and the analysis is simplified by
+disregarding variables that may be assigned from closures, but that’s
+the gist of it. A vanilla dataflow analysis worklist loop propagates
+information around, and constraints sets for each basic block shrink
+until the least (in terms of types, greatest when measuring
+information) fixed point is reached.</p>
 
-<pre><code>(define (nothing)
-  (shift k (Nothing)))
+<p>The first weakness is caused by the aforementioned cleverness:
+knowledge about the state of the world as each basic block is entered
+and exited is represented with sets of constraints (bitsets indexed
+with consecutive indices assigned to constraints on demand). In the
+interest of speed, join and meet are implemented as (bit-)set
+union/intersection. The problem with this approach is that it
+completely discards information about a lexical variable when it is
+not identically present in both sets. For example, when one
+predecessor says that V is a positive integer and another that V is an
+integer, their successor discards all information about the type of V.</p>
 
-&gt; (run (lambda () 42) Some)
-#&lt;Some&gt;
-&gt; (Some-value (run (lambda () 42) Some))
-42
-</code></pre>
+<p>In practice, this is a lesser problem than it first appears to be:
+LVARs merge information about their multiple uses (writes) without any
+loss. The kind of code that suffers is code that does things like:
+    (lambda (x)
+      (ecase x
+        (1 …)
+        (2 …))
+      [work on X, knowing that it is either 1 or 2]) 
+The two branches of the ecase that eventually continue execution
+respectively derive that X is EQL to 1 and to 2. However, their shared
+successor combines that information by forgetting about both equalities
+rather than weakening/downgrading the two constraints into “X is of
+type (INTEGER 1 2).”</p>
 
-<p>The function <code>run</code> obviously works as it should in these trivial
-examples.  It’s also not surprising that <code>nothing</code> works, because it’s
-the obvious implementation of unwinding with delimited continuations.</p>
+<p>Another interesting case is
+    (lambda (x)
+      (let ((y nil)) ; IF expression translated to an effectful IR
+        (if x
+            (setf y 1)
+            (setf y 2))
+        y)) 
+for which Python derives that the result is either 1, 2, or NIL (the
+union of all the values ever assigned to Y). The equivalent code
+<code>(lambda (x) (if x 1 2))</code> compiles everything to LVARs and the result is
+known to be either 1 or 2 even before constraint propagation.</p>
 
-<pre><code>&gt; (run (lambda () 42 (nothing) #t) Some)
-#&lt;Nothing&gt;
-</code></pre>
+<p>This can be addressed with a redundant representation that adds, to
+each constraint set, a dictionary from lexical variables to the
+(downgradable) information known about them: their types and the types
+they’re known to be &lt; or &gt; than. When intersecting constraint sets,
+these dictionaries make it easy to weaken information and insert the
+corresponding constraints.</p>
 
-<p>In the List monad, <code>return</code> is just <code>list</code>. <code>run</code> can be called with a
-thunk and <code>list</code> as the second argument, and indeed, the result is a
-normal computation that returns its value as a singleton.</p>
+<p>The second weakness is deeply embedded in the structure of the
+compiler: the constraint propagation pass only pushes around
+pre-computed flow-insensitive information. That information is valid
+because the flow-insensitive pass (that computes things like the type
+of the values produced by each CFG node) works from an older (over)
+approximation of the flow-sensitive information. Once a fixed point is
+reached in the constraint propagation pass, the flow-insensitive pass
+is re-executed and information refined. In the end, there is a
+back-and-forth between the simple flow-sensitive constraint
+propagation pass and the flow-insensitive “optimization” pass that
+leverages a huge knowledge base about Common Lisp operators and
+functions.</p>
 
-<pre><code>&gt; (run (lambda () (+ 4 5)) list)
-'(9)
-</code></pre>
+<p>That exchange of information not only takes many (hefty) iterations to
+converge, but is also lossy: the constraint propagation pass is
+flow-sensitive, but manipulates types based on an earlier pass or on
+type declarations. In effect, constraint propagation computes the
+least fixed point of a function that is defined by an earlier coarse
+upper approximation… a process that ends up preserving a lot of the
+initial weakness. This strange choice presents an interesting
+characteristic: every iteration the outer communication loop between
+flow -sensitive and -insensitive analysis produces valid (but overly
+conservative) information. So convergence is slow, but at least
+intermediate results can guide rewrites safely.</p>
 
-<p>The useful thing to do with the List monad is to specify multiple
-return values, and have the computation fork (lazily in Haskell,
-eagerly here, because I’m working with strict lists) on each
-choice. That’s a one-liner:</p>
+<p>The obvious fix is to derive node types within the constraint
+propagation pass, even as the final result of the flow-sensitive pass
+is approximated from below. For example, upon assignment to a lexical
+variable, the current pass adds a new constraint: the type of that
+variable is that of the LVAR for the assignment’s value, and the
+LVAR’s type is computed based on the information from the previous
+constraint propagation pass. Instead, it should be based on the
+current (overly agressive) flow-sensitive information. That would
+eventually converge to a smaller fixed point. This alternative design
+would also obviate the need for a questionable hack that improves
+precision for some lucky iteration variables.</p>
 
-<pre><code>(define (inject-values . values)
-  (shift k (append-map k values)))
-</code></pre>
+<p>A weaker form of this change would be to use preliminary (perhaps
+overly aggressive) information only to tentatively detect impossible
+conditional branches. This would enable Python to derive that the
+return value of
+    (lambda ()
+      (loop with x = 0
+            while (foo)
+            do (case x
+                 (1 (setf x 2))
+                 (2 (setf x 1)))
+            finally (return x)))
+is always 0 (and never 1 or 2), or that the expression <code>(if (eql x y) (eql x y) t)</code> is always true.</p>
 
-<p>This function captures the continuation up to <code>reset</code>, unwinds the
-current continuation up to that point, and binds the captured
-delimited continuation to <code>k</code>.  Then, it passes each possible value to
-the continuation, and appends the results together.</p>
+<p>With suitable handling of calls to local functions, useful types might
+even be derived for recursive functions. The current type propagation
+pass derives insanely stupid types for recursive functions and for
+assignment to variables in loops (unless the iteration variable hack
+suffices). For example
+    (lambda ()
+      (labels ((foo (x)
+                 (if (bar)
+                     (foo (1+ x))
+                     x)))
+        (foo 42))) 
+is derived to return an arbitrary NUMBER. Instead, the return type of
+local functions can be initialised to the empty type (in which case
+propagation must be stopped for the caller block) and extended as
+argument types grow and as recursion triggers more propagation.</p>
 
-<p>Here’s a first example:</p>
+<p>The problem is that this more precise flow-sensitive pass loses the
+finite chain condition: there is no guarantee that the least fixed
+point will always be reached in finite time. The current constraint
+propagation pass operates on a finite lattice: only variables and
+types that exist in the input IR1 graph can appear in constraints, so
+the fixpointed function is defined over the powerset of this finite
+set of constraints for each basic block. In contrast, the full CL type
+universe is most definitely not finite (type tests aren’t even
+decidable in general).</p>
 
-<pre><code>&gt; (run (lambda () (+ (inject-values 1 2) (inject-values 3 4))) list)
-'(4 5 5 6)
-</code></pre>
+<p>There is a simple solution to this problem: before extending the
+constraint universe, widen types to satisfy the finite chain
+condition, i.e., make sure that types eventually stop growing. For
+example, when taking a non-trivial union or intersection of types, the
+result could be quantised to a coarse set of types (singleton types,
+named class types, a few key numeric ranges, etc.). Appropriate
+widening can also accelerate finite but slow convergence; the
+resulting fixed point isn’t guaranteed to be minimal, but is always
+valid. In fact, widening is likely to be necessary for the first
+improvement (with redundant dictionaries) as well.</p>
 
-<p>That is, reassuringly, the four possible sums: <code>1 + 3 = 4</code>, <code>1 + 4 = 5</code>,
-<code>2 + 3 = 5</code>, and <code>2 + 4 = 6</code>.  The magic is that all Scheme code,
-by virtue of supporting the capture (and unwind) of delimited
-continuation, is now “in” the List monad.  It is certainly the case
-for that uninstrumented thunk.  The pre-defined function <code>map</code>
-provides a more convincing example.</p>
+<p>Another issue in the constraint propagation pass is an instance of the
+phase ordering problem. Some source-to-source transforms help type
+propagation (e.g., turning complicated functions into simpler ones for
+which type propagation is feasible), and others hinder it (e.g.,
+converting integer division by a constant to multiply and shift or
+MAPCAR to an inline loop). Worse, there’s a dependency cycle as
+transforms rely on type propagation to determine whether they are
+applicable. There’s been some academic work that exposes multiple
+equivalent code sequences to analyses, and it seems possible to do
+something similar in Python as well: source-to-source transforms
+generate functions, so we’d “only” have to analyse the function
+without splicing it in. However, that’s likely to be impractically slow
+(even termination is non-obvious)… perhaps it will be doable for
+select transforms that expand into pure expressions.</p>
 
-<pre><code>&gt; (run (lambda ()
-         (map cons
-              (inject-values '(1 2) '(4 5))
-              (inject-values '(3 4) '(5 6))))
-       list)
-'(((1 . 3) (2 . 4))
-  ((1 . 5) (2 . 6))
-  ((4 . 3) (5 . 4))
-  ((4 . 5) (5 . 6)))
-</code></pre>
+<p>The only suggestion to accelerate constraint propagation so far is to
+widen types, and that mostly compensates for slowdowns (or infinite
+convergence) introduced by other changes. There’s a classic trick that
+ought to accelerate even the current pass: guide the order in which
+basic blocks are analysed by partitioning them in strongly connected
+components. Python exploits a simple ordering technique, a depth-first
+ordering that minimises backward edges in reducible control-flow
+graphs. Basic blocks could instead be partitioned into strongly
+connected components: contracting each strongly connected component
+into a single vertex leaves a directed acyclic graph. It then suffices
+to fixpoint on each strong component and traverse the condensed DAG so
+that each component is only visited after all its predecessors. Python
+already computes loop nests, so that’s an easy change; it’s likely
+even better to look at nested loops and recursively order analysis
+within each component. A few other passes perform some form of
+dataflow analysis and would benefit from that improved ordering…
+perhaps compile times can be really improved (Amdahl says that’s
+unlikely until splicing in source-to-source transformations is a lot
+quicker).</p>
 
-<p>I’ve taken the liberty of line-wrapping the return value, and clearly,
-<code>(map cons ...)</code> has been called with all four pairs of lists…  but
-all the special monadic operations happens outside <code>map</code>.  Moving
-<code>inject-values</code> inside the mapped function is a much stronger evidence
-that arbitrary uninstrumented Scheme code is implicitly lifted in the
-monad: <code>map</code> is a predefined (pre-compiled even) library function.</p>
+<p>Recap :</p>
 
-<pre><code>&gt; (run (lambda ()
-       (map (lambda (x y) ((inject-values + -) x y))
-            '(1 2 3)
-            '(4 5 6)))
-     list)
-'((5 7 9)     ; + + +
-  (5 7 -3)    ; + + -
-  (5 -3 9)    ; + - +
-  (5 -3 -3)   ; + - -
-  (-3 7 9)    ; - + +
-  (-3 7 -3)   ; - + -
-  (-3 -3 9)   ; - - +
-  (-3 -3 -3)) ; - - -
-</code></pre>
+<ol>
+  <li>Add a dictionary for TYPEP and &lt;/&gt; constraints on LAMBDA-VARs in
+consets; use it to merge and weaken information in consets.</li>
+  <li>Derive flow-insensitive types within the flow-sensitive pass, for
+quicker final convergence to a tighter solution.</li>
+  <li>Simplify conditional branches with flow-sensitive information,
+even when that information is still optimistic.</li>
+  <li>Widen types for quicker/finite convergence.</li>
+  <li>See what source-to-source transformations are applicable with the
+current information, and use that to derive stronger types.</li>
+  <li>Analyse basic blocks based on loop nests: fixpoint a loop nest
+before visiting its successors, and wait until all predecessors
+have reached a fixed point before analysing a loop’s blocks.</li>
+</ol>
 
-<p>At each call to the mapped function, the computation explores both the
-branch in which the arguments are added and the one in which they are
-subtracted.  The result, for 3 pairs of triplets, is a list of 8
-triplets.</p>
-
-<p>Neither of these implementations is surprising or new; I believe
-they’re standard undergraduate exercises in a few universities.  The
-insight in
-<a href="http://www.diku.dk/hjemmesider/ansatte/andrzej/papers/RM-abstract.html">Filinski’s work</a>
-is that both <code>nothing</code> and <code>inject-values</code> share the same structure
-and can be defined in terms of the monad they help implement.  Because
-I dislike scrolling, their definitions are copied here.</p>
-
-<pre><code>(define (nothing) ; Maybe
-  (shift k (Nothing)))
-
-(define (inject-values . values) ; List
-  (shift k (append-map k values)))
-</code></pre>
-
-<p>Instead of returning the (monadic) value <code>(Nothing)</code> or <code>values</code> (a
-list), both capture and unwind the delimited continuation, bind it to
-<code>k</code>, and then do something more to the value.  Some squinting reveals
-that that something more is calling <code>bind</code> with the continuation <code>k</code>
-as the next step.  In the Maybe monad, <code>Nothing &gt;&gt;= k</code> evaluates to
-<code>Nothing</code>.  In the List monad, <code>values &gt;&gt;= k</code> becomes <code>foldr ((++)
-. k) [] values</code>, which is basically <code>(append-map k values)</code>.  The
-general form for any monad is then to implement any operator that
-doesn’t just <code>return</code> a value as</p>
-
-<pre><code>(define (operator ...)
-  (shift k (bind [special stuff] k)))
-</code></pre>
-
-<p>As code, this gives</p>
-
-<pre><code>(define (make-operator bind operator)
-  (lambda arguments
-    (shift k (bind (apply operator arguments) k))))
-</code></pre>
-
-<p>after adding support for variadic operators.  For example, choosing
-between multiple items in a list is</p>
-
-<pre><code>(define (list-bind x k) (append-map k x))
-
-(define inject-values2 (make-operator list-bind list))
-</code></pre>
-
-<p>Some sketching on paper will show that the transformation is generic
-and correct, with a proof that mostly goes through repeated
-applications of the monad laws.  Capturing the continuation moves the
-whole stack of functions that will eventually receive results into a
-single function (the continuation), and that function can then be
-passed to <code>bind</code>.  The monad laws guarantee that this associative
-reordering of nested <code>bind</code>s preserves the meaning of the program.</p>
-
-<p>We can also mimic <code>do</code>-notation more closely and implement <code>join</code>, an
-“anti-return”.  Given that operator, not <code>return</code>ing a value can instead
-be implemented as <code>join</code>ing it after the fact.  One definition is
-<code>(make-operator bind identity)</code>, but I feel it’s simpler to just do it
-longhand.</p>
-
-<pre><code>(define (make-join bind)
-  (lambda (value)
-    (shift k (bind value k))))
-
-(define join-list (make-join list-bind))
-
-&gt; (run (lambda () (+ 1 (join-list '(1 2 3)))) list)
-'(2 3 4)
-</code></pre>
-
-<p>Of course all this also works when <code>operator</code> is equivalent to
-<code>return</code>; it’s just pointless.  The <code>shift</code>/<code>return</code>/<code>bind</code> dance is
-then a convoluted way to demand regular Scheme evaluation rules.</p>
-
-<p>And that is how the continuation monad is universal.  When code is in
-the continuation monad (or in a language with delimited
-continuations), there is a mechanical way to have that code execute in
-almost any other monad.  There are technical restrictions on the monad
-for the transformation to work, but I think any monad that can be
-implemented in (pure) Haskell qualifies.</p>
-
-<p>I feel like sigfpe’s presentation was hobbled by the fact that he used
-the Continuation monad in Haskell, making it harder to see that the
-Continuation monad of the implementation is completely independent of
-the emulated one.  Really, the idea is one of these nice insights that
-formalise and generalise old hacks, and seem obvious in retrospect.</p>
-
-<p>The post’s title refers to the fact that delimited continuations can
-themselves be implemented in terms of <code>call-with-current-continuation</code>
-(and a single mutable cell).  There are many ways to interpret the
-corollary that <code>call/cc</code> suffices to transpose code into arbitrary
-monads.  It certainly seems like a victory for the minimalist crowd.
-On the other hand, I believe that the power of programming languages
-and paradigms lies as much in what they enable as it does in what they
-forbid (or make inconvenient, at least).  From that point of view,
-it’s not obvious whether the universality of <code>call/cc</code> makes a strong
-case for or against the feature.</p>
-
-<p>This result also provides a tentative explanation for the low traction
-of monads among Lispers: perhaps many would rather directly hack the
-features in, with (ersatz) continuations.</p>
+<p>In terms of implementation difficulty, these changes probably go
+1-6-3-4-2-5.  This also happens to be the order in which I’d try to
+implement them.</p>
 </div>
   
   
@@ -375,7 +404,7 @@ features in, with (ersatz) continuations.</p>
     </div>
   </div>
   <footer role="contentinfo"><p>
-  Website copyright &copy; 2025 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+  Website copyright &copy; 2026 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
 </p>
 
 </footer>

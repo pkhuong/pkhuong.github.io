@@ -87,7 +87,7 @@
       
   <header>
     
-      <h1 class="entry-title" style="font-family: "><a href="/Blog/2021/01/11/stuff-your-logs/">Stuff your logs!</a></h1>
+      <h1 class="entry-title" style="font-family: "><a href="/Blog/2021/05/14/baseline-implementations-should-be-predictable/">Baseline implementations should be predictable</a></h1>
     
     
       <p class="meta">
@@ -97,17 +97,17 @@
 
 
 
-Jan
+May
   
-11th, 
+14th, 
 2021
 
 
 
 
         
-         | <a href="/Blog/2021/01/11/stuff-your-logs/#disqus_thread"
-              data-disqus-identifier="https://www.pvk.ca/Blog/2021/01/11/stuff-your-logs/"
+         | <a href="/Blog/2021/05/14/baseline-implementations-should-be-predictable/#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2021/05/14/baseline-implementations-should-be-predictable/"
 	      >Comments</a>
         
         
@@ -117,540 +117,228 @@ Jan
 
 
 
-  <div class="entry-content" style="font-family: ; font-size: "><p><small>Originally cross-posted on the <a href="https://engineering.backtrace.io/2021-01-11-stuff-your-logs/">Backtrace.io engineering blog</a>.</small></p>
+  <div class="entry-content" style="font-family: ; font-size: "><p>I wrote <a href="https://crates.io/crates/reciprocal">Reciprocal</a> because I
+couldn’t find a nice implementation of div-by-mul in Rust without
+data-dependent behaviour. Why do I care?</p>
 
-<p>Nine months ago, we embarked on a format migration for the persistent
-(on-disk) representation of variable-length strings like symbolicated
-call stacks in the <a href="https://www.backtrace.io">Backtrace</a> server.  We
-chose a variant of
-<a href="http://www.stuartcheshire.org/papers/COBSforToN.pdf">consistent overhead byte stuffing (COBS)</a>,
-a <a href="https://en.wikipedia.org/wiki/Self-synchronizing_code">self-synchronising code</a>,
-for the metadata (variable-length as well).
-This choice let us improve our software’s resilience to data
-corruption in local files, and then parallelise data hydration, which
-improved startup times by a factor of 10… without any hard
-migration from the old to the current on-disk data format.</p>
+<p>Like <a href="https://ridiculousfish.com/blog/posts/benchmarking-libdivide-m1-avx512.html">ridiculous fish mentions in his review of integer divisions on M1 and Xeon</a>,
+certain divisors (those that lose a lot of precision when rounding up
+to a fraction of the form \(n / 2^k\)) need a different, slower,
+code path in classic implementations. Powers of two are also typically
+different, but at least divert to a faster sequence, a variable right
+shift.</p>
 
-<p>In this post, I will explain why I believe that the representation of
-first resort for binary logs (write-ahead, recovery, replay, or
-anything else that may be consumed by a program) should be
-self-synchronising, backed by this migration and by prior experience
-with COBS-style encoding.  I will also describe the
-<a href="https://github.com/backtrace-labs/stuffed-record-stream">specific algorithm (available under the MIT license)</a>
-we implemented for our server software.</p>
+<p>Reciprocal instead <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L116">uses a unified code path</a>
+to implement two expressions, 
+\(f_{m,s}(x) = \left\lfloor \frac{m x}{2^s} \right\rfloor\) and
+\(g_{m^\prime,s^\prime}(x) = \left\lfloor\frac{m^\prime \cdot \min(x + 1, \mathtt{u64::MAX})}{2^{s^\prime}}\right\rfloor\),
+that are identical except for the saturating increment of \(x\) in
+\(g_{m^\prime,s^\prime}(x)\).</p>
 
-<p>This encoding offers low space overhead for framing, fast encoding and
-faster decoding, resilience to data corruption, and a restricted form
-of random access.  Maybe it makes sense to use it for your own data!</p>
+<p>The first expression, \(f_{m,s}(x)\) corresponds to the usual
+div-by-mul approximation (implemented in gcc, LLVM, libdivide, etc.)
+where the reciprocal \(1/d\) is approximated in fixed point by rounding
+\(m\) <em>up</em>, with the upward error compensated by the truncating
+multiplication at runtime.  See, for example, Granlund and
+Montgomery’s <a href="https://gmplib.org/~tege/divcnst-pldi94.pdf">Division by invariant integers using multiplication</a>.</p>
 
-<h2 id="what-is-self-synchronisation-and-why-is-it-important">What is self-synchronisation, and why is it important?</h2>
+<p>The second, \(g_{m^\prime,s^\prime}(x)\), is the multiply-and-add
+scheme of described by Robison in <a href="https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.512.2627&amp;rep=rep1&amp;type=pdf">N-Bit Unsigned Division Via N-Bit Multiply-Add</a>.</p>
 
-<p>A <a href="https://en.wikipedia.org/wiki/Self-synchronizing_code">code is self-synchronising</a>
-when it’s always possible to unambiguously detect where a valid code
-word (record) starts in a stream of symbols (bytes).  That’s a
-stronger property than prefix codes like Huffman codes, which only
-detect when valid code words end.  For example, the UTF-8
-encoding is self-synchronising, because initial bytes and continuation
-bytes differ in their high bits.  That’s why it’s possible to decode
-multi-byte code points when tailing a UTF-8 stream.</p>
+<p>In that approximation, the reciprocal multiplier \(m^\prime\) is
+rounded <em>down</em> when converting \(1/d^\prime\) to fixed point.  At 
+runtime, we then bump the product up (by the largest value
+\(\frac{n}{2^{s^\prime}} &lt; 1/d^\prime\), i.e., \(\frac{m^\prime}{2^{s^\prime}}\)) before dropping the low bits.</p>
 
-<p>The UTF-8 code was designed for small integers (Unicode code points),
-and can double the size of binary data.  Other encodings are more
-appropriate for arbitrary bytes; for example,
-<a href="http://www.stuartcheshire.org/papers/COBSforToN.pdf">consistent overhead byte stuffing (COBS)</a>,
-a self-synchronising code for byte streams, offers a worst-case
-space overhead of one byte plus a 0.4% space blow-up.</p>
+<p>With a bit of algebra, we see that \(m^\prime x + m^\prime = m^\prime (x + 1)\)…
+and we can use a saturating increment to avoid a 64x65 multiplication
+as long as we don’t trigger this second expression for divisors
+\(d^\prime\) for which
+\(\left\lfloor \frac{\mathtt{u64::MAX}}{d^\prime}\right\rfloor \neq \left\lfloor \frac{\mathtt{u64::MAX} - 1}{d^\prime}\right\rfloor\).</p>
 
-<p>Self-synchronisation is important for binary logs because it lets us
-efficiently (with respect to both run time and space overhead) frame
-records in a simple and robust manner… and we want simplicity and
-robustness because logs are most useful when something has gone wrong.</p>
+<p>We have a pair of dual approximations, one that rounds the reciprocal
+up to a fixed point value, and another that rounds down; it makes
+sense to round to nearest, which nets us one extra bit of precision in
+the worst case, compared to always applying one or the other.</p>
 
-<p>Of course, the storage layer should detect and correct errors, but
-things will sometimes fall through, especially for on-premises
-software, where no one fully controls deployments.  When that happens,
-graceful partial failure is preferable to, e.g., losing all the
-information in a file because one of its pages went to the great bit
-bucket in the sky.</p>
+<p>Luckily,<sup id="fnref:or-is-it" role="doc-noteref"><a href="#fn:or-is-it" class="footnote" rel="footnote">1</a></sup>
+<a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L322">all of <code>u64::MAX</code>’s factors (except 1 and <code>u64::MAX</code>) work with the “round up” approximation</a>
+that doesn’t increment, so the saturating increment is always safe
+when we actually want to use the second “round-down” approximation
+(unless \(d^\prime \in \{1, \mathtt{u64::MAX}\}\)).</p>
 
-<p>One easy solution is to spread the data out over multiple files or
-blobs.  However, there’s a trade-off between keeping data
-fragmentation and file metadata overhead in check, and minimising the
-blast radius of minor corruption.  Our server must be able to run
-on isolated nodes, so we can’t rely on design options available to
-replicated systems… plus bugs tend to be correlated across replicas,
-so there is something to be said for defense in depth, even with
-distributed storage.</p>
+<p>This duality is the reason why Reciprocal can get away with
+64-bit multipliers.</p>
 
-<p>When each record is converted with a
-<a href="https://en.wikipedia.org/wiki/Self-synchronizing_code">self-synchronising code</a>
-like
-<a href="https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing">COBS</a>
-before persisting to disk, we can decode all records that weren’t
-directly impacted by corruption, exactly like decoding a stream of
-mostly valid UTF-8 bytes.  Any form of corruption will only make
-us lose the records whose bytes were corrupted, and, at most, the two records
-that immediately precede or follow the corrupt byte range.  This
-guarantee covers overwritten data (e.g., when a network switch flips a
-bit, or a read syscall silently errors out with a zero-filled page),
-as well as bytes removed or garbage inserted in the middle of log
-files.</p>
+<p>Even better, \(f_{m,s}\) and \(g_{m^\prime,s^\prime}\)
+differ only in the absence or presence of a saturating increment.
+Rather than branching, <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/src/lib.rs#L116">Reciprocal executes a data-driven increment</a>
+by 0 or 1,
+for \(f_{m,s}(x)\) or \(g_{m^\prime,s^\prime}(x)\) respectively.
+The upshot: predictable improvements over hardware division, even when
+dividing by different constants.</p>
 
-<p>The coding doesn’t store redundant information: replication or erasure
-coding is the storage layer’s responsibility.  It instead guarantees
-to <em>always</em> minimise the impact of corruption, and only lose records
-that were adjacent to or directly hit by corruption.</p>
+<p>Summary of the results below: when measuring the throughput of
+independent divisions on my i7 7Y75 @ 1.3 GHz, Reciprocal consistently
+needs 1.3 ns per division, while hardware division can only achieve
+~9.6 ns / division (Reciprocal needs 14% as much / 86% less time).
+This looks comparable to the
+<a href="https://ridiculousfish.com/blog/posts/benchmarking-libdivide-m1-avx512.html#:~:text=intel%20xeon%203.0%20ghz%20(8275cl)">results reported by fish for libdivide when dividing by 7</a>.
+Fish’s <a href="https://github.com/ridiculousfish/libdivide">libdivide</a> no
+doubt does better on nicer divisors, especially powers of two, but
+it’s good to know that a simple implementation comes close.</p>
 
-<p>A COBS encoding for log records achieves that by unambiguously
-separating records with a reserved byte (e.g., 0), and re-encoding
-each record to avoid that separator byte.  A reader can thus assume
-that potential records start and end at a log file’s first and last
-bytes, and otherwise look for separator bytes to determine where to
-cut all potential records.  These records may be invalid: a
-separator byte could be introduced or removed by corruption, and the
-contents of a correctly framed record may be corrupt.  When
-that happens, readers can simply scan for the next separator byte and
-try to validate that new potential record.  The decoder’s state resets
-after each separator byte, so any corruption is “forgotten” as soon as
-the decoder finds valid a separator byte.</p>
+<p>We’ll also see that, in Rust land, the
+<a href="https://crates.io/crates/fastdivide">fast_divide crate</a>
+is dominated by <a href="https://github.com/ejmahler/strength_reduce">strength_reduce</a>,
+and that strength_reduce is only faster than <a href="https://github.com/pkhuong/reciprocal/">Reciprocal</a>
+when dividing by powers of two (although, looking at the disassembly,
+it probably comes close for single-result latency).</p>
 
-<p>On the write side, the encoding logic is simple (a couple dozen lines
-of C code), and uses a predictable amount of space, as expected from
-an algorithm suitable for microcontrollers.</p>
+<p>First, results for division with the same precomputed inverse.  The
+timings are from
+<a href="https://github.com/bheisler/criterion.rs">criterion.rs</a>, 
+for <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/benches/div_throughput.rs#L29">\(10^4\) divisions in a tight loop</a>.</p>
 
-<p>Actually writing encoded data is also easy:
-on POSIX filesystems, we can make sure each record is delimited (e.g.,
-prefixed with the delimiter byte), and issue a
-<a href="https://pubs.opengroup.org/onlinepubs/007904875/functions/write.html">regular <code>O_APPEND</code> write(2)</a>.
-Vectored writes can even insert delimiters without copying in
-userspace.  Realistically, our code is probably less stable than
-operating system and the hardware it runs on, so we make sure our
-writes make it to the kernel as soon as possible, and let <code>fsync</code>s
-happen on a timer.</p>
+<ul>
+  <li>“Hardware” is a regular HW DIV,</li>
+  <li>“compiled” lets LLVM generate specialised code,</li>
+  <li>“reciprocal” is <a href="https://github.com/pkhuong/reciprocal/blob/d591c59044b3a4f662112aae73c3adae9f168ea6/src/lib.rs#L11">PartialReciprocal</a>,<sup id="fnref:why-partial" role="doc-noteref"><a href="#fn:why-partial" class="footnote" rel="footnote">2</a></sup></li>
+  <li>“strength_reduce” is the <a href="https://github.com/ejmahler/strength_reduce">strength_reduce crate’s u64 division</a>,</li>
+  <li>and “fast_divide” is <a href="https://crates.io/crates/fastdivide">the fast_divide crate’s u64 division</a>.</li>
+</ul>
 
-<p>When a write errors out, we can blindly (maybe once or twice) try
-again: the encoding is independent of the output file’s state.  When a
-write is cut short, we can still issue the same<sup id="fnref:suffix" role="doc-noteref"><a href="#fn:suffix" class="footnote" rel="footnote">1</a></sup> write call,
-without trying to “fix” the short write: the encoding and the
-read-side logic already protect against that kind of corruption.</p>
+<p>The last two options are the crates I considered before writing
+Reciprocal.  The strength_reduce crate switches between a special
+case for powers of two (implemented as a bitscan and a shift), and a
+general slow path that handles everything with a 128-bit fixed
+point multiplier.  fast_divide is inspired by libdivide and 
+implements the same three paths: a fast path for powers of two (shift
+right), a slow path for reciprocal multipliers that need one more bit
+than the word size (e.g, division by 7), and a regular round-up
+div-by-mul sequence.</p>
 
-<p>What if multiple threads or processes write to the same log file?
-When we <a href="https://pubs.opengroup.org/onlinepubs/007904875/functions/open.html">open with <code>O_APPEND</code></a>,
-the operating system can handle the rest.  This doesn’t make
-contention disappear, but at least we’re not adding a bottleneck in
-userspace on top of what is necessary to append to the same file.
-Buffering is also trivial: the encoding is independent of the state of
-the destination file, so we can always concatenate buffered records
-and write the result with a single syscall.</p>
+<p>Let’s look at <a href="https://github.com/pkhuong/reciprocal/blob/c4f6eeeb7108a778c6e8c1f8a5ac7c6df13e2943/benches/div_throughput.rs#L29">the three cases in that order</a>.</p>
 
-<p>This simplicity also plays well  with
-<a href="https://kernel.dk/io_uring.pdf">high-throughput I/O primitives like <code>io_uring</code></a>, and with
-<a href="https://docs.microsoft.com/en-us/rest/api/storageservices/append-block">blob stores that support appends</a>:
-independent workers can concurrently queue up blind append requests and
-retry on failure.
-There’s no need for application-level mutual exclusion or rollback.</p>
+<p>\(10^4\) divisions by 2 (i.e., a mere shift right by 1)</p>
 
-<h2 id="fun-tricks-with-robust-readers">Fun tricks with robust readers</h2>
-
-<p>Our log encoding will recover from bad bytes, as long as readers can
-detect and reject invalid records as a whole; the processing logic
-should also handle duplicated valid records.  These are table stakes
-for a reliable log consumer.</p>
-
-<p>In our variable-length metadata use case, each record describes a
-symbolicated call stack, and we recreate in-memory data structures by
-replaying an append-only log of metadata records, one for each
-unique call stack.  The hydration phase handles invalid records by
-ignoring (not recreating) any call stack with corrupt metadata,
-but only those call stacks.  That’s definitely an improvement over the
-previous situation, where corruption in a size header would prevent us
-from decoding the remainder of the file, and thus make us forget about
-<em>all</em> call stacks stored at file offsets after the corruption.</p>
-
-<p>Of course, losing data should be avoided, so we are careful to
-<code>fsync</code> regularly and recommend reasonable storage configurations.
-However, one can only make data loss unlikely, not impossible (if only
-due to fat fingering), especially when cost is a factor. With the COBS
-encoding, we can recover gracefully and automatically from any
-unfortunate data corruption event.</p>
-
-<p>We can also turn this robustness into new capabilities.</p>
-
-<p>It’s often useful to process the tail of a log at a regular cadence.
-For example, I once maintained a system that regularly tailed hourly
-logs to update approximate views. One could support that use case with
-length footers. COBS framing lets us instead scan
-for a valid record from an arbitrary byte location, and read the rest
-of the data normally.</p>
-
-<p>When logs grow large enough, we want to process them in parallel.  The
-standard solution is to shard log streams, which unfortunately couples
-the parallelisation and storage strategies, and adds complexity to the
-write side.</p>
-
-<p>COBS framing lets us parallelise readers independently of the writer.
-The downside is that the read-side code and I/O patterns are now more
-complex, but, all other things being equal, that’s a trade-off I’ll
-gladly accept, especially given that our servers run on independent
-machines and store their data in files, where reads are fine-grained
-and latency relatively low.</p>
-
-<p>A parallel COBS reader partitions a data file arbitrarily (e.g., in
-fixed size chunks) for independent workers.  A worker will scan for
-the first valid record starting inside its assigned chunk, and handle
-every record that <em>starts</em> in its chunk. Filtering on the start byte
-means that a worker may read past the logical end of its chunk, when
-it fully decodes the last record that starts in the chunk: that’s how
-we unambiguously assign a worker to every record, including records
-that straddle chunk boundaries.</p>
-
-<p>Random access even lets us implement a form of binary or interpolation
-search on raw unindexed logs, when we know the records are (k-)sorted
-on the search key!  This lets us, e.g., access the metadata for a few
-call stacks without parsing the whole log.</p>
-
-<p>Eventually, we might also want to truncate our logs.</p>
-
-<p>Contemporary filesystems like XFS (and even Ext4) support large sparse
-files.  For example, sparse files can reach \(2^{63} - 1\) bytes on
-XFS with a minimal metadata-only footprint: the on-disk data for such
-sparse files is only allocated when we issue actual writes.  Nowadays,
-we can <a href="https://lwn.net/Articles/415889/">sparsify files after the fact</a>,
-and convert ranges of non-zero data into zero-filled “holes” in order
-to release storage without messing with file offsets
-(or even atomically
-<a href="https://lwn.net/Articles/589260/">collapse old data away</a>).</p>
-
-<p>Filesystems can only execute these operations at coarse granularity,
-but that’s not an issue for our readers: they must merely remember to
-skip sparse holes, and the decoding loop will naturally handle any
-garbage partial record left behind.</p>
-
-<h2 id="the-original-consistent-overhead-byte-stuffing-scheme">The original consistent overhead byte stuffing scheme</h2>
-
-<p><a href="http://www.stuartcheshire.org/papers/COBSforToN.pdf">Cheshire and Baker’s original byte stuffing scheme</a>
-targets small machines and slow transports (amateur radio and
-phone lines).  That’s why it bounds the amount of buffering needed to
-254 bytes for writers and 9 bits of state for readers, and attempts to
-minimise space overhead, beyond its worst-case bound of 0.4%.</p>
-
-<p>The algorithm is also reasonable. The encoder buffers data until it
-encounters a reserved 0 byte (a delimiter byte), or there are 254
-bytes of buffered data.  Whenever the encoder stops buffering, it
-outputs a block whose contents are described by its first byte.  If
-the writer stopped buffering because it found a reserved byte, it
-emits one byte with <code>buffer_size + 1</code> before writing and clearing the
-buffer.  Otherwise, it outputs 255 (one more than the buffer size),
-followed by the buffer’s contents.</p>
-
-<p>On the decoder side, we know that the first byte of each block
-describes its size and decoded value (255 means 254 bytes of literal
-data, any other value is one more than the number of literal bytes to
-copy, followed by a reserved 0 byte).  We denote the end of a record
-with an implicit delimiter: when we run out of data to decode, we
-should have just decoded an extra delimiter byte that’s not really
-part of the data.</p>
-
-<p>With framing, an encoded record surrounded by delimiters thus looks
-like the following</p>
-
-<pre><code>|0   |blen|(blen - 1) literal data bytes....|blen|literal data bytes ...|0    |
+<pre><code>hardware_u64_div_2      time:   [92.297 us 95.762 us 100.32 us]
+compiled_u64_div_by_2   time:   [2.3214 us 2.3408 us 2.3604 us]
+reciprocal_u64_div_by_2 time:   [12.667 us 12.954 us 13.261 us]
+strength_reduce_u64_div_by_2
+                        time:   [2.8679 us 2.9190 us 2.9955 us]
+fast_divide_u64_div_by_2
+                        time:   [2.7467 us 2.7752 us 2.8025 us]
 </code></pre>
 
-<p>The delimiting “0” bytes are optional at the beginning and end of a
-file, and each <code>blen</code> size prefix is one byte with value in
-\([1, 255]\).  A value \(\mathtt{blen} \in [1, 254]\) represents
-a block \(\mathtt{blen} - 1\) literal bytes, followed by an implicit
- 0 byte.  If we instead have \(\mathtt{blen} = 255\), we
-have a block of \(254\) bytes, without any implicit byte.  Readers
-only need to remember how many bytes remain until the end of the
-current block (eight bits for a counter), and whether they should insert
-an implicit 0 byte before decoding the next block (one binary flag).</p>
+<p>This is the <em>comparative</em> worst case for Reciprocal: while Reciprocal
+always uses the same code path (1.3 ns/division), the compiler shows
+we can do much better with a right shift. Both branchy implementations
+include a special case for powers of two, and thus come close to the
+compiler, thanks a predictable branch into a right shift.</p>
 
-<h2 id="backtraces-word-stuffing-variant"><a href="https://www.backtrace.io">Backtrace</a>’s word stuffing variant</h2>
+<p>\(10^4\) divisions by 7 (a “hard” division)</p>
 
-<p>We have different goals for the software we write at
-<a href="https://www.backtrace.io">Backtrace</a>.  For our logging use case, we
-pass around fully constructed records, and we want to issue a single
-write syscall per record, with periodic <code>fsync</code>.<sup id="fnref:why-not-fewer" role="doc-noteref"><a href="#fn:why-not-fewer" class="footnote" rel="footnote">2</a></sup>
-Buffering is baked in, so there’s no point in making sure we can work
-with a small write buffer.  We also don’t care as much about the space
-overhead (the worst-case bound is already pretty good) as much as we
-do about encoding and decoding speed.</p>
-
-<p>These different design goals lead us to an updated hybrid word/byte
-stuffing scheme:</p>
-
-<ol>
-  <li>it uses a two-byte “reserved sequence,” carefully chosen to appear
-infrequently in our data</li>
-  <li>the size limit for the first block is slightly smaller (252 bytes instead
-of 254)</li>
-  <li>… but the limit for every subsequent block is much larger,
-65008 bytes, for an asymptotic space overhead of 0.0031%.</li>
-</ol>
-
-<p>This hybrid scheme improves encoding and decoding speed compared to
-COBS, and even marginally improves the asymptotic space overhead.  At
-the low end, the worst-case overhead is only slightly worse than that
-of traditional COBS: we need three additional bytes, including the
-framing separator, for records of 252 bytes or fewer, and five bytes
-for records of 253-64260 bytes.</p>
-
-<p>In the past, I’ve seen
-<a href="https://issues.apache.org/jira/browse/AVRO-27">“word” stuffing schemes</a>
-aim to reduce the run-time overhead of COBS codecs by scaling up
-the COBS loops to work on two or four bytes at a time.  However,
-a byte search is trivial to vectorise, and there is no guarantee that
-frameshift corruption will be aligned to word boundaries (for example,
-POSIX allows short writes of an arbitrary number of bytes).</p>
-
-<h3 id="much-ado-about-two-bytes">Much ado about two bytes</h3>
-
-<p>Our hybrid word-stuffing looks for a reserved two-byte delimiter
-sequence at arbitrary byte offsets.  We must still conceptually
-process bytes one at a time, but delimiting with a pair of bytes
-instead of with a single byte makes it easier to craft a delimiter
-that’s unlikely to appear in our data.</p>
-
-<p>Cheshire and Baker do the opposite, and use a frequent byte (0) to
-eliminate the space overhead in the common case.  We care a lot more
-about encoding and decoding speed, so an unlikely delimiter makes more
-sense for us.  We picked <code>0xfe 0xfd</code> because that sequence doesn’t
-appear in small integers (unsigned, two’s complement, varint, single
-or double float) regardless of endianness, nor in valid UTF-8 strings.</p>
-
-<p>Any positive integer with <code>0xfe 0xfd</code> (<code>254 253</code>) in its byte must be
-around \(2^{16}\) or more.  If the integer is instead negative in
-little-endian two’s complement, <code>0xfe 0xfd</code> equals -514 as a
-little-endian <code>int16_t</code>, and -259 in big endian (not as great, but not
-nothing).  Of course, the sequence could appear in two adjacent
-<code>uint8_t</code>s, but otherwise, for <code>0xfe</code> or <code>0xfd</code> can only appear in
-most significant byte of large 32- or 64-bit integers (unlike <code>0xff</code>,
-which could be sign extension for, e.g., -1).</p>
-
-<p>Any <a href="https://en.wikipedia.org/wiki/LEB128">(U)LEB varint</a> that
-includes <code>0xfe 0xfd</code> must span at least 3 bytes (i.e., 15 bits),
-since both these bytes have the most significant bit set to 1.
-Even a negative SLEB has to be at least as negative as
-\(- 2^{14} = -16384\).</p>
-
-<p>For floating point types, we can observe that <code>0xfe 0xfd</code> in the
-significand would represent an awful fraction in little or big
-endian, so can only happen for the IEEE-754 representation of large
-integers (approximately \(\pm 2^{15}\)).  If we instead assume
-that <code>0xfd</code> or <code>0xfe</code> appear in the sign and exponent fields, we find
-either very positive or very negative exponents (the exponent is
-biased, instead of complemented).  A semi-exhaustive search confirms
-that the smallest integer-valued single float that includes the
-sequence is 32511.0 in little endian and 130554.0 in big endian;
-among integer-valued double floats, we find 122852.0 and 126928.0
-respectively.</p>
-
-<p>Finally, the sequence isn’t valid UTF-8 because both <code>0xfe</code> and <code>0xfd</code>
-have their top bit set (indicating a multi-byte code point), but neither
-looks like a continuation byte: the two most significant bits are
-<code>0b11</code> in both cases, while UTF-8 continuations must have <code>0b10</code>.</p>
-
-<h3 id="encoding-data-to-avoid-the-reserved-sequence">Encoding data to avoid the reserved sequence</h3>
-
-<p>Consistent overhead byte stuffing rewrites reserved 0 bytes away by
-counting the number of bytes from the beginning of a record until the
-next 0, and storing that count in a block size header followed by the
-non-reserved bytes, then resetting the counter, and doing the same
-thing for the remaining of the record. A complete record is stored as
-a sequence of encoded blocks, none of which include the reserved
-byte 0.  Each block header spans exactly one byte, and must never
-itself be 0, so the byte count is capped at 254, and incremented by
-one (e.g., a header value of 1 represents a count of 0); when the
-count in the header is equal to the maximum, the decoder knows that
-the encoder stopped short without finding a 0.</p>
-
-<p>With our two-byte reserved sequence, we can encode the size of each
-block in radix 253 (<code>0xfd</code>); given a two-byte header for each block, sizes
-can go up to \(253^2 - 1 = 64008\).  That’s a reasonable granularity
-for <code>memcpy</code>.  This radix conversion replaces the off-by-one weirdness
-in COBS: that part of the original algorithm merely encodes values
-from \([0, 254]\) into one byte while avoiding the reserved byte 0.</p>
-
-<p>A two-byte size prefix is a bit ridiculous for small records (ours
-tend to be on the order of 30-50 bytes). We thus encode the first
-block specially, with a single byte in \([0, 252]\) for the size
-prefix.  Since the reserved sequence <code>0xfe 0xfd</code> is unlikely to appear in
-our data, the encoding for short record often boils down to adding a
-<code>uint8_t</code> length prefix.</p>
-
-<p>A framed encoded record now looks like</p>
-<pre><code>|0xfe|0xfd|blen|blen literal bytes...|blen_1|blen_2|literal bytes...|0xfe|0xfd|
+<pre><code>hardware_u64_div_7      time:   [95.244 us 96.096 us 97.072 us]
+compiled_u64_div_by_7   time:   [10.564 us 10.666 us 10.778 us]
+reciprocal_u64_div_by_7 time:   [12.718 us 12.846 us 12.976 us]
+strength_reduce_u64_div_by_7
+                        time:   [17.366 us 17.582 us 17.827 us]
+fast_divide_u64_div_by_7
+                        time:   [25.795 us 26.045 us 26.345 us]
 </code></pre>
 
-<p>The first <code>blen</code> is in \([0, 252]\) and tells us how many literal
-bytes follow in the initial block.  If the initial \(\mathtt{blen} =
-252\), the literal bytes are immediately followed by the next block’s
-decoded contents.  Otherwise, we must first append an implicit <code>0xfe
-0xfd</code> sequence… which may be the artificial reserved sequence that
-mark the end of every record.</p>
+<p>Division by 7 is hard for compilers that do not implement the “rounded down”
+approximation described in Robison’s
+<a href="https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.512.2627&amp;rep=rep1&amp;type=pdf">N-Bit Unsigned Division Via N-Bit Multiply-Add</a>.
+This is the comparative <em>best</em> case for Reciprocal, since it always
+uses the same code (1.3 ns/division), but most other implementations
+switch to a slow path (strength_reduce enters a general case that
+is arguably more complex, but more transparent to LLVM). Even
+divisions directly compiled with LLVM are ~20% faster than Reciprocal:
+LLVM does not implement Robison’s round-down scheme, so it
+<a href="https://godbolt.org/z/Wvn3hhahd">hardcodes a more complex sequence</a>
+than Reciprocal’s.</p>
 
-<p>Every subsequent block comes with a two-byte size prefix, in little-endian
-radix-253.  In other words, <code>|blen_1|blen_2|</code> represents the
-block size \(\mathtt{blen}\sb{1} + 253 \cdot \mathtt{blen}\sb{2}\), where
-\(\mathtt{blen}_{{1, 2}} \in [0, 252]\).  Again, if the block
-size is the maximum encodable size, \(253^2 - 1 = 64008\), we
-have literal data followed by the next block; otherwise, we must
-append a <code>0xfe 0xfd</code> sequence to the output before
-moving on to the next block.</p>
+<p>\(10^4\) divisions by 11 (a regular division)</p>
 
-<p>The encoding algorithm is only a bit more complex than for the
-original COBS scheme.</p>
-
-<p>Assume the data to encode is suffixed with an artificial two-byte
-reserved sequence <code>0xfe 0xfd</code>.</p>
-
-<p>For the first block, look for the reserved sequence in the first 252
-bytes.  If we find it, emit its position (must be less than 251) in
-one byte, then all the data bytes up to but not including the reserved
-sequence, and enter regular encoding after the reserved sequence.  If
-the sequence isn’t in the first block, emit <code>252</code>, followed
-by 252 bytes of data, and enter regular encoding after those bytes.</p>
-
-<p>For regular (all but the first) blocks, look for the reserved sequence in
-the next 64008 bytes.  If we find it, emit the sequence’s byte offset
-(must be less than 64008) in little-endian radix 253, followed by the
-data up to but not including the reserved sequence, and skip that sequence
-before encoding the rest of the data.  If we don’t find the reserved
-sequence, emit 64008 in radix 253 (<code>0xfc 0xfc</code>), copy the next 64008
-bytes of data, and encode the rest of the data without skipping anything.</p>
-
-<p>Remember that we conceptually padded the data with a reserved sequence at
-the end.  This means we’ll always observe that we fully consumed the
-input data at a block boundary.  When we encode the block that stops
-at the artificial reserved sequence, we stop (and frame with a reserved
-sequence to delimit a record boundary).</p>
-
-<p>You can find our <a href="https://github.com/backtrace-labs/stuffed-record-stream/blob/main/src/word_stuff.c">implementation in the stuffed-record-stream repository</a>.</p>
-
-<p>When writing short records, we already noted that the encoding step is
-often equivalent to adding a one-byte size prefix.  In fact, we can
-encode and decode all records of size up to \(252 + 64008 = 64260\)
-bytes in place, and only ever have to slide the initial 252-byte
-block: whenever a block is shorter than the maximum length (252 bytes
-for the first block, 64008 for subsequent ones), that’s because we
-found a reserved sequence in the decoded data.  When that happens, we
-can replace the reserved sequence with a size header when encoding,
-and undo the substitution when decoding.</p>
-
-<p>Our code does not implement these optimisations because encoding and
-decoding stuffed bytes aren’t bottlenecks for our use case, but it’s
-good to know that we’re nowhere near the performance ceiling.</p>
-
-<h2 id="a-resilient-record-stream-on-top-of-word-stuffing">A resilient record stream on top of word stuffing</h2>
-
-<p>The stuffing scheme only provides resilient framing.  That’s
-essential, but not enough for an abstract stream or sequence of
-records.  At the very least, we need checksums in order to detect
-invalid records that happen to be correctly encoded (e.g., when a
-block’s literal data is overwritten).</p>
-
-<p>Our pre-stuffed records start with the little-endian header</p>
-
-<pre><code>struct record_header {
-        uint32_t crc;
-        uint32_t generation;
-};
+<pre><code>hardware_u64_div_11     time:   [95.199 us 95.733 us 96.213 us]
+compiled_u64_div_by_11  time:   [7.0886 us 7.1565 us 7.2309 us]
+reciprocal_u64_div_by_11
+                        time:   [12.841 us 13.171 us 13.556 us]
+strength_reduce_u64_div_by_11
+                        time:   [17.026 us 17.318 us 17.692 us]
+fast_divide_u64_div_by_11
+                        time:   [21.731 us 21.918 us 22.138 us]
 </code></pre>
 
-<p>where <code>crc</code> is the <code>crc32c</code> of whole record, including the
-header,<sup id="fnref:initialize-your-crc" role="doc-noteref"><a href="#fn:initialize-your-crc" class="footnote" rel="footnote">3</a></sup> and <code>generation</code> is a yet-unused
-arbitrary 32-bit payload that we added for forward compatibility.
-There is no size field: the framing already handles that.</p>
+<p>This is a typical result. Again, Reciprocal can be trusted to work at
+1.3 ns/division.  Regular round-up div-by-mul works fine when dividing
+by 11, so code compiled by LLVM only needs a multiplication and a shift,
+nearly twice as fast as Reciprocal’s generic sequence.  The fast_divide
+crate does do better here than when dividing by 7, since it avoids the
+slowest path, but Reciprocal is still faster; simplicity pays.</p>
 
-<p>The remaining bytes in a record are an arbitrary payload.  We use
-<a href="https://developers.google.com/protocol-buffers/docs/reference/proto2-spec">protobuf messages</a>
-to help with schema evolution (and keep messages small and flat for
-decoding performance), but there’s no special relationship between the
-stream of word-stuffed records and the payload’s format.</p>
+<p>The three microbenchmarks above reward special-casing, since they always
+divide by the same constant in a loop, and thus always hit the same
+code path without ever incurring a mispredicted branch.</p>
 
-<p><a href="https://github.com/backtrace-labs/stuffed-record-stream/blob/main/include/record_stream.h">Our implementation</a>
-let writers output to buffered <code>FILE</code> streams, or directly to file descriptors.</p>
+<p>What happens to independent divisions <a href="https://github.com/pkhuong/reciprocal/blob/main/benches/div_throughput_variable.rs">by unpredictable precomputed divisors</a>,
+for divisions by 2, 3, 7, or 11 (respectively easy, regular, hard, 
+and regular divisors)?</p>
 
-<p>Buffered streams offer higher write throughput, but are only safe
-when the caller handles synchronisation and flushing; we use them
-as part of a commit protocol that
-<a href="https://pubs.opengroup.org/onlinepubs/009695399/functions/fsync.html">fsync</a>s
-and publishes files with
-<a href="https://pubs.opengroup.org/onlinepubs/009695399/functions/rename.html">atomic <code>rename</code> syscalls</a>.</p>
+<pre><code>hardware_u64_div        time:   [91.592 us 93.211 us 95.125 us]
+reciprocal_u64_div      time:   [17.436 us 17.620 us 17.828 us]
+strength_reduce_u64_div time:   [40.477 us 41.581 us 42.891 us]
+fast_divide_u64_div     time:   [69.069 us 69.562 us 70.100 us]
+</code></pre>
 
-<p>During normal operations, we instead write to file descriptors opened
-with <code>O_APPEND</code> and a background fsync worker: in practice, the
-hardware and operating system are more stable than our software, so
-it’s more important that encoded records immediately make it to the
-kernel than all the way to persistent storage.  We also avoid batching
-write syscalls because we would often have to wait several minutes if
-not hours to buffer more than two or three records.</p>
+<p>The hardware doesn’t care, and Reciprocal is only a bit slower (1.8
+ns/division instead of 1.3 ns/division) presumably because the relevant
+<code>PartialReciprocal</code> struct must now be loaded in the loop body.</p>
 
-<p>For readers, we can either read from a buffer, or <code>mmap</code> in a file,
-and read from the resulting buffer.  While we expose a linear iterator
-interface, we can also override the start and stop byte offset of an
-iterator; we use that capability to replay logs in parallel.  Finally,
-when readers advance an iterator, they can choose to receive a raw data
-buffer, or have it decoded with a protobuf message descriptor.</p>
+<p>The other two branchy implementations seemingly take a hit
+proportional to the number of special cases. The <code>strength_reduce</code> hot
+path only branches once, to detect divisors that are powers of two;
+its runtime goes from 0.29 - 1.8 ns/division to 4.2 ns/division (at
+least 2.4 ns slower/division).  The <code>fast_divide</code> hot path, like libdivide’s,
+switches between <em>three</em> cases, and goes from 0.28 - 2.2
+ns/division to 7.0 ns/division (at least 4.8 ns slower/division).</p>
 
-<h2 id="whats-next">What’s next?</h2>
+<p>And that’s why I prefer to start with predictable baseline
+implementations: unpredictable code with special cases can easily
+perform well on benchmarks, but, early on during development, it’s
+hard to tell how the benchmarks may differ from real workloads, and
+whether the special cases “overfit” on these differences.</p>
 
-<p>We have happily been using this log format for more than nine months
-to store a log of metadata records that we replay every time the
-<a href="https://www.backtrace.io">Backtrace</a> server restarts.</p>
+<p>With special cases for classes of divisors, most runtime div-by-mul
+implementations make you guess whether you’ll tend to divide by powers
+of two, by “regular” divisors, or by “hard” ones in order to estimate
+how they will perform.  Worse, they also force you to take into
+account how often you’ll switch between the different classes.
+Reciprocal does not have that problem: its hot path is the same
+regardless of the constant divisor, so it has the same predictable
+performance for all divisors,<sup id="fnref:partial" role="doc-noteref"><a href="#fn:partial" class="footnote" rel="footnote">3</a></sup>
+and there’s only one code path, so we don’t have to worry about class
+switches.</p>
 
-<p>Decoupling writes from the parallel read strategy let us improve our
-startup time incrementally, without any hard migration.  Serialising
-with flexible schemas
-(<a href="https://developers.google.com/protocol-buffers/docs/reference/proto2-spec">protocol buffers</a>)
-also made it easier to start small and slowly add optional metadata,
-and only enforce a hard switch-over when we chose to delete backward
-compatibility code.</p>
-
-<p>This piecemeal approach let us transition from a length-prefixed data
-format to one where all important metadata lives in a resilient record
-stream, without any breaking change.  We slowly added more metadata to
-records and eventually parallelised loading from the metadata record
-stream, all while preserving backward and forward compatibility.  Six
-months after the initial roll out, we flipped the switch and made the
-new, more robust, format mandatory; the old length-prefixed files
-still exist, but are now bags of arbitrary checksummed data bytes,
-with metadata in record streams.</p>
-
-<p>In the past nine months, we’ve gained a respectable amount of pleasant
-operational experience with the format. Moreover, while performance is
-good enough for us (the parallel loading phase is currently
-dominated by disk I/O and parsing in <code>protobuf-c</code>), we also know
-there’s plenty of headroom: our records are short enough that they can
-usually be decoded without any write, and always in place.</p>
-
-<p>We’re now starting laying the groundwork to distribute our single-node
-embedded database and making it interact more fluently with other data
-stores.  The first step will be generating a
-<a href="https://materialize.com/change-data-capture-part-1/">change data capture stream</a>,
-and re-using the word-stuffed record format was an obvious choice.</p>
-
-<p>Word stuffing is simple, efficient, and robust.  If you can’t just
-defer to a real database (maybe you’re trying to write one yourself)
-for your log records, give it a shot!  Feel free to
-<a href="https://github.com/backtrace-labs/stuffed-record-stream">play with our code</a>
-if you don’t want to roll your own.</p>
-
-<p><small> Thank you, Ruchir and Alex, for helping me clarify and restructure an earlier version. </small></p>
+<p>Depending on the workload, it may make sense to divert to faster code
+paths, but it’s usually best to start without special cases when it’s
+practical to do so…  and I think
+<a href="https://crates.io/crates/reciprocal">Reciprocal</a> shows that, for
+integer division by constants, it is.</p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
   <ol>
-    <li id="fn:suffix" role="doc-endnote">
-      <p>If you append with the delimiter, it probably makes sense to special-case short writes and also prepend with the delimiter after failures, in order to make sure readers will observe a delimiter before the new record. <a href="#fnref:suffix" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:or-is-it" role="doc-endnote">
+      <p>Is it luck?  Sounds like a fun number theory puzzle. <a href="#fnref:or-is-it" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:why-not-fewer" role="doc-endnote">
-      <p>High-throughput writers should batch records.  We do syscall-per-record because the write load for the current use case is so sporadic that any batching logic would usually end up writing individual records.  For now, batching would introduce complexity and bug potential for a minimal impact on write throughput. <a href="#fnref:why-not-fewer" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:why-partial" role="doc-endnote">
+      <p>The struct is “partial” because it can’t represent divisions by 1 or <code>u64::MAX</code>. <a href="#fnref:why-partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
-    <li id="fn:initialize-your-crc" role="doc-endnote">
-      <p>We overwrite the <code>crc</code> field with <code>UINT32_MAX</code> before computing a checksum for the header and its trailing data.  It’s important to avoid zero prefixes because the result of crc-ing a 0 byte into a 0 state is… 0. <a href="#fnref:initialize-your-crc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    <li id="fn:partial" role="doc-endnote">
+      <p>…all divisors except 1 and <code>u64::MAX</code>, which must instead <a href="https://github.com/pkhuong/reciprocal/blob/b2f1fa0093a3fbfb2758c434aba700bf852b4b30/src/lib.rs#L196">use the more general <code>Reciprocal</code> struct</a>. <a href="#fnref:partial" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
   </ol>
 </div>
@@ -675,7 +363,7 @@ if you don’t want to roll your own.</p>
     </div>
   </div>
   <footer role="contentinfo"><p>
-  Website copyright &copy; 2025 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+  Website copyright &copy; 2026 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
 </p>
 
 </footer>
