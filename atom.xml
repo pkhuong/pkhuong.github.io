@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2026-01-02T10:42:50-05:00</updated>
+  <updated>2026-01-02T11:07:05-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -17,7 +17,7 @@
   <entry>
     <title type="html"><![CDATA[Six versions accessing: wait-free protected versions with bounded cardinality]]></title>
     <link href="https://www.pvk.ca/Blog/2025/12/30/six-versions-accessing/"/>
-    <updated>2025-12-30T10:32:35-05:00</updated>
+    <updated>2025-12-30T10:32:36-05:00</updated>
     <id>https://www.pvk.ca/Blog/2025/12/30/six-versions-accessing</id>
     <content type="html"><![CDATA[<p><small>For <a href="https://web.archive.org/web/20251111171856/https://outerproduct.net/">Elijah “moonchild” Stone</a>.</small></p>
 
@@ -359,7 +359,8 @@ Waiting to advance to a new stable version until we’ve observed it twice gives
 
 <p>Readers could also remain on the QSBR fast path when they observe a fresh hazard pointer limit,
 but still have an old stable version lower than the hazard pointer limit,
-a race condition that grows more likely with the number of readers.
+which can happen when the writer fails to increment its version (too many stuck readers),
+or as a race condition that grows more likely with the number of readers.
 Strictly speaking, we <em>must</em> enter the slow path when either:</p>
 
 <ol>
@@ -375,6 +376,9 @@ when readers try to advance their current version infrequently enough (at least 
 It might be interesting to simplify the hazard pointer limit system, and maybe replace it with a flag, if only to simplify reasoning about the protocol.
 Otherwise, in terms of performance, the most impactful improvement would probably be to reduce the footprint overhead to handle stuck readers, while preserving the QSBR fast path…
 but I don’t see how to achieve that (yet).</p>
+
+<p><small>I used this design at $DAYJOB.
+Send <a href="mailto:p${MY_LAST_NAME}+mvcc@jumptrading.com">me an email</a> <em>and please mention something you like about robust non-blocking <span style="color: #fff; font-size: 0; opacity: 0;">lobster </span>synchronisation</em> if that sounds interesting.</small></p>
 
 <p><hr style="width: 50%" /></p>
 <div class="footnotes" role="doc-endnotes">
