@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Six versions accessing: wait-free protected versions with bounded cardinality"
-date: 2025-12-30 10:32:36 -0500
+date: 2025-12-30 10:32:37 -0500
 comments: true
 categories: 
 ---
@@ -28,7 +28,7 @@ Even when embedded in vanilla epoch-based memory reclamation,
 the scheme brings something interesting to the table,
 since it combines a QSBR fast path with support for sleeping (disabled) readers, thanks to the hazard pointer slow path.
 The QSBR fast path and its fence-freedom on TSO can be useful even now that we have [membarrier(2)](https://pvk.ca/Blog/2019/01/09/preemption-is-gc-for-memory-reordering/#:~:text=Asymmetric%20flag%20flip%20with%20interrupts%20on%20Linux),
-e.g., when we want to support short epoch update periods (less than every few hundred nanoseconds),
+e.g., when we want to support short epoch update periods (shorter than every few hundred nanoseconds),
 or when running on isolated cores.
 
 We need at least three protected versions to avoid blocking (i.e., to implement double buffering: one version for the writer, another for readers that are up to date, and the last for readers that are about to switch to the new read version).
@@ -44,12 +44,12 @@ especially since the extra three versions don't even have to be used until there
 When there are too many stuck readers for the protected version budget,
 the system keeps running, but the writer's version is frozen.
 Readers are unaffected, and the writer can still write, but can't move on to a fresh version;
-in practice, this can mean that the limbo list grows without bound (the usual failure mode for epoch based reclamation),
+in practice, this can mean that a limbo list grows without bound (the usual failure mode for epoch based reclamation),
 or, in a [MVCC](https://en.wikipedia.org/wiki/Multiversion_concurrency_control) system, that the writer is unable to make its updates visible to readers
 (they can still be committed to stable storage, they're just not visible in memory).
 
-That's yet another animal in the ménagerie of safe memory reclamation (SMR) schemes.
-I like to make sense of all these design options and how they fit in higher level system design with to the following reductionist take on [SMR](https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf#page=77):
+That's yet another animal in the ménagerie of [safe memory reclamation (SMR) schemes](https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf#page=77).
+I like to make sense of all these design options and how they fit in higher level system design with to the following reductionist take on SMR:
 it's all remixes of [hazard pointers](https://ieeexplore.ieee.org/document/1291819) (HP), [quiescent state based reclamation](https://preshing.com/20160726/using-quiescent-states-to-reclaim-memory/) (QSBR), and [proxy collection](https://mastodon.social/@pervognsen/112447606750157685).[^proxy-gc]
 
 [^proxy-gc]: I don't have a reference for [proxy collection](https://mastodon.social/@pervognsen/112447606750157685). The best I can think of is Joe Seigh's Usenet posts on [comp.programming.threads](https://danluu.com/threads-faq), but I can't remember which one made it click for me. Maybe [Joe's `proxies` repo](https://github.com/jseigh/proxies) will work for you.
@@ -75,7 +75,7 @@ in OSTMs, it can make sense to manage versions explicitly, at a higher level tha
 
 I came up with this version management scheme in a similar context with native versions,
 and ripping out the proxy collection concern
-highlights its nature as a hybrid of QSBR on the happy path and hazard pointer in the general case.
+highlighted its nature as a hybrid of QSBR on the happy path and hazard pointer in the general case.
 
 The basic setup
 ---------------
@@ -93,7 +93,7 @@ At first sight, a release store to the stable version would suffice, but
 we'll see that we also want a store-load fence after the update to the stable version;
 when updating a batch of records on x86oids, 
 we can achieve that with regular release stores for all but the last update to the `reader_record.stable_version`,
-and updating the `stable_version` field for the last record in the batch with an atomic exchange.
+and an atomic exchange for the last record in the batch.
 
 Symmetrically, the reader always loads the stable version first, with an acquire load,
 followed by the hazard pointer limit.
@@ -120,10 +120,10 @@ so that each reader only *stores* to the current version's cache line
 
 [^dual]: Assuming we stick the stable version and the hazard pointer limit fields in the same cache line, there is no downside with respect to cache coherence in replacing the hazard pointer limit with a QSBR limit (that tells the reader how far it can advance its current version without entering the hazard pointer slow path) or a mode flag. The result would probably slightly easier to understand, but would have more edge cases where readers are stuck on the slow path when they re-enter the QSBR range, yet the writer fails to acknowledge that fact for a while.  I'm confident we could fix that by adding logic to avoid no-op updates, but that introduces an additional *and harder to predict* branch condition.
 
-The hazard pointer limit is associated with its reader, so must live in a the reader record,
+The hazard pointer limit is associated with its reader, so must live in the reader record,
 but it would be possible to have a global stable version field shared by all readers.
 The analysis would be the same, and the impact on performance depends on a lot of considerations.
-In general though, this protocol is biased towards reader performance,
+In general though, this post is about a protocol that's biased towards reader performance,
 and giving each reader its own single-reader/single-writer `current_version` field
 tends to improve reader performance, at the expense of slowing down the writer...
 exactly the tradeoff we're looking for.
@@ -131,11 +131,11 @@ exactly the tradeoff we're looking for.
 Parameters
 ----------
 
-There are two global parameters; each affects only the writer's behaviour.
+There are two global parameters that affect only the writer's behaviour.
 
 The QSBR leeway (counted in versions) limits how far a reader's current version can be behind the stable version
 while letting the reader use the QSBR (atomic-free on TSO) update.
-This leeway must be at least one version, otherwise the QSBR path is always disabled.
+This leeway should be at least one version, otherwise the QSBR path is always disabled.
 I think setting it to two makes sense, because this means a reader that keeps up in EBR stays on the QSBR fast path.
 
 The version capacity bounds the number of versions that may be protected concurrently,
@@ -183,7 +183,9 @@ the record protects versions \\([\texttt{current_version}, +\infty).\\)
 The writer controls the highest version actually in existence, so we can shrink that to
 \\([\texttt{current_version}, \texttt{stable_version}],\\)
 which includes at most \\(\texttt{QSBR_leeway}\\) versions.
-Such a reader record is in QSBR mode, and can advance its current version with only an acquire load, i.e., without any fence or atomic under TSO.
+Such a reader record is in QSBR mode, and can advance its current version with only an acquire load and a relaxed store,[^relaxed] i.e., without any fence or atomic under TSO.
+
+[^relaxed]: We can use a relaxed store because the QSBR fast path is robust to races. In the worst case, the writer will spuriously force a reader in the hazard pointer mode.
 
 Otherwise, when the record isn't in QSBR mode and its current version is strictly less than the hazard pointer limit,
 the record is in hazard pointer mode and protects versions \\([\texttt{current_version}, \texttt{hp_limit});\\)
@@ -191,7 +193,7 @@ the writer ensures this interval spans at most \\(\texttt{QSBR_leeway} + 1\\) ve
 In hazard pointer mode, readers must use a full-blown hazard pointer (i.e., fenced) update when advancing the current version to or past the hazard pointer limit.
 
 Finally, in all other cases, the record reflects a reader in the middle of a failed hazard pointer update
-and protects nothing.
+and protects nothing (the reader will notice the failure before returning to client code).
 
 Reader logic
 ------------
@@ -207,7 +209,7 @@ so monotonicity guarantees that the hazard pointer limit loaded in step 2 is at 
 This is safe because observing a later hazard pointer limit simply means that we may spuriously enter the safe hazard pointer slow path.
 
 If the current version is non-zero and greater than or equal to the hazard pointer limit, we can use a QSBR update:
-just store the stable version from step 1 in the globally visible current version
+just (relaxed) store the stable version from step 1 in the globally visible current version
 (and update the reader's private copy).
 There is no store-load fence on this QSBR fast path:
 it all works thanks to causal dependencies between the reader's stores and the writer's *lack of store* to the hazard pointer limit
@@ -216,7 +218,7 @@ That's the happy path for readers that keep up with the writer.
 
 Otherwise, the reader is too far behind the stable version, and must use a hazard pointer-style update to snap its current version ahead.
 That's the safe slow path, which also handles the transition out of the zero state.[^stable-eql-limit]
-After a hazard pointer update, the postcondition is that there was a time when new current version was globally visible and it was equal to the stable version.
+After a hazard pointer update, the postcondition is that there was a time when the new current version was globally visible and equal to the stable version.
 If the reader later falls off the QSBR range, the writer will first bump the hazard pointer limit, and everything still works out.
 
 [^stable-eql-limit]: It's a bit unsettling that updating the current version to the stable version could leave us with \\(\texttt{current_version} = \texttt{hp_limit},\\) which yields an empty range for \\([\texttt{current_version}, \texttt{hp_limit}).\\)  However, a successful hazard pointer update means the current version is within the QSBR leeway of the stable version, so the record protects \\([\texttt{current_version}, \texttt{stable_version}].\\)
@@ -231,14 +233,14 @@ b. check if our guess was correct (the stable version is indeed equal to our gue
 If the guess is correct, we successfully performed a hazard pointer update, and return from the advance subroutine (remember to update the reader's private copy of its current version).
 Otherwise, we try again, up to the iteration bound.
 
-When readers hit the iteration bound, we use a slower wait-free cooperative update.
+When readers hit the iteration bound, they execute a slower wait-free cooperative update.
 This final backstop ensures the advance subroutine is wait-free.
 
 A reader enters the cooperative mode by setting the HELP flag (e.g., the sign bit) in its current version field,
 followed by a store-load fence.
 That's a regular store and a fence, or, on TSO, an atomic OR to get both in one instruction.
 
-The reader then runs the same hazard pointer loop, except with compare-and-swap and keeping the HELP flag set:
+The reader then runs the same hazard pointer loop, except with compare-and-swap and keeping the HELP flag set until the end:
 
 c. compare-and-swap our guess for the stable version (with the HELP flag set) in the current version\\
 d. check if our guess was correct, otherwise try again in c., with an updated guess\\
@@ -248,7 +250,7 @@ And, on exit, update the reader's private copy of its current version and return
 
 The key part is that the check in d. can fail at most twice.
 
-The compare-and-swap in step c. (and e.) can fail because the the current version field doesn't have the expected value.
+The compare-and-swap in step c. (and e.) can fail because the current version field doesn't have the expected value.
 This can only happen if the writer noticed our call for help and CASed in the most up to date stable version
 (without the HELP flag).  In that case, we're done!
 
@@ -272,10 +274,10 @@ We must also keep in mind that the writer is about to increment the stable versi
 increment into account when constructing the set of protected versions for a given record...
 and we must prepare for potential hazard pointer updates, so the stable version is always protected.
 
-There is one complication here: we need to detect slow readers that must be forced into hazard pointer mode.
+There is one complication here: we need to detect *newly* slow readers and force them into hazard pointer mode.
 
 When a reader's current version is at most \\(\texttt{QSBR_leeway}\\) versions behind the *next* stable version,
-it is considered to be in QSBR mode, and protects \\([\texttt{current_version}, \texttt{stable_version}].\\)
+the record is in QSBR mode, and protects \\([\texttt{current_version}, \texttt{stable_version}].\\)
 This interval contains at most \\(\texttt{QSBR_leeway}\\) versions.
 
 Otherwise, the reader may have *just* fallen behind by enough to be kicked out of QSBR mode, and must then be switched to hazard pointer mode.
@@ -340,12 +342,10 @@ I already noted where the few store-load fences needed under TSO can be implemen
 
 Under RMO, I'm pretty sure it's possible to avoid the acquire load of the stable version in the read-side code,
 by loading both the stable version and the hazard pointer limit with an [atomic 16-byte load](https://reviews.llvm.org/D67485),
-or by carefully introducing a data dependency between the hazard pointer limit's *load address* and the stable version's value.[^acquire]
+or by carefully introducing a data dependency between the hazard pointer limit's *load address* and the stable version's value.
 Even the latter should be fine for latency because we want a single predictable conditional branch around the QSBR fast path,
 and the hazard pointer limit isn't used in the fast path itself (feeds only into a predictable control dependency)...
 but the code that uses the current version probably needs an acquire load anyway.
-
-[^acquire]: Careful though, depending on how the reader's current version is used, we probably still need acquire semantics for the load from the stable version or the 16-byte load of the stable version and hazard pointer limit.
 
 In the QSBR fast path, we usually prefer to avoid spurious write traffic for no-op updates
 (stable and current versions are already equal) by generating the store destination address with a conditional move,
