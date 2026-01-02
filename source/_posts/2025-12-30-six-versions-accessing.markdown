@@ -178,7 +178,7 @@ so it makes sense to talk about the set of versions protected by a reader record
 
 When the reader record's current version is 0, the record doesn't protect anything (protects the empty set).
 
-When the reader record's current version is *at most QSBR leeway versions behind* the stable version, 
+When the reader record's current version is *at most QSBR leeway versions behind* the *next* stable version,
 the record protects versions \\([\texttt{current_version}, +\infty).\\)
 The writer controls the highest version actually in existence, so we can shrink that to
 \\([\texttt{current_version}, \texttt{stable_version}],\\)
@@ -206,7 +206,7 @@ This load order reverses the writer's store order,
 so monotonicity guarantees that the hazard pointer limit loaded in step 2 is at least as high as if we'd taken an atomic snapshot in step 1.
 This is safe because observing a later hazard pointer limit simply means that we may spuriously enter the safe hazard pointer slow path.
 
-If the current version is strictly greater than the hazard pointer limit, we can use a QSBR update:
+If the current version is non-zero and greater than or equal to the hazard pointer limit, we can use a QSBR update:
 just store the stable version from step 1 in the globally visible current version
 (and update the reader's private copy).
 There is no store-load fence on this QSBR fast path:
@@ -364,7 +364,7 @@ a race condition that grows more likely with the number of readers.
 Strictly speaking, we *must* enter the slow path when either:
 
 1. the current version is 0
-2. the current version is less than or equal to the hazard pointer limit, and the stable version is strictly greater than the hazard pointer limit
+2. the current version is strictly less than the hazard pointer limit, and the stable version is greater than or equal to the hazard pointer limit
 
 I don't see much room for fanciness on the write side, except for the aforementioned fence-as-atomic-exchanges.
 On recent Intel machines, it can make sense to [CLDEMOTE](https://www.felixcloutier.com/x86/cldemote) after updates to the reader record,
