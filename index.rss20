@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2026-01-02T11:53:41-05:00</updated>
+  <updated>2026-01-02T20:34:54-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -29,6 +29,7 @@ I find it interesting because it</p>
   <li>doesn’t need atomics (including fences) on <a href="https://en.wikipedia.org/wiki/Memory_ordering#In_symmetric_multiprocessing_(SMP)_microprocessor_systems">TSO</a>, or on <a href="https://developer.arm.com/documentation/ddi0487/latest">ARMv8-a</a><sup id="fnref:req" role="doc-noteref"><a href="#fn:req" class="footnote" rel="footnote">1</a></sup> for readers that keep up with the writer</li>
   <li>supports dynamic reader registration (dually, supports sleeping readers)</li>
   <li>bounds the number of protected (live) versions as a function of the number of stuck readers, assuming all other readers keep up</li>
+  <li>guarantees that once a version is unreachable, it won’t come back to life<sup id="fnref:mvcc" role="doc-noteref"><a href="#fn:mvcc" class="footnote" rel="footnote">2</a></sup></li>
 </ol>
 
 <p>The last point is interesting for the higher level system, since it’s now practical to allocate storage for all protected versions statically…
@@ -63,7 +64,7 @@ or, in a <a href="https://en.wikipedia.org/wiki/Multiversion_concurrency_control
 
 <p>That’s yet another animal in the ménagerie of <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf#page=77">safe memory reclamation (SMR) schemes</a>.
 I like to make sense of all these design options and how they fit in higher level system design with to the following reductionist take on SMR:
-it’s all remixes of <a href="https://ieeexplore.ieee.org/document/1291819">hazard pointers</a> (HP), <a href="https://preshing.com/20160726/using-quiescent-states-to-reclaim-memory/">quiescent state based reclamation</a> (QSBR), and <a href="https://mastodon.social/@pervognsen/112447606750157685">proxy collection</a>.<sup id="fnref:proxy-gc" role="doc-noteref"><a href="#fn:proxy-gc" class="footnote" rel="footnote">2</a></sup></p>
+it’s all remixes of <a href="https://ieeexplore.ieee.org/document/1291819">hazard pointers</a> (HP), <a href="https://preshing.com/20160726/using-quiescent-states-to-reclaim-memory/">quiescent state based reclamation</a> (QSBR), and <a href="https://mastodon.social/@pervognsen/112447606750157685">proxy collection</a>.<sup id="fnref:proxy-gc" role="doc-noteref"><a href="#fn:proxy-gc" class="footnote" rel="footnote">3</a></sup></p>
 
 <p>For example, casting epoch-based reclamation as a proxy collection system where we manage versions (epochs), and versions hang on to (serve as proxies for) objects makes it clear that the core epoch management logic in EBR is just a specialised version of hazard pointers…
 and thus all the atomic-free read-side tricks with membarrier and interrupt-atomic copy port directly between the pointer protection read-side in hazard pointers and the version (epoch) publishing read side of EBR.</p>
@@ -121,7 +122,7 @@ we always know what field the reader wants to snapshot in its current version,
 since each reader record owns its stable version field.</p>
 
 <p>In a practical implementation,
-we’ll probably want the stable version and hazard pointer limit<sup id="fnref:dual" role="doc-noteref"><a href="#fn:dual" class="footnote" rel="footnote">3</a></sup> fields in the same cache line,
+we’ll probably want the stable version and hazard pointer limit<sup id="fnref:dual" role="doc-noteref"><a href="#fn:dual" class="footnote" rel="footnote">4</a></sup> fields in the same cache line,
 and give the current version a dedicated cache line.
 Each reader should also have a private copy of its current version,
 so that each reader only <em>stores</em> to the current version’s cache line
@@ -187,12 +188,17 @@ the record protects versions \([\texttt{current_version}, +\infty).\)
 The writer controls the highest version actually in existence, so we can shrink that to
 \([\texttt{current_version}, \texttt{stable_version}],\)
 which includes at most \(\texttt{QSBR_leeway}\) versions.
-Such a reader record is in QSBR mode, and can advance its current version with only an acquire load and a relaxed store,<sup id="fnref:relaxed" role="doc-noteref"><a href="#fn:relaxed" class="footnote" rel="footnote">4</a></sup> i.e., without any fence or atomic under TSO.</p>
+Such a reader record is in QSBR mode, and can advance its current version with only an acquire load and a relaxed store,<sup id="fnref:relaxed" role="doc-noteref"><a href="#fn:relaxed" class="footnote" rel="footnote">5</a></sup> i.e., without any fence or atomic under TSO.</p>
+
+<p>This protection set clearly satisfies the requirement that versions never come back to life.</p>
 
 <p>Otherwise, when the record isn’t in QSBR mode and its current version is strictly less than the hazard pointer limit,
 the record is in hazard pointer mode and protects versions \([\texttt{current_version}, \texttt{hp_limit});\)
 the writer ensures this interval spans at most \(\texttt{QSBR_leeway} + 1\) versions.
 In hazard pointer mode, readers must use a full-blown hazard pointer (i.e., fenced) update when advancing the current version to or past the hazard pointer limit.</p>
+
+<p>This other protection set satisfies the requirement that versions never come back to life,
+and the hazard pointer update can only jump ahead to exactly the stable version, which is always alive.</p>
 
 <p>Finally, in all other cases, the record reflects a reader in the middle of a failed hazard pointer update
 and protects nothing (the reader will notice the failure before returning to client code).</p>
@@ -220,7 +226,7 @@ it all works thanks to causal dependencies between the reader’s stores and the
 That’s the happy path for readers that keep up with the writer.</p>
 
 <p>Otherwise, the reader is too far behind the stable version, and must use a hazard pointer-style update to snap its current version ahead.
-That’s the safe slow path, which also handles the transition out of the zero state.<sup id="fnref:stable-eql-limit" role="doc-noteref"><a href="#fn:stable-eql-limit" class="footnote" rel="footnote">5</a></sup>
+That’s the safe slow path, which also handles the transition out of the zero state.<sup id="fnref:stable-eql-limit" role="doc-noteref"><a href="#fn:stable-eql-limit" class="footnote" rel="footnote">6</a></sup>
 After a hazard pointer update, the postcondition is that there was a time when the new current version was globally visible and equal to the stable version.
 If the reader later falls off the QSBR range, the writer will first bump the hazard pointer limit, and everything still works out.</p>
 
@@ -385,6 +391,9 @@ Send <a href="mailto:p${MY_LAST_NAME}+mvcc@jumptrading.com">me an email</a> <em>
   <ol>
     <li id="fn:req" role="doc-endnote">
       <p>We really need load-load ordering and a lack of value speculation, which boils down to TSO in practice… but we can fake it on RMO with <a href="https://developer.arm.com/documentation/dui0801/g/A64-Floating-point-Instructions/LDP--SIMD-and-FP-">16-byte atomic loads (LDP)</a> or maybe with a fake data dependency between the first load and the second load’s address. OTOH, the surrounding code would probably need something like acquire semantics for the LDP anyway. <a href="#fnref:req" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:mvcc" role="doc-endnote">
+      <p>This property lets us garbage collect versioned data in arbitrary non-FIFO order, just by keeping what’s necessary for the current set of live versions: for each live version, the most recent data not younger than that live version, a set at most as large as the set of live versions. <a href="#fnref:mvcc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
     </li>
     <li id="fn:proxy-gc" role="doc-endnote">
       <p>I don’t have a reference for <a href="https://mastodon.social/@pervognsen/112447606750157685">proxy collection</a>. The best I can think of is Joe Seigh’s Usenet posts on <a href="https://danluu.com/threads-faq">comp.programming.threads</a>, but I can’t remember which one made it click for me. Maybe <a href="https://github.com/jseigh/proxies">Joe’s <code>proxies</code> repo</a> will work for you. <a href="#fnref:proxy-gc" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
