@@ -3,7 +3,7 @@ layout: post
 title: "Six versions accessing: wait-free protected versions with bounded cardinality"
 date: 2025-12-30 10:32:37 -0500
 comments: true
-categories: 
+categories:
 ---
 
 <small>For [Elijah "moonchild" Stone](https://web.archive.org/web/20251111171856/https://outerproduct.net/).</small>
@@ -38,7 +38,7 @@ We need at least three protected versions to avoid blocking (i.e., to implement 
 If we're willing to introduce blocking, we can even make progress with two versions (single buffering).
 Ideally, we'd make progress despite \\(k\\) blocked readers by allowing up to \\(3 + k\\) or even \\(2 + k\\) versions.
 
-Turns out that's hard to do while preserving property 2 (atomic-free readers on the happy path), 
+Turns out that's hard to do while preserving property 2 (atomic-free readers on the happy path),
 so we'll instead require a footprint of \\(3 (k + 1)\\) versions, where \\(k\\) is the number of stuck readers.
 In practice, I find that being robust to just one stuck reader (or a group of readers that got stuck at the same time)
 is pretty useful, for the additional space overhead of three versions,
@@ -90,11 +90,11 @@ For each reader, we have a record in which two fields are logically owned by the
 Only when the current version's HELP flag is set can both the reader and writer update it,
 with atomic compare-and-swap.
 
-When the writer updates the stable version and hazard pointer limit (`hp_limit`) fields, 
+When the writer updates the stable version and hazard pointer limit (`hp_limit`) fields,
 it always updates the hazard pointer limit first, and the stable version second.
 At first sight, a release store to the stable version would suffice, but
 we'll see that we also want a store-load fence after the update to the stable version;
-when updating a batch of records on x86oids, 
+when updating a batch of records on x86oids,
 we can achieve that with regular release stores for all but the last update to the `reader_record.stable_version`,
 and an atomic exchange for the last record in the batch.
 
@@ -119,7 +119,7 @@ we'll probably want the stable version and hazard pointer limit[^dual] fields in
 and give the current version a dedicated cache line.
 Each reader should also have a private copy of its current version,
 so that each reader only *stores* to the current version's cache line
-(e.g., with a blind cache line update, which can avoid [RFO](https://en.wikipedia.org/wiki/MESI_protocol#Read_For_Ownership)).
+(e.g., with a blind cache line update, which can avoid a full [RFO](https://en.wikipedia.org/wiki/MESI_protocol#Read_For_Ownership), since it doesn't need the old contents).
 
 [^dual]: Assuming we stick the stable version and the hazard pointer limit fields in the same cache line, there is no downside with respect to cache coherence in replacing the hazard pointer limit with a QSBR limit (that tells the reader how far it can advance its current version without entering the hazard pointer slow path) or a mode flag. The result would probably slightly easier to understand, but would have more edge cases where readers are stuck on the slow path when they re-enter the QSBR range, yet the writer fails to acknowledge that fact for a while.  I'm confident we could fix that by adding logic to avoid no-op updates, but that introduces an additional *and harder to predict* branch condition.
 
@@ -212,9 +212,32 @@ The reader attempts to advance its current version by first loading a somewhat c
 2. load the hazard pointer limit
 3. grab the current version, from a private copy or with a relaxed load
 
-This load order reverses the writer's store order, 
+This load order reverses the writer's store order,
 so monotonicity guarantees that the hazard pointer limit loaded in step 2 is at least as high as if we'd taken an atomic snapshot in step 1.
 This is safe because observing a later hazard pointer limit simply means that we may spuriously enter the safe hazard pointer slow path.
+
+```
+reader_advance(reader, cached_current):
+    stable_version = reader.stable_version.load_acquire()
+    hp_limit = reader.hp_limit.load_relaxed()
+    current_version = cached_current.value
+
+    if current_version > 0 and current_version >= hp_limit:
+        # QSBR fast path
+        reader.current_version.store_relaxed(stable_version)
+        cached_current.value = stable_version
+        return
+
+    # Optional regular hazard pointer update
+    repeat hazard_pointer_iteration_limit times:
+        if hazard pointer update succeeds:
+            updated cached_current.value
+            return
+
+    # Wait-free hazard pointer update
+    reader.current_version.atomic_or(HELP)
+    ...
+```
 
 If the current version is non-zero and greater than or equal to the hazard pointer limit, we can use a QSBR update:
 just (relaxed) store the stable version from step 1 in the globally visible current version
@@ -272,6 +295,32 @@ All the loops are bounded, by fiat or because they can only fail so many times, 
 
 Writer logic
 ------------
+
+```
+writer_increment(reader_records, stable_version):
+    protected_versions = {stable_version}
+    for reader_record in reader_records:
+        if reader_record just fell off the QSBR fast path:
+            reader_record.hp_limit.store_relaxed(stable_version + 1)
+        for each version protected by reader_record:
+            protected_versions.adjoin(version)
+
+    if |protected_versions| >= version_capacity:
+        return stable_version, protected_versions # failure
+
+    stable_version += 1
+    protected_versions.adjoin(stable_version)
+    for reader_record in reader_records:
+        reader_record.stable_version.store_release(stable_version) # matches reader's load acquire
+
+    store_load_fence()
+
+    for reader_record in reader_records:
+        if reader_record.current_version.load_relaxed() & HELP:
+            # help the hazard pointer loop forward (CAS current_version with stable_version and no HELP flag)
+
+    return stable_version, protected_versions # success
+```
 
 The only complicated logic in the writer is collecting the set of all protected versions before incrementing its stable version.
 
@@ -359,7 +408,7 @@ In the QSBR fast path, we usually prefer to avoid spurious write traffic for no-
 (stable and current versions are already equal) by generating the store destination address with a conditional move,
 and directing useless updates to a core-local location
 (a constant-time conditional move is important, because speculative stores can still cause cache coherence traffic).
-It can also be helpful to use cache line-wide stores (e.g., AVX-512 or [FSRM](https://git.kernel.org/pub/scm/linux/kernel/git/tip/tip.git/commit/?h=x86/asm&id=f444a5ff95dce07cf4353cbb85fc3e785019d430) stores) to avoid [reads for ownership](https://en.wikipedia.org/wiki/MESI_protocol#Read_For_Ownership).
+It can also be helpful to use cache line-wide stores (e.g., [FSRM](https://git.kernel.org/pub/scm/linux/kernel/git/tip/tip.git/commit/?h=x86/asm&id=f444a5ff95dce07cf4353cbb85fc3e785019d430) or AVX-512 stores on recent microarchitectures like Golden Cove) to avoid full [reads for ownership](https://en.wikipedia.org/wiki/MESI_protocol#Read_For_Ownership) (the core only needs to acquire ownership, without the old contents).
 
 When readers care about runtime latency more than having the most recent updates, it can make sense to
 defer updates *in the QSBR fast path* by one advance call:
