@@ -15,8 +15,11 @@ I find it interesting because it
 2. doesn't need atomics (including fences) on [TSO](https://en.wikipedia.org/wiki/Memory_ordering#In_symmetric_multiprocessing_(SMP)_microprocessor_systems), or on [ARMv8-a](https://developer.arm.com/documentation/ddi0487/latest)[^req] for readers that keep up with the writer
 3. supports dynamic reader registration (dually, supports sleeping readers)
 4. bounds the number of protected (live) versions as a function of the number of stuck readers, assuming all other readers keep up
+5. guarantees that once a version is unreachable, it won't come back to life[^mvcc]
 
 [^req]: We really need load-load ordering and a lack of value speculation, which boils down to TSO in practice... but we can fake it on RMO with [16-byte atomic loads (LDP)](https://developer.arm.com/documentation/dui0801/g/A64-Floating-point-Instructions/LDP--SIMD-and-FP-) or maybe with a fake data dependency between the first load and the second load's address. OTOH, the surrounding code would probably need something like acquire semantics for the LDP anyway.
+
+[^mvcc]: This property lets us garbage collect versioned data in arbitrary non-FIFO order, just by keeping what's necessary for the current set of live versions: for each live version, the most recent data not younger than that live version, a set at most as large as the set of live versions.
 
 The last point is interesting for the higher level system, since it's now practical to allocate storage for all protected versions statically...
 [safe memory reclamation (SMR)](https://queue.acm.org/detail.cfm?id=2488549) makes sense even without dynamic storage management!
@@ -185,12 +188,17 @@ The writer controls the highest version actually in existence, so we can shrink 
 which includes at most \\(\texttt{QSBR_leeway}\\) versions.
 Such a reader record is in QSBR mode, and can advance its current version with only an acquire load and a relaxed store,[^relaxed] i.e., without any fence or atomic under TSO.
 
+This protection set clearly satisfies the requirement that versions never come back to life.
+
 [^relaxed]: We can use a relaxed store because the QSBR fast path is robust to races. In the worst case, the writer will spuriously force a reader in the hazard pointer mode.
 
 Otherwise, when the record isn't in QSBR mode and its current version is strictly less than the hazard pointer limit,
 the record is in hazard pointer mode and protects versions \\([\texttt{current_version}, \texttt{hp_limit});\\)
 the writer ensures this interval spans at most \\(\texttt{QSBR_leeway} + 1\\) versions.
 In hazard pointer mode, readers must use a full-blown hazard pointer (i.e., fenced) update when advancing the current version to or past the hazard pointer limit.
+
+This other protection set satisfies the requirement that versions never come back to life,
+and the hazard pointer update can only jump ahead to exactly the stable version, which is always alive.
 
 Finally, in all other cases, the record reflects a reader in the middle of a failed hazard pointer update
 and protects nothing (the reader will notice the failure before returning to client code).
