@@ -1,12 +1,12 @@
 ---
 layout: post
 title: "Six versions accessing: wait-free protected versions with bounded cardinality"
-date: 2025-12-30 10:32:37 -0500
+date: 2025-12-30 10:32:38 -0500
 comments: true
 categories:
 ---
 
-<small>For [Elijah "moonchild" Stone](https://web.archive.org/web/20251111171856/https://outerproduct.net/).</small>
+<small>For [moon](https://web.archive.org/web/20251111171856/https://outerproduct.net/)[child](https://social.applied-langua.ge/users/moonchild).</small>
 
 This post describes a reader/writer version management scheme I recently came up with.
 I find it interesting because it
