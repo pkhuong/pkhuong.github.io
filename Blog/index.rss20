@@ -4,7 +4,7 @@
   <title><![CDATA[Paul Khuong: some Lisp]]></title>
   <link href="https://www.pvk.ca/atom.xml" rel="self"/>
   <link href="https://www.pvk.ca/"/>
-  <updated>2026-01-03T09:02:48-05:00</updated>
+  <updated>2026-01-04T10:45:59-05:00</updated>
   <id>https://www.pvk.ca/</id>
   <author>
     <name><![CDATA[Paul Khuong]]></name>
@@ -17,9 +17,9 @@
   <entry>
     <title type="html"><![CDATA[Six versions accessing: wait-free protected versions with bounded cardinality]]></title>
     <link href="https://www.pvk.ca/Blog/2025/12/30/six-versions-accessing/"/>
-    <updated>2025-12-30T10:32:37-05:00</updated>
+    <updated>2025-12-30T10:32:38-05:00</updated>
     <id>https://www.pvk.ca/Blog/2025/12/30/six-versions-accessing</id>
-    <content type="html"><![CDATA[<p><small>For <a href="https://web.archive.org/web/20251111171856/https://outerproduct.net/">Elijah “moonchild” Stone</a>.</small></p>
+    <content type="html"><![CDATA[<p><small>For <a href="https://web.archive.org/web/20251111171856/https://outerproduct.net/">moon</a><a href="https://social.applied-langua.ge/users/moonchild">child</a>.</small></p>
 
 <p>This post describes a reader/writer version management scheme I recently came up with.
 I find it interesting because it</p>
