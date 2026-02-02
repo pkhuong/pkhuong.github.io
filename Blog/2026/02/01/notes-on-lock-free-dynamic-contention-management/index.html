@@ -1,0 +1,456 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Notes on lock-free dynamic contention management - Paul Khuong: some Lisp</title>
+  <meta name="author" content="Paul Khuong">
+  <meta name="description" content="Paul Khuong's personal blog. Some Lisp, some optimisation, mathematical or computer.">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://www.pvk.ca/Blog/2026/02/01/notes-on-lock-free-dynamic-contention-management/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="Paul Khuong: some Lisp" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Poller+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Germania+One&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Fontdiner+Swanky&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Lato&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Cardo&subset=latin-ext&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Sorts+Mill+Goudy&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=EB+Garamond&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=Della+Respira&display=fallback" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=UnifrakturMaguntia&subset=all&display=fallback" rel="stylesheet" type="text/css">
+<link href='//fonts.googleapis.com/css?family=Arimo|EB+Garamond|PT+Sans+Caption&subset=latin,cyrillic&display=fallback' rel='stylesheet' type='text/css'>
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+  TeX: {
+    Macros: {
+     sp: "^",
+     sb: "_"
+    }
+  }});
+</script>
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+<meta name="twitter:dnt" content="on">
+
+</head>
+
+<body >
+  <header role="banner"><hgroup>
+  <h1><a href="/">Paul Khuong: some Lisp</a></h1>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/Blog/archives">Archives</a></li>
+  <li><a href="/atom.xml" title="subscribe via RSS">RSS</a></li>
+</ul>
+
+<br>
+
+      
+        <form action="https://google.com/search" method="get">
+          <fieldset role="search">
+            <input type="hidden" name="q" value="site:https://www.pvk.ca" />
+      
+      
+            <input class="search" type="text" name="q" results="0" placeholder="Search" aria-label="Search"/>
+          </fieldset>
+        </form>
+  
+</nav>
+  <div id="main">
+    <div id="content">
+      
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      
+        <h1 class="entry-title" style="font-family: ">Notes on lock-free dynamic contention management</h1>
+      
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+Feb
+  
+1st, 
+2026
+
+
+
+
+        
+         | <a href="#disqus_thread"
+              data-disqus-identifier="https://www.pvk.ca/Blog/2026/02/01/notes-on-lock-free-dynamic-contention-management/"
+	      >Comments</a>
+        
+        
+      </p>
+    
+  </header>
+
+
+<p><em>This is a draft (essai ;) post.  Feel free to share it with people, but I would prefer to avoid aggregators.  Draft posts do not have stable URLs, and some may never make it out of that stage; you may instead want to link to the <a href="/Blog/drafts/index.html">draft category page</a>.</em></p>
+
+
+<div class="entry-content" style="font-family: ; font-size: "><p><small>I’m pretty sure I half wrote something in this vein, and it was more detailed,
+but I can’t find it, so here’s what came out today.</small></p>
+
+<p>As a problem domain, resource (memory, id, etc.) management provides an easy way out to ensure lock-freedom:
+it’s easy to acquire a small chunk of resources and pass that to an efficiently thread-local shard.
+The problem then turns into one of preserving progress guarantees and practical throughput
+without incurring too much fragmentation overhead.</p>
+
+<p>On Linux, <a href="https://docs.kernel.org/next/userspace-api/rseq.html">Restartable Sequences</a> give us a one-size-fits-most solution,
+where one can usually take a lock-free data structure,
+stamp one shard per core,
+and then remove atomics from the critical section.</p>
+
+<p>I see two main downsides to restartable sequences (rseq):</p>
+
+<ol>
+  <li>it’s hard to scale down to less than <code>num_cores</code> shards, and modern machines can have a lot of cores</li>
+  <li>adapting critical section to the one-instruction commit format can introduce complexity (slower code),
+compared to locking</li>
+</ol>
+
+<p>Some might also worry that these critical section practically have to be written in assembly language,
+and are thus harder to maintain.</p>
+
+<p>If we lean on the fact that we can always increase the shard count in response to contention,
+I believe it’s possible to find other reasonable approaches that scale down better…
+and might even compete with rseq at the higher end.
+It could also be possible to combine the two approaches and never have to scale to more shards
+than the number of cores (at which point we just switch to rseq), but that’s only an option if
+we contort the critical sections to fit the rseq format.</p>
+
+<p>I might have once argued that the most interesting part of rseq is
+finally having a fast way to get the current core id…
+this post shows why.</p>
+
+<h2 id="a-pragmatic-approach">A pragmatic approach</h2>
+
+<p>I think the simplest approach here is to fully decouple lock-freedom from contention management.</p>
+
+<ol>
+  <li>Take a general lock-free data structure, with full atomics</li>
+  <li>Make multiple copies, and assign one to each thread (e.g., randomly, or based on the core id, and reassign from time to time)</li>
+  <li>Detect contention, e.g., via CAS failure, by detecting unexpected versions, etc…</li>
+  <li>Create more copies when there is contention</li>
+  <li>Also, try to drop unused shards when there’s less contention</li>
+</ol>
+
+<p>We still pay for full atomics, but save a lot on contention, and contention is usually what makes atomics slow.
+This is a good, simple 80/20 solution; the one you probably want.</p>
+
+<p>Read on for fancy stunts.</p>
+
+<h2 id="but-you-said-we-could-have-our-lock-and-be-happy">But you said we could have our lock and be happy</h2>
+
+<p>It’s counter-intuitive, but we can build a lock-free system that involves locks…
+as long as we can create more locks when we find they’re all taken,
+just like we can create more resource management shards on the fly.</p>
+
+<p>Since we can just create more locks on demand, let’s see if we can make locking faster.
+In particular, let’s try to avoid atomics at the head of the critical section:
+I have anecdotally observed that profiling interrupts tend to happen just after LOCKed instructions,
+and <a href="https://travisdowns.github.io/blog/2019/08/20/interrupts.html#:~:text=if%20you%20want.-,Atomic%20Operations,-What%20about%20atomic">Travis Downs concurs, with more convincing experiments</a>.
+This makes me worry that preemption interrupts are more likely to kick in
+just after we’ve acquired a lock than just before we do.</p>
+
+<p>A lock that can be acquired without atomics should thus be less likely to be held by a preempted thread.
+This post describes a lock with an initial atomic-ful acquisition phase, but afterwards no atomic for lock acquisition or release.<sup id="fnref:atomic-release" role="doc-noteref"><a href="#fn:atomic-release" class="footnote" rel="footnote">1</a></sup>
+The result should hopefully be less frequent preemption in the middle of critical sections.</p>
+
+<h2 id="hazard-pointers-for-biased-locks-take-1">Hazard pointers for biased locks, take 1</h2>
+
+<p>Our exclusive locks will be split in two parts:</p>
+
+<ol>
+  <li>a lock object with a versioned pointer to the lessee struct (multi-writer/multi-reader, written with CAS)</li>
+  <li>a flag word <em>in the lessee struct</em>, and a backpointer to the lock object (single-writer/multi-reader, written with regular stores)<sup id="fnref:two-counters" role="doc-noteref"><a href="#fn:two-counters" class="footnote" rel="footnote">2</a></sup></li>
+</ol>
+
+<p>Only the lessee may “take” its lock, but the lease can be broken at any time..
+except when the lessee has asserted ownership by setting its flag to true.
+By itself, setting the flag word does nothing; it’s only meaningful when the
+flag word it set while the lessee stills holds a lease on the lock.</p>
+
+<p>Assume the current thread has taken a lease on a lock.  To acquire the lock, it:</p>
+
+<ol>
+  <li>sets its flag word to true</li>
+  <li>[compiler fence]</li>
+  <li>checks that it still holds the lease on the lock (including version counter), otherwise clears the flag word and fails.</li>
+</ol>
+
+<p>Unlocking is just a regular store to clear its flag word.</p>
+
+<p>On the other side, we can break a lease by:</p>
+
+<ol>
+  <li>Incrementing the version in the lock</li>
+  <li>[membarrier (reverse fence)]</li>
+  <li>waiting until the lessee’s backpointer is free or points back to a different lock</li>
+</ol>
+
+<p>As usual, the membarrier is slow, so we amortise it with a limbo list.
+The lock semantics only mean that a lock could remain on the limbo list forever,
+if its lessee is stuck in the middle of a critical section.</p>
+
+<p>This all works, but it’s not great because we can’t transfer ownership without a membarrier
+(or involving the current lessee).</p>
+
+<h2 id="again-with-some-per-core-fanciness">Again, with some per-core fanciness</h2>
+
+<p>The rseq approach maps resource shards to cores 1:1, so critical section must be abortable:
+we must leave the core’s resource free for the next thread when the scheduler switches us out.
+We can similarly specialise for intra-core ownership (lease) transfer,
+without assuming a 1:1 mapping.
+This should help us avoid full atomics, while providing regular locking semantics.</p>
+
+<p>A lock structure now has:</p>
+
+<ol>
+  <li>version (probably worth having an odd/even scheme to denote locks in the limbo list)</li>
+  <li>pointer to the lessee</li>
+  <li>a core id</li>
+</ol>
+
+<p>We need the new third field because a lessee will now only be able to acquire the lock only while it executes on that core id.</p>
+
+<p>The lessee still has a flag word coupled with a backpointer to the lock object, and now a copy of the lease’s core id.</p>
+
+<p>Assume the current thread has taken a lease on a lock (via regular locking, a CAS loop, …).  To acquire the lock, it:</p>
+
+<ol>
+  <li>sets its flag word to true</li>
+  <li>[compiler fence]</li>
+  <li>checks that its core id still matches the lease’s, otherwise clear the flag word and fail<sup id="fnref:rdpid" role="doc-noteref"><a href="#fn:rdpid" class="footnote" rel="footnote">3</a></sup></li>
+  <li>[compiler fence]</li>
+  <li>checks that it still holds the lease, otherwise clear the flag word and fail</li>
+</ol>
+
+<p>This ordering is important because ownership is monotonic, but the core you’re scheduled on isn’t.
+When the check in step 5 succeeds, we know there was a point at which the lessee had set
+its flag word, was running on the expected core id, and still held the lease.
+With the combination of these three conditions, we know the lessee now has an actual lock,
+until it releases its flag word.</p>
+
+<p>Breaking a lease, in the general case, is still just incrementing the lock’s version / membarrier / wait until lessee doesn’t hold the lock.</p>
+
+<h3 id="intra-core-lease-transfer">Intra-core lease transfer</h3>
+
+<p>However, we can do better when breaking the lease from the core id in the lock structure:
+threads scheduled on the same core observe each other’s stores in order.</p>
+
+<p>Let’s say we’re on core 1, and we wish to break the a lock’s lease, where the lessee has a lease for the same core id 1.</p>
+
+<p>We still start by incrementing the lease’s version counter.</p>
+
+<p>If the lessee has set its flag word, we still have to wait; we
+don’t necessarily have to wait for a membarrier, if everything is on
+the same core, but that’s a minor optimisation.</p>
+
+<p>The interesting cases happen when we (in order):</p>
+
+<ol>
+  <li>increment the version in the lock structure with an atomic instruction</li>
+  <li>confirm we’re on core id 1</li>
+  <li>observe that the lessee has <em>not</em> set its flag word.</li>
+</ol>
+
+<p>N.B., there’s no guarantee that the load at step 3 happens on core 1, but,
+if we were migrated between steps 2 and 3, the OS had to ensure we’d see our own writes,
+so step 3 should still observe everything that had happened on core 1 as of step 2.
+A pair of (ABA-free) acquire/release counters in the lessee structure would probably make the proofs easier.</p>
+
+<p>This can only happen because:</p>
+
+<ol>
+  <li>the current lessee is after step 1, but on a different core – the lessee will fail the acquisition on its own</li>
+  <li>the current lessee is truly outside its critical section (before step 1 of the acquisition)</li>
+</ol>
+
+<p>In the first case, we claim the lessee must be on a different core because, otherwise, we’d have observed the new flag word.
+Usually, we then expect the lessee to fail its core id check.
+However, the lessee could be migrated back to core 1 between steps 1 and 3;
+that’s OK, because step 5 will detect the mismatched version in the lock structure (because the locker’s step 3 must happen after the lease breaker’s step 2 [otherwise the lease breaker would observe the flag word in its step 3]).</p>
+
+<p>The second case also works fine because the next acquisition will either be on core id 1,
+in which case the lessee will definitely observe the new version of the lock structure (and fail step 5),
+or it will be on a different core, which reduces to the first case.</p>
+
+<p>This is a bit non-traditional, but we essentially introduced happens-before constraints via the fact
+that a core runs only one thread at a time, and that a core sees its own writes.</p>
+
+<p>Since we can always create new allocator shards, we can protect shards with biased locks where:</p>
+
+<ol>
+  <li>each lock has a core-bound lessee (the lease only works on that core)</li>
+  <li>the lessee can acquire the lock without atomics, as long as it’s on the correct core</li>
+  <li>other threads scheduled on the same core can break the lease, when the lessee isn’t in a critical section</li>
+  <li>other threads can still break the lease, but must go through a slow membarrier (a reverse fence)</li>
+</ol>
+
+<h2 id="simpler-primitives-than-restartable-sequences">Simpler primitives than restartable sequences</h2>
+
+<p>I think this biased locking approach is promising:
+coupled with some unspecificed contention manager, 
+it can scale directly with contention, including scaling down,
+probably won’t overshoot too much past the number of cores
+(unless threads are <em>always</em> in a critical section)…
+and, importantly, it lets us write regular critical sections in high level programming languages.</p>
+
+<p>In order to achieve this, we only needed a fast way to get the current core id.
+I remember thinking that it might be nice to couple that core id with a preemption counter for the running thread,
+but I can’t remember where that would fit in the above.</p>
+
+<p>A reverse barrier is also helpful, but it’s more for generality in
+this case.  If I had to make the case for a primitive in that vein,
+I’d probably go for something like
+https://github.com/pkhuong/barrierd: the blocking membarrier syscall
+is <code>rcu_synchronize</code> in userspace, and using <code>rcu_synchronize</code> in
+production is pretty much always a bug.</p>
+
+<p><hr style="width: 50%" /></p>
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:atomic-release" role="doc-endnote">
+      <p>I’d be interested in a lock that can be acquired without atomic instructions, but must be released with atomics. That too would avoid shifting interrupts inside critical section.  Unclear if that’s even possible though <a href="#fnref:atomic-release" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:two-counters" role="doc-endnote">
+      <p>We just want to protect against ABA when the lessee takes a different lock. A pair of lock/unlock counters would also work. <a href="#fnref:two-counters" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:rdpid" role="doc-endnote">
+      <p>Getting a core id is usually pretty fast; must be fast for rseq. If you can use rseq, then <a href="https://github.com/torvalds/linux/blob/18f7fcd5e69a04df57b563360b88be72471d6b62/tools/testing/selftests/rseq/rseq.h#L167-L174">it’s just a memory load</a>. On linux/x86-64 without RSEQ that’s LSL or RDPID. I’d be more comfortable with an actual memory location, but I’m pretty sure this works as expected (in terms of x86-TSO).  Other platforms should also be fine, otherwise this feels to me like a broken sched_getcpu. <a href="#fnref:rdpid" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+</div>
+
+
+  <footer class="page-footer">
+    <p class="meta">
+      
+<span class="byline author vcard">Text authored by <span class="fn">Paul Khuong</span></span>
+
+
+      
+
+
+
+
+
+Feb
+  
+1st, 
+2026
+
+
+
+
+      
+      
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+      
+      
+        <a class="basic-alignment left" href="/Blog/2025/12/30/six-versions-accessing/" title="Previous Post: Six versions accessing: wait-free protected versions with bounded cardinality">&laquo; Six versions accessing: wait-free protected versions with bounded cardinality</a>
+      
+      
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+
+</div>
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Website copyright &copy; 2026 - <a href="mailto:pvk@pvk.ca">Paul Khuong</a> | <span class="credit">Powered by <a href="http://octopress.org">Octopress</a> | Themed with <a href="https://github.com/TheChymera/Koenigspress">Königspress</a></span>
+</p>
+
+</footer>
+  
+
+<script id="dsq-count-scr" src="//pvk.disqus.com/count.js" async></script>
+
+  
+<script type="text/javascript">
+  var disqus_config = function () {
+      this.page.url = 'https://www.pvk.ca/Blog/2026/02/01/notes-on-lock-free-dynamic-contention-management/';
+      this.page.identifier = 'https://www.pvk.ca/Blog/2026/02/01/notes-on-lock-free-dynamic-contention-management/';
+      this.page.title = 'Notes on lock-free dynamic contention management';
+  };
+
+  (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = '//pvk.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+  })();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</body>
+</html>
